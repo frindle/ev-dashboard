@@ -1,0 +1,12 @@
+services:
+  ev-dashboard:
+    build: .
+    ports:
+      - "3030:3000"
+    volumes:
+      - /mnt/user/appdata/ev-dashboard/keys:/app/keys:ro
+    environment:
+      - KEYS_DIR=/app/keys
+    env_file:
+      - .env
+    restart: unless-stopped
