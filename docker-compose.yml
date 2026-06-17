@@ -4,7 +4,7 @@ services:
     ports:
       - "3030:3000"
     volumes:
-      - /mnt/user/appdata/ev-dashboard/keys:/app/keys:ro
+      - /mnt/user/appdata/ev-dashboard/keys:/app/keys
     environment:
       - KEYS_DIR=/app/keys
     env_file:
