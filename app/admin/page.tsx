@@ -18,18 +18,49 @@ function teslaAuthUrl(redirectUri: string): string {
   return `${TESLA_AUTH_BASE}?${params}`;
 }
 
+// ── Rivian auth state ─────────────────────────────────────────────────────────
+type RivianAuthStep = 'idle' | 'loading' | 'otp_required' | 'done' | 'error';
+
+interface RivianOtpState {
+  otpToken: string;
+  csrfToken: string;
+  appSessionToken: string;
+}
+
 export default function AdminPage() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [teslaConnected, setTeslaConnected] = useState(false);
+  const [rivianConnected, setRivianConnected] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Rivian auth flow state
+  const [rivianEmail, setRivianEmail] = useState('');
+  const [rivianPassword, setRivianPassword] = useState('');
+  const [rivianOtpCode, setRivianOtpCode] = useState('');
+  const [rivianOtpState, setRivianOtpState] = useState<RivianOtpState | null>(null);
+  const [rivianStep, setRivianStep] = useState<RivianAuthStep>('idle');
+  const [rivianLoading, setRivianLoading] = useState(false);
+  const [rivianError, setRivianError] = useState('');
+
+  // Fix scroll for admin page — dashboard has overflow:hidden globally
+  useEffect(() => {
+    document.documentElement.style.overflow = 'auto';
+    document.body.style.overflow = 'auto';
+    return () => {
+      document.documentElement.style.overflow = '';
+      document.body.style.overflow = '';
+    };
+  }, []);
 
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
-      .then((d: { config: AppConfig; teslaConnected: boolean }) => {
+      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean }) => {
         setConfig(d.config);
         setTeslaConnected(d.teslaConnected);
+        setRivianConnected(d.rivianConnected);
+        setRivianEmail(d.config.vehicles.rivian.email);
       });
   }, []);
 
@@ -56,9 +87,86 @@ export default function AdminPage() {
     }
   }
 
+  async function connectRivian() {
+    if (!rivianEmail || !rivianPassword) return;
+    setRivianStep('idle');
+    setRivianLoading(true);
+    setRivianError('');
+    try {
+      const res = await fetch('/api/rivian/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: rivianEmail, password: rivianPassword }),
+      });
+      const data = await res.json() as {
+        type?: string;
+        otpToken?: string;
+        csrfToken?: string;
+        appSessionToken?: string;
+        error?: string;
+      };
+      if (!res.ok || data.error) {
+        setRivianStep('error');
+        setRivianError(data.error ?? 'Login failed');
+        return;
+      }
+      if (data.type === 'otp_required') {
+        setRivianOtpState({
+          otpToken: data.otpToken!,
+          csrfToken: data.csrfToken!,
+          appSessionToken: data.appSessionToken!,
+        });
+        setRivianStep('otp_required');
+      } else {
+        setRivianStep('done');
+        setRivianConnected(true);
+        setRivianPassword('');
+        update('vehicles', { rivian: { ...config!.vehicles.rivian, email: rivianEmail } });
+      }
+    } catch (e) {
+      setRivianStep('error');
+      setRivianError(String(e));
+    } finally {
+      setRivianLoading(false);
+    }
+  }
+
+  async function submitOtp() {
+    if (!rivianOtpState || !rivianOtpCode) return;
+    setRivianLoading(true);
+    setRivianError('');
+    try {
+      const res = await fetch('/api/rivian/otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: rivianEmail,
+          otpCode: rivianOtpCode,
+          ...rivianOtpState,
+        }),
+      });
+      const data = await res.json() as { type?: string; error?: string };
+      if (!res.ok || data.error) {
+        setRivianStep('error');
+        setRivianError(data.error ?? 'OTP failed');
+        return;
+      }
+      setRivianStep('done');
+      setRivianConnected(true);
+      setRivianPassword('');
+      setRivianOtpCode('');
+      update('vehicles', { rivian: { ...config!.vehicles.rivian, email: rivianEmail } });
+    } catch (e) {
+      setRivianStep('error');
+      setRivianError(String(e));
+    } finally {
+      setRivianLoading(false);
+    }
+  }
+
   if (!config) {
     return (
-      <div className="admin-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
         <span style={{ color: '#6b8599', fontFamily: 'JetBrains Mono, monospace' }}>Loading…</span>
       </div>
     );
@@ -66,7 +174,7 @@ export default function AdminPage() {
 
   const redirectUri = typeof window !== 'undefined'
     ? `${window.location.origin}/auth/callback`
-    : 'https://penndalton.com/auth/callback/void';
+    : 'https://penndalton.com/auth/callback';
 
   return (
     <div className="admin-page">
@@ -126,7 +234,6 @@ export default function AdminPage() {
       <div className="admin-section">
         <div className="admin-section-header">
           <div className="admin-section-title">
-            <div className="status-dot" style={{ background: teslaConnected ? undefined : undefined }} />
             <div className={`status-dot ${teslaConnected ? 'connected' : 'disconnected'}`} />
             Tesla Fleet API
           </div>
@@ -235,10 +342,12 @@ export default function AdminPage() {
       <div className="admin-section">
         <div className="admin-section-header">
           <div className="admin-section-title">
-            <div className={`status-dot ${config.vehicles.rivian.email ? 'partial' : 'disconnected'}`} />
+            <div className={`status-dot ${rivianConnected ? 'connected' : rivianStep === 'error' ? 'disconnected' : 'disconnected'}`} />
             Rivian
           </div>
-          <span style={{ fontSize: 11, color: '#3d5566' }}>Unofficial API — coming soon</span>
+          {rivianConnected && (
+            <span style={{ fontSize: 12, color: '#34e07a' }}>✓ Connected</span>
+          )}
         </div>
         <div className="admin-section-body">
           <div className="form-row-2">
@@ -263,27 +372,95 @@ export default function AdminPage() {
               </select>
             </div>
           </div>
-          <div className="form-row-2">
-            <div className="form-row">
-              <label className="form-label">Rivian Email</label>
-              <input
-                className="form-input"
-                type="email"
-                value={config.vehicles.rivian.email}
-                onChange={e => update('vehicles', { rivian: { ...config.vehicles.rivian, email: e.target.value } })}
-                placeholder="you@example.com"
-              />
-            </div>
-            <div className="form-row">
-              <label className="form-label">Rivian Password</label>
-              <input
-                className="form-input"
-                type="password"
-                value={config.vehicles.rivian.password}
-                onChange={e => update('vehicles', { rivian: { ...config.vehicles.rivian, password: e.target.value } })}
-                placeholder="••••••••"
-              />
-            </div>
+
+          {rivianStep !== 'otp_required' ? (
+            <>
+              <div className="form-row-2">
+                <div className="form-row">
+                  <label className="form-label">Rivian Email</label>
+                  <input
+                    className="form-input"
+                    type="email"
+                    value={rivianEmail}
+                    onChange={e => setRivianEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    disabled={rivianLoading}
+                  />
+                </div>
+                <div className="form-row">
+                  <label className="form-label">Rivian Password</label>
+                  <input
+                    className="form-input"
+                    type="password"
+                    value={rivianPassword}
+                    onChange={e => setRivianPassword(e.target.value)}
+                    placeholder="••••••••"
+                    disabled={rivianLoading}
+                    onKeyDown={e => e.key === 'Enter' && connectRivian()}
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  className="btn-primary"
+                  onClick={connectRivian}
+                  disabled={rivianLoading || !rivianEmail || !rivianPassword}
+                >
+                  <span className="icon" style={{ fontSize: 16 }}>
+                    {rivianLoading ? 'sync' : 'login'}
+                  </span>
+                  {rivianLoading ? 'Connecting…' : rivianConnected ? 'Re-connect Rivian' : 'Connect Rivian'}
+                </button>
+                {rivianError && (
+                  <span style={{ fontSize: 12, color: '#e05555' }}>{rivianError}</span>
+                )}
+                {rivianStep === 'done' && (
+                  <span style={{ fontSize: 12, color: '#34e07a' }}>✓ Connected successfully</span>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, color: '#6b8599', marginBottom: 4 }}>
+                Rivian sent a verification code to <strong style={{ color: '#e8edf0' }}>{rivianEmail}</strong>. Enter it below.
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+                <div className="form-row" style={{ flex: 1 }}>
+                  <label className="form-label">Verification Code</label>
+                  <input
+                    className="form-input"
+                    value={rivianOtpCode}
+                    onChange={e => setRivianOtpCode(e.target.value)}
+                    placeholder="123456"
+                    maxLength={8}
+                    autoFocus
+                    onKeyDown={e => e.key === 'Enter' && submitOtp()}
+                    disabled={rivianLoading}
+                  />
+                </div>
+                <button
+                  className="btn-primary"
+                  onClick={submitOtp}
+                  disabled={rivianLoading || !rivianOtpCode}
+                  style={{ marginBottom: 0 }}
+                >
+                  <span className="icon" style={{ fontSize: 16 }}>verified</span>
+                  {rivianLoading ? 'Verifying…' : 'Verify'}
+                </button>
+                <button
+                  className="btn-secondary"
+                  onClick={() => { setRivianStep('idle'); setRivianOtpState(null); setRivianOtpCode(''); }}
+                >
+                  Cancel
+                </button>
+              </div>
+              {rivianError && (
+                <span style={{ fontSize: 12, color: '#e05555' }}>{rivianError}</span>
+              )}
+            </>
+          )}
+          <div className="form-hint">
+            Uses the Rivian app API (unofficial). Tokens are stored locally in the keys/ volume — passwords are not saved.
           </div>
         </div>
       </div>

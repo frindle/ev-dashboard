@@ -7,6 +7,7 @@ import {
   TeslaSiteState,
   WallConnectorVitals,
 } from '@/lib/tesla';
+import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/lib/rivian';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,7 @@ export interface VehicleData {
   name: string;
   model: string;
   chargerSide: 'LEFT' | 'RIGHT';
-  state: TeslaVehicleState | null;
+  state: TeslaVehicleState | RivianVehicleState | null;
   connected: boolean;
 }
 
@@ -33,6 +34,7 @@ export interface DashboardData {
   garageDoorOpen: boolean | null;
   lastUpdated: string;
   teslaConnected: boolean;
+  rivianConnected: boolean;
 }
 
 export interface WeatherData {
@@ -80,10 +82,12 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
 export async function GET() {
   const cfg = readConfig();
   const teslaConnected = readTokens() !== null;
+  const rivianConnected = hasRivianTokens();
 
   // Fetch all data in parallel
-  const [teslaState, siteState, wcLeft, wcRight, weather] = await Promise.all([
+  const [teslaState, rivianState, siteState, wcLeft, wcRight, weather] = await Promise.all([
     teslaConnected ? fetchVehicleState(cfg.vehicles.tesla.vin) : Promise.resolve(null),
+    rivianConnected ? fetchRivianVehicleState() : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
     teslaConnected ? fetchWallConnectorVitals(cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.deviceId ?? '') : Promise.resolve(null),
     teslaConnected ? fetchWallConnectorVitals(cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.deviceId ?? '') : Promise.resolve(null),
@@ -96,8 +100,8 @@ export async function GET() {
       name: cfg.vehicles.rivian.name,
       model: cfg.vehicles.rivian.model,
       chargerSide: cfg.vehicles.rivian.chargerSide,
-      state: null, // Rivian API not yet integrated
-      connected: false,
+      state: rivianState,
+      connected: rivianConnected,
     },
     {
       id: 'tesla',
@@ -130,6 +134,7 @@ export async function GET() {
     garageDoorOpen: null, // MyQ not yet integrated
     lastUpdated: new Date().toISOString(),
     teslaConnected,
+    rivianConnected,
   };
 
   return Response.json(data);

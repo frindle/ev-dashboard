@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { readConfig, writeConfig, AppConfig } from '@/lib/config';
 import { hasTokens } from '@/lib/tesla';
+import { hasRivianTokens } from '@/lib/rivian';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +10,7 @@ export async function GET() {
   return Response.json({
     config: cfg,
     teslaConnected: hasTokens(),
+    rivianConnected: hasRivianTokens(),
   });
 }
 
