@@ -177,9 +177,7 @@ export default function AdminPage() {
     );
   }
 
-  const redirectUri = typeof window !== 'undefined'
-    ? `${window.location.origin}/auth/callback`
-    : 'https://penndalton.com/auth/callback';
+  const redirectUri = 'https://ev-dashboard.penndalton.com/auth/callback';
 
   return (
     <div className="admin-page">
