@@ -682,6 +682,9 @@ html, body {
   outline: none;
   transition: border-color 0.15s;
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
 }
 .form-input:focus { border-color: var(--accent); }
 .form-input::placeholder { color: var(--text-muted); }

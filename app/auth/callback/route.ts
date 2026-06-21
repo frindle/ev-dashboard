@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
-import { writeFileSync } from 'fs';
-import { join } from 'path';
+import { writeTokens, TeslaTokens } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,18 +26,13 @@ export async function GET(req: NextRequest) {
     }),
   });
 
-  const data = await res.json() as Record<string, unknown>;
+  const data = await res.json() as TeslaTokens;
 
   if (!res.ok) {
     return new Response(`Token exchange failed: ${JSON.stringify(data)}`, { status: 500 });
   }
 
-  // Save tokens to disk
-  const tokensPath = process.env.KEYS_DIR
-    ? join(process.env.KEYS_DIR, 'tokens.json')
-    : join(process.cwd(), 'keys', 'tokens.json');
-
-  writeFileSync(tokensPath, JSON.stringify(data, null, 2));
+  writeTokens(data);
 
   return new Response('✓ Tesla auth complete. Tokens saved. You can close this tab.', {
     headers: { 'Content-Type': 'text/plain' },
