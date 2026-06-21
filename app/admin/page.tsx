@@ -36,6 +36,7 @@ export default function AdminPage() {
   const [myqError, setMyqError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [wcDiscovered, setWcDiscovered] = useState<Array<{ serial: string; deviceId: string }>>([]);
 
   // Rivian auth flow state
   const [rivianEmail, setRivianEmail] = useState('');
@@ -72,6 +73,12 @@ export default function AdminPage() {
         setRivianConnected(d.rivianConnected);
         setMyqConnected(d.myqConnected);
         setRivianEmail(d.config.vehicles.rivian.email);
+        if (d.teslaConnected) {
+          fetch('/api/tesla/wall-connectors')
+            .then(r => r.json())
+            .then((list: Array<{ serial: string; deviceId: string }>) => setWcDiscovered(list))
+            .catch(() => null);
+        }
       });
   }, []);
 
@@ -335,38 +342,48 @@ export default function AdminPage() {
           </div>
 
           <div className="form-row">
-            <label className="form-label">Wall Connector Serial Numbers</label>
+            <label className="form-label">Wall Connector Assignment</label>
             <div className="form-row-2">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <span className="form-hint">LEFT connector</span>
-                <input
-                  className="form-input"
-                  value={config.energySite.wallConnectors.find(w => w.side === 'LEFT')?.serial ?? ''}
-                  onChange={e => {
-                    const wcs = config.energySite.wallConnectors.map(w =>
-                      w.side === 'LEFT' ? { ...w, serial: e.target.value } : w
-                    );
-                    update('energySite', { ...config.energySite, wallConnectors: wcs });
-                  }}
-                  placeholder="CN123456789"
-                />
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <span className="form-hint">RIGHT connector</span>
-                <input
-                  className="form-input"
-                  value={config.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.serial ?? ''}
-                  onChange={e => {
-                    const wcs = config.energySite.wallConnectors.map(w =>
-                      w.side === 'RIGHT' ? { ...w, serial: e.target.value } : w
-                    );
-                    update('energySite', { ...config.energySite, wallConnectors: wcs });
-                  }}
-                  placeholder="CN123456789"
-                />
-              </div>
+              {(['LEFT', 'RIGHT'] as const).map(side => {
+                const current = config.energySite.wallConnectors.find(w => w.side === side);
+                return (
+                  <div key={side} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <span className="form-hint">{side} connector</span>
+                    <select
+                      className="form-select"
+                      value={current?.deviceId ?? ''}
+                      onChange={e => {
+                        const chosen = wcDiscovered.find(w => w.deviceId === e.target.value);
+                        const wcs = config.energySite.wallConnectors.map(w =>
+                          w.side === side
+                            ? { ...w, deviceId: chosen?.deviceId ?? e.target.value, serial: chosen?.serial ?? '' }
+                            : w
+                        );
+                        update('energySite', { ...config.energySite, wallConnectors: wcs });
+                      }}
+                    >
+                      <option value="">— select —</option>
+                      {wcDiscovered.map(wc => (
+                        <option key={wc.deviceId} value={wc.deviceId}>
+                          {wc.serial || wc.deviceId}
+                        </option>
+                      ))}
+                      {/* Keep current value selectable even if not in discovered list */}
+                      {current?.deviceId && !wcDiscovered.find(w => w.deviceId === current.deviceId) && (
+                        <option value={current.deviceId}>
+                          {current.serial || current.deviceId}
+                        </option>
+                      )}
+                    </select>
+                  </div>
+                );
+              })}
             </div>
-            <span className="form-hint">S/N is on the sticker on the side of each Wall Connector. The device UUID is resolved automatically.</span>
+            <span className="form-hint">
+              {wcDiscovered.length > 0
+                ? `${wcDiscovered.length} wall connector${wcDiscovered.length !== 1 ? 's' : ''} discovered from Tesla API.`
+                : teslaConnected ? 'Fetching from Tesla…' : 'Connect Tesla to discover wall connectors.'}
+            </span>
           </div>
         </div>
       </div>
