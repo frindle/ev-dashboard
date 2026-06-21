@@ -1,396 +1,399 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DashboardData, VehicleData, WallConnectorData } from './api/dashboard/route';
+import { useState, useEffect, useCallback } from 'react';
+import type { DashboardData, VehicleData, WallConnectorData } from '@/app/api/dashboard/route';
 
-const REFRESH_MS = 30000;
+const REFRESH_MS = 30_000;
+const CIRCUIT_AMPS = 48;
+const VOLTS = 240;
+const ACCENT = '#34e0c4';
+const ACCENT_SOFT = 'rgba(52,224,196,0.16)';
+const C = 326.726; // 2π × r52
 
-// ── SVG Charge Dial ───────────────────────────────────────────────────────────
-const CX = 90, CY = 90, R = 72;
-const START_DEG = 135;
-const SWEEP = 270;
+function kwFor(amps: number) { return amps * VOLTS / 1000; }
 
-function toRad(deg: number) { return (deg * Math.PI) / 180; }
-
-function polarXY(deg: number) {
-  return { x: CX + R * Math.cos(toRad(deg)), y: CY + R * Math.sin(toRad(deg)) };
+function fmtEta(min: number): string {
+  if (min <= 0) return 'AT TARGET';
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return (h > 0 ? h + 'h ' : '') + m + 'm TO TARGET';
 }
 
-function arcPath(startDeg: number, endDeg: number) {
-  const s = polarXY(startDeg);
-  const e = polarXY(endDeg);
-  const sweep = ((endDeg - startDeg) + 360) % 360;
-  if (sweep < 0.5) return '';
-  const large = sweep > 180 ? 1 : 0;
-  return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${R} ${R} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`;
+function owmIcon(code: string): string {
+  const p = code.slice(0, 2), day = code.endsWith('d');
+  const m: Record<string, string> = {
+    '01': day ? 'clear_day' : 'clear_night',
+    '02': day ? 'partly_cloudy_day' : 'partly_cloudy_night',
+    '03': 'cloud', '04': 'cloud', '09': 'rainy', '10': 'rainy',
+    '11': 'thunderstorm', '13': 'snowing', '50': 'foggy',
+  };
+  return m[p] ?? 'wb_sunny';
 }
 
-function degForPercent(pct: number) { return START_DEG + (pct / 100) * SWEEP; }
-
-interface DialProps {
-  chargePercent: number;
-  chargeLimit: number;
-  accent: string;
-  onSetLimit?: (limit: number) => void;
-}
-
-function ChargeDial({ chargePercent, chargeLimit, accent, onSetLimit }: DialProps) {
-  const svgRef = useRef<SVGSVGElement>(null);
-  const dragging = useRef(false);
-  const [localLimit, setLocalLimit] = useState(chargeLimit);
-
-  useEffect(() => { setLocalLimit(chargeLimit); }, [chargeLimit]);
-
-  const chargeDeg = degForPercent(Math.min(chargePercent, 100));
-  const limitDeg = degForPercent(localLimit);
-  const handlePos = polarXY(limitDeg);
-
-  function eventToAngleDeg(e: React.PointerEvent | PointerEvent): number {
-    const svg = svgRef.current;
-    if (!svg) return START_DEG;
-    const rect = svg.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 180 - CX;
-    const y = ((e.clientY - rect.top) / rect.height) * 180 - CY;
-    return (Math.atan2(y, x) * 180) / Math.PI;
-  }
-
-  function angleToPercent(deg: number): number {
-    const norm = ((deg - START_DEG) + 360) % 360;
-    if (norm > SWEEP) {
-      return norm - SWEEP > 180 - SWEEP / 2 ? 0 : 100;
-    }
-    return Math.round((norm / SWEEP) * 100);
-  }
-
-  const onPointerDown = useCallback((e: React.PointerEvent<SVGCircleElement>) => {
-    dragging.current = true;
-    (e.target as SVGCircleElement).setPointerCapture(e.pointerId);
-  }, []);
-
-  const onPointerMove = useCallback((e: React.PointerEvent<SVGCircleElement>) => {
-    if (!dragging.current) return;
-    const deg = eventToAngleDeg(e);
-    const pct = Math.max(50, Math.min(100, angleToPercent(deg)));
-    setLocalLimit(pct);
-  }, []);
-
-  const onPointerUp = useCallback(() => {
-    if (!dragging.current) return;
-    dragging.current = false;
-    onSetLimit?.(localLimit);
-  }, [localLimit, onSetLimit]);
-
-  const minsToFull = chargePercent < localLimit ? Math.round(((localLimit - chargePercent) / 100) * 400) : 0;
-  const etaStr = minsToFull > 0 ? `${Math.floor(minsToFull / 60)}h ${minsToFull % 60}m` : '–';
-
+// ── Stat Chip ─────────────────────────────────────────────────────────────────
+function StatChip({ label, value, unit, icon }: {
+  label: string; value: string; unit: string; icon?: string;
+}) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-      <svg ref={svgRef} viewBox="0 0 180 180" width={180} height={180}>
-        {/* Track */}
-        <path d={arcPath(START_DEG, START_DEG + SWEEP)} fill="none" stroke="#1e2b33" strokeWidth={10} strokeLinecap="round" />
-        {/* Charge fill */}
-        {chargePercent > 0 && (
-          <path d={arcPath(START_DEG, chargeDeg)} fill="none" stroke={accent} strokeWidth={10} strokeLinecap="round" />
-        )}
-        {/* Limit marker */}
-        <line
-          x1={CX + (R - 14) * Math.cos(toRad(limitDeg))}
-          y1={CY + (R - 14) * Math.sin(toRad(limitDeg))}
-          x2={CX + (R + 4) * Math.cos(toRad(limitDeg))}
-          y2={CY + (R + 4) * Math.sin(toRad(limitDeg))}
-          stroke="#fff"
-          strokeWidth={2}
-          strokeLinecap="round"
-          opacity={0.5}
-        />
-        {/* Drag handle */}
-        <circle
-          cx={handlePos.x}
-          cy={handlePos.y}
-          r={8}
-          fill="#fff"
-          stroke="#0e1216"
-          strokeWidth={2}
-          style={{ cursor: onSetLimit ? 'grab' : 'default' }}
-          onPointerDown={onSetLimit ? onPointerDown : undefined}
-          onPointerMove={onSetLimit ? onPointerMove : undefined}
-          onPointerUp={onSetLimit ? onPointerUp : undefined}
-        />
-        {/* Percent text */}
-        <text x={CX} y={CY - 6} textAnchor="middle" fill="#e8edf0" fontFamily="JetBrains Mono, monospace" fontSize={30} fontWeight={700}>
-          {chargePercent}
-        </text>
-        <text x={CX} y={CY + 14} textAnchor="middle" fill="#6b8599" fontFamily="JetBrains Mono, monospace" fontSize={12}>
-          %
-        </text>
-        {/* Limit label */}
-        <text x={CX} y={CY + 32} textAnchor="middle" fill="#3d5566" fontFamily="JetBrains Mono, monospace" fontSize={10}>
-          LIM {localLimit}%
-        </text>
-      </svg>
-      <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#6b8599' }}>
-        ETA {etaStr}
-      </div>
+    <div style={{ background: '#161c22', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 13, padding: '10px 15px', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 106 }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, letterSpacing: '0.1em', color: '#7d8893' }}>
+        {icon
+          ? <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 13, color: ACCENT }}>{icon}</span>
+          : <span style={{ width: 6, height: 6, borderRadius: '50%', background: ACCENT, flexShrink: 0 }} />}
+        {label}
+      </span>
+      <span style={{ fontSize: 16, fontWeight: 600 }}>
+        {value}<span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}> {unit}</span>
+      </span>
     </div>
   );
 }
 
-// ── Vehicle Card ──────────────────────────────────────────────────────────────
-interface VehicleCardProps {
-  vehicle: VehicleData;
-  accent: string;
-  onCommand: (cmd: string, params?: Record<string, unknown>) => void;
-}
+// ── Charge Dial ───────────────────────────────────────────────────────────────
+function ChargeDial({ soc, limit, accent, draggable, onSetLimit }: {
+  soc: number; limit: number; accent: string; draggable: boolean;
+  onSetLimit?: (l: number) => void;
+}) {
+  const [drag, setDrag] = useState(false);
+  const valueOffset = C - C * (soc / 100);
+  const lAng = (limit / 100) * Math.PI * 2;
+  const tx1 = (60 + 43 * Math.sin(lAng)).toFixed(2);
+  const ty1 = (60 - 43 * Math.cos(lAng)).toFixed(2);
+  const tx2 = (60 + 61 * Math.sin(lAng)).toFixed(2);
+  const ty2 = (60 - 61 * Math.cos(lAng)).toFixed(2);
 
-function chargeBadgeClass(v: VehicleData): string {
-  if (!v.connected || !v.state) return 'disconnected';
-  if (v.state.isCharging) return 'charging';
-  if (v.state.chargePercent >= v.state.chargeLimit - 1) return 'full';
-  return 'plugged';
-}
-
-function chargeBadgeText(v: VehicleData): string {
-  if (!v.connected || !v.state) return 'Offline';
-  if (v.state.isCharging) return 'Charging';
-  if (v.state.chargePercent >= (v.state.chargeLimit - 1)) return 'Full';
-  return v.state.chargingState;
-}
-
-function VehicleCard({ vehicle: v, accent, onCommand }: VehicleCardProps) {
-  const s = v.state;
-  const badgeClass = chargeBadgeClass(v);
-  const badgeText = chargeBadgeText(v);
-
-  const isTesla = v.id === 'tesla';
-  const rangeMi = s ? Math.round(s.rangeMi) : 0;
-  const addedMi = s ? Math.round(s.addedRangeMi) : 0;
-  const chargeRate = s ? Math.round(s.chargeRateMph) : 0;
-  const odo = s ? Math.round(s.odometer) : 0;
-
-  function handleSetLimit(limit: number) {
-    if (isTesla) onCommand('set_charge_limit', { percent: limit });
-  }
-
-  function handleActionClick() {
-    if (!isTesla || !s) return;
-    if (s.isCharging) {
-      onCommand('charge_stop');
-    } else {
-      onCommand('charge_start');
-    }
+  function dialSet(e: React.PointerEvent<SVGSVGElement>) {
+    if (!onSetLimit) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2);
+    const dy = e.clientY - (r.top + r.height / 2);
+    let ang = Math.atan2(dx, -dy);
+    if (ang < 0) ang += Math.PI * 2;
+    let pct = (ang / (Math.PI * 2)) * 100;
+    pct = Math.max(50, Math.min(100, Math.round(pct / 5) * 5));
+    onSetLimit(pct);
   }
 
   return (
-    <div className="vehicle-card">
-      {/* Header */}
-      <div className="vehicle-card-header">
-        <div className="vehicle-title">
-          <div className="vehicle-name">{v.name}</div>
-          <div className="vehicle-model">{v.model}</div>
+    <svg width="128" height="128" viewBox="0 0 120 120"
+      onPointerDown={e => { if (!draggable) return; setDrag(true); try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {} dialSet(e); }}
+      onPointerMove={e => { if (drag) dialSet(e); }}
+      onPointerUp={() => setDrag(false)}
+      style={{ flex: 'none', cursor: draggable ? 'grab' : 'default', touchAction: 'none' }}>
+      <circle cx="60" cy="60" r="52" fill="none" stroke="#222b34" strokeWidth="9" />
+      <g transform="rotate(-90 60 60)">
+        <circle cx="60" cy="60" r="52" fill="none" stroke={accent} strokeWidth="9"
+          strokeLinecap="round" strokeDasharray={C} strokeDashoffset={valueOffset} />
+      </g>
+      <line x1={tx1} y1={ty1} x2={tx2} y2={ty2} stroke="#e2685f" strokeWidth="3" strokeLinecap="round" />
+      <text x="60" y="48" textAnchor="middle" style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, letterSpacing: '0.22em', fill: '#a4afba' }}>CHARGE</text>
+      <text x="60" y="68" textAnchor="middle" style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 24, fontWeight: 600, fill: '#e8edf2' }}>{soc}%</text>
+      <text x="60" y="82" textAnchor="middle" style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, letterSpacing: '0.18em', fill: '#e2685f' }}>LIMIT {limit}%</text>
+    </svg>
+  );
+}
+
+// ── Vehicle Card ──────────────────────────────────────────────────────────────
+function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
+  v: VehicleData; idx: number; wcPowerW: number; accent: string;
+  onCommand: (cmd: string, params?: Record<string, unknown>) => void;
+}) {
+  const s = v.state;
+  const isTesla = v.id === 'tesla';
+  const isLeft = idx === 0;
+
+  const rowDir  = isLeft ? 'row-reverse' : 'row';
+  const nameAlign  = isLeft ? 'flex-end'   : 'flex-start';
+  const badgeAlign = isLeft ? 'flex-start' : 'flex-end';
+  const statsAlign = isLeft ? 'right'      : 'left';
+  const footerDir  = isLeft ? 'row'        : 'row-reverse';
+  const sourceAlign = isLeft ? 'left'      : 'right';
+
+  const soc    = s ? Math.round(s.chargePercent) : 0;
+  const limit  = s ? Math.round(s.chargeLimit)   : 80;
+  const range  = s ? Math.round(s.rangeMi)       : 0;
+  const odoLabel = s ? Math.round(s.odometer).toLocaleString('en-US') : '—';
+  const minutesToFull = s?.minutesToFull ?? 0;
+  const isCharging = s?.isCharging ?? false;
+  const isLocked   = s?.isLocked   ?? true;
+  const climateOn  = s?.climateOn  ?? false;
+  const online     = s?.online     ?? false;
+
+  let badgeLabel: string, badgeAccent: boolean, badgePulse: boolean;
+  if (!v.connected)       { badgeLabel = 'DISCONNECTED'; badgeAccent = false; badgePulse = false; }
+  else if (isCharging)    { badgeLabel = 'CHARGING';     badgeAccent = true;  badgePulse = true;  }
+  else if (!online)       { badgeLabel = 'ASLEEP';       badgeAccent = false; badgePulse = false; }
+  else                    { badgeLabel = 'IDLE';         badgeAccent = false; badgePulse = false; }
+
+  const badgeColor    = badgeAccent ? accent    : '#a4afba';
+  const badgeBg       = badgeAccent ? ACCENT_SOFT : '#1b232b';
+  const badgeDotColor = badgeAccent ? accent    : '#7d8893';
+  const badgeDotAnim  = badgePulse ? 'evpulse 1.8s ease-in-out infinite' : 'none';
+
+  const rateKw    = wcPowerW / 1000;
+  const rateLabel = isCharging && rateKw > 0 ? rateKw.toFixed(1) + ' kW' : '—';
+  const etaLabel  = isCharging ? fmtEta(minutesToFull) : (soc >= limit ? 'AT TARGET' : 'NOT PLUGGED IN');
+  const etaColor  = isCharging ? accent : '#7d8893';
+
+  const canStartStop = isTesla && v.connected;
+  const scheduleOnly = !isTesla && v.connected && s !== null;
+  const apiLabel  = isTesla ? 'TESLA FLEET API' : 'RIVIAN · UNOFFICIAL API';
+  const limitNote = canStartStop ? 'CHARGE LIMIT' : 'CHARGE LIMIT · VIA SCHEDULE';
+
+  return (
+    <div style={{ background: '#161c22', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14, boxShadow: '0 18px 44px -30px rgba(0,0,0,.85)' }}>
+      {/* Name / badge row */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexDirection: rowDir as React.CSSProperties['flexDirection'] }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: nameAlign as React.CSSProperties['alignItems'] }}>
+          <span style={{ fontSize: 19, fontWeight: 600 }}>{v.name}</span>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, color: '#a4afba', letterSpacing: '0.03em' }}>{v.model}</span>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-          <div className="vehicle-badges">
-            <div className={`charge-badge ${badgeClass}`}>{badgeText}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: badgeAlign as React.CSSProperties['alignItems'], gap: 8, flex: 'none' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: badgeBg, color: badgeColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: '0.06em', padding: '6px 12px', borderRadius: 999 }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: badgeDotColor, animation: badgeDotAnim, flexShrink: 0 }} />
+            {badgeLabel}
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={isTesla ? () => onCommand(isLocked ? 'unlock' : 'lock') : undefined}
+              title={isLocked ? 'Locked' : 'Unlocked'}
+              style={{ appearance: 'none', cursor: isTesla ? 'pointer' : 'default', width: 42, height: 42, borderRadius: 12, background: isLocked ? '#1b232b' : 'rgba(226,104,95,0.16)', border: '1px solid rgba(255,255,255,0.06)', color: isLocked ? '#a4afba' : '#e2685f', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 22, lineHeight: 1 }}>{isLocked ? 'lock' : 'lock_open'}</span>
+            </button>
+            <button
+              onClick={isTesla ? () => onCommand(climateOn ? 'climate_stop' : 'climate_start') : undefined}
+              title={climateOn ? 'AC on' : 'AC off'}
+              style={{ appearance: 'none', cursor: isTesla ? 'pointer' : 'default', width: 42, height: 42, borderRadius: 12, background: climateOn ? ACCENT_SOFT : '#1b232b', border: '1px solid rgba(255,255,255,0.06)', color: climateOn ? accent : '#a4afba', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 23, lineHeight: 1, animation: 'acspin 2.4s linear infinite', animationPlayState: climateOn ? 'running' : 'paused' }}>mode_fan</span>
+            </button>
           </div>
-          {isTesla && s && (
-            <div className="vehicle-controls">
-              <button
-                className={`ctrl-btn${s.isLocked ? ' active' : ''}`}
-                title={s.isLocked ? 'Unlock' : 'Lock'}
-                onClick={() => onCommand(s.isLocked ? 'unlock' : 'lock')}
-              >
-                <span className="icon" style={{ fontSize: 16 }}>{s.isLocked ? 'lock' : 'lock_open'}</span>
-              </button>
-              <button
-                className={`ctrl-btn${s.climateOn ? ' active' : ''}`}
-                title={s.climateOn ? 'Stop Climate' : 'Start Climate'}
-                onClick={() => onCommand(s.climateOn ? 'climate_stop' : 'climate_start')}
-              >
-                <span className="icon" style={{ fontSize: 16 }}>ac_unit</span>
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Vehicle image area */}
-      <div className="vehicle-image-area">
-        <div className="vehicle-image-placeholder">
-          <span className="icon" style={{ fontSize: 40, opacity: 0.2 }}>directions_car</span>
-        </div>
-      </div>
-
-      {/* Charge dial */}
-      <div className="dial-area">
+      {/* Dial + stats */}
+      <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir as React.CSSProperties['flexDirection'] }}>
         <ChargeDial
-          chargePercent={s?.chargePercent ?? 0}
-          chargeLimit={s?.chargeLimit ?? 80}
-          accent={accent}
-          onSetLimit={isTesla && s ? handleSetLimit : undefined}
+          soc={soc} limit={limit} accent={accent}
+          draggable={canStartStop}
+          onSetLimit={canStartStop ? l => onCommand('set_charge_limit', { percent: l }) : undefined}
         />
-      </div>
-
-      {/* Stats */}
-      <div className="stats-grid">
-        <div className="stat-cell">
-          <div className="stat-label">Range</div>
-          <div className={`stat-value${s ? '' : ' dim'}`}>{s ? `${rangeMi} mi` : '—'}</div>
-        </div>
-        <div className="stat-cell">
-          <div className="stat-label">Added</div>
-          <div className={`stat-value${s && addedMi > 0 ? ' accent' : ' dim'}`}>
-            {s && addedMi > 0 ? `+${addedMi} mi` : '—'}
-          </div>
-        </div>
-        <div className="stat-cell">
-          <div className="stat-label">Charge Rate</div>
-          <div className={`stat-value${s && chargeRate > 0 ? '' : ' dim'}`}>
-            {s && chargeRate > 0 ? `${chargeRate} mph` : '—'}
-          </div>
-        </div>
-        <div className="stat-cell">
-          <div className="stat-label">Odometer</div>
-          <div className={`stat-value dim`}>{s ? `${odo.toLocaleString()} mi` : '—'}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '13px 18px', flex: 1, textAlign: statsAlign as React.CSSProperties['textAlign'] }}>
+          {([
+            ['RANGE LEFT', s ? String(range) : '—', s ? 'mi' : ''],
+            ['ODOMETER',   s ? odoLabel       : '—', s ? 'mi' : ''],
+            ['TARGET',     `${limit}%`,               ''],
+            ['CHARGE RATE', rateLabel,                ''],
+          ] as [string, string, string][]).map(([label, val, unit]) => (
+            <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>{label}</span>
+              <span style={{ fontSize: 17, fontWeight: 600 }}>
+                {val}{unit && <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}> {unit}</span>}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Action button */}
-      <div className="vehicle-action">
-        {isTesla && s ? (
-          <button
-            className={`action-btn ${s.isCharging ? 'charging' : 'start'}`}
-            onClick={handleActionClick}
-          >
-            <span className="icon" style={{ fontSize: 16 }}>
-              {s.isCharging ? 'stop_circle' : 'bolt'}
-            </span>
-            {s.isCharging ? 'Stop Charging' : 'Start Charging'}
-          </button>
-        ) : (
-          <button className="action-btn disabled" disabled>
-            <span className="icon" style={{ fontSize: 16 }}>link_off</span>
-            Not Connected
-          </button>
-        )}
+      {/* Footer */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 11, borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir as React.CSSProperties['flexDirection'] }}>
+          {canStartStop && (
+            <button onClick={() => onCommand(isCharging ? 'charge_stop' : 'charge_start')}
+              style={{ appearance: 'none', cursor: 'pointer', flex: 'none', padding: '10px 18px', borderRadius: 11, background: isCharging ? 'transparent' : accent, border: isCharging ? '1px solid rgba(226,104,95,.5)' : '1px solid transparent', color: isCharging ? '#e2685f' : '#08231f', fontFamily: "'Space Grotesk',sans-serif", fontSize: 13, fontWeight: 600 }}>
+              {isCharging ? 'Stop' : 'Start'}
+            </button>
+          )}
+          {scheduleOnly && (
+            <span style={{ flex: 'none', padding: '10px 14px', borderRadius: 11, background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)', color: '#a4afba', fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, letterSpacing: '0.04em' }}>SCHEDULE ONLY</span>
+          )}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: "'JetBrains Mono',monospace", fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', color: etaColor }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: etaColor, flexShrink: 0 }} />
+            {etaLabel}
+          </span>
+        </div>
+        <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 8.5, letterSpacing: '0.14em', color: '#5e6873', textAlign: sourceAlign as React.CSSProperties['textAlign'] }}>
+          {limitNote} · DRAG DIAL · SOURCE {apiLabel}
+        </span>
       </div>
     </div>
   );
 }
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
-function CircuitPanel({ wallConnectors, site }: {
+function CircuitPanel({ wallConnectors, solarPowerW }: {
   wallConnectors: WallConnectorData[];
-  site: DashboardData['site'];
+  solarPowerW: number;
 }) {
-  const MAX_AMPS = 48;
-  const VOLTAGE = 240;
+  const left  = wallConnectors.find(w => w.side === 'LEFT');
+  const right = wallConnectors.find(w => w.side === 'RIGHT');
 
-  const leftWc = wallConnectors.find(w => w.side === 'LEFT');
-  const rightWc = wallConnectors.find(w => w.side === 'RIGHT');
+  const leftAmps  = left?.vitals?.currentA  ?? 0;
+  const rightAmps = right?.vitals?.currentA ?? 0;
+  const usedAmps  = Math.round(leftAmps + rightAmps);
+  const leftInUse  = left?.vitals?.vehicleCharging  ?? false;
+  const rightInUse = right?.vitals?.vehicleCharging ?? false;
+  const activeCount = (leftInUse ? 1 : 0) + (rightInUse ? 1 : 0);
 
-  const leftAmps = leftWc?.vitals?.currentA ?? 0;
-  const rightAmps = rightWc?.vitals?.currentA ?? 0;
-  const totalAmps = leftAmps + rightAmps;
+  const usedKw   = kwFor(usedAmps);
+  const freeAmps = Math.max(0, CIRCUIT_AMPS - usedAmps);
+  const leftPct  = `${Math.round((leftAmps  / CIRCUIT_AMPS) * 100)}%`;
+  const rightPct = `${Math.round((rightAmps / CIRCUIT_AMPS) * 100)}%`;
 
-  const solarKw = site ? (site.solarPowerW / 1000).toFixed(1) : null;
-  const totalKw = ((totalAmps * VOLTAGE) / 1000).toFixed(1);
+  const leftSessionKwh  = (left?.vitals?.sessionEnergyWh  ?? 0) / 1000;
+  const rightSessionKwh = (right?.vitals?.sessionEnergyWh ?? 0) / 1000;
+  const todayKwh = leftSessionKwh + rightSessionKwh;
+
+  const statusLabel = activeCount === 0 ? 'IDLE — NOTHING CHARGING'
+    : activeCount === 2 ? 'BOTH CHARGING — WITHIN CIRCUIT LIMIT'
+    : 'ONE CONNECTOR ACTIVE';
+  const statusColor = activeCount > 0 ? ACCENT : '#7d8893';
+
+  const sides = [
+    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh  },
+    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh },
+  ];
 
   return (
-    <div className="circuit-panel">
-      <div className="circuit-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span className="circuit-label">Shared Circuit</span>
-          <span className="circuit-specs">
-            <span>{MAX_AMPS}A</span>
-            <span style={{ color: '#1e2b33' }}>·</span>
-            <span>{VOLTAGE}V</span>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 13, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '16px 22px' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flex: 'none' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, letterSpacing: '0.14em', color: '#7d8893' }}>SHARED 48 A CIRCUIT · 240 V</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: statusColor }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor }} />
+            {statusLabel}
           </span>
-          {solarKw !== null && (
-            <span className="circuit-specs" style={{ color: '#34e0c4' }}>
-              <span className="icon" style={{ fontSize: 13 }}>wb_sunny</span>
-              {solarKw} kW
-            </span>
-          )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="circuit-power">{totalKw} kW</span>
-          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: '#6b8599' }}>
-            {totalAmps.toFixed(0)}/{MAX_AMPS}A
-          </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: 22, fontWeight: 600, lineHeight: 1 }}>{usedAmps} / {CIRCUIT_AMPS} A</span>
+            <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: '#a4afba', letterSpacing: '0.04em' }}>· {usedKw.toFixed(1)} kW</span>
+          </div>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, color: '#a4afba' }}>{todayKwh.toFixed(1)} kWh today · {freeAmps} A free</span>
         </div>
       </div>
 
-      <div className="circuit-bar-wrap">
-        <div className="circuit-bar-fill" style={{ width: `${Math.min((totalAmps / MAX_AMPS) * 100, 100)}%` }} />
+      {/* Split bar */}
+      <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ position: 'relative', height: 24, borderRadius: 12, background: '#1b232b', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: leftPct, background: ACCENT, borderRadius: 12, transition: 'width .4s ease' }} />
+          <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: rightPct, background: ACCENT, borderRadius: 12, transition: 'width .4s ease' }} />
+          <div style={{ position: 'absolute', left: '50%', top: 3, bottom: 3, width: 1, background: 'rgba(255,255,255,0.14)' }} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: "'JetBrains Mono',monospace", fontSize: 10, color: '#a4afba' }}>
+          <span>◀ LEFT · {Math.round(leftAmps)} A</span>
+          <span style={{ color: '#7d8893' }}>{freeAmps} A free</span>
+          <span>RIGHT · {Math.round(rightAmps)} A ▶</span>
+        </div>
       </div>
 
-      <div className="wc-row">
-        {[leftWc, rightWc].map(wc => {
-          if (!wc) return null;
-          const amps = wc.vitals?.currentA ?? 0;
-          const charging = wc.vitals?.vehicleCharging ?? false;
+      {/* Wall connector sub-cards */}
+      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        {sides.map(side => {
+          const vitals = side.wc?.vitals;
+          const kwLabel = vitals ? kwFor(vitals.currentA).toFixed(1) : '0.0';
+          const kwColor = side.inUse ? '#e8edf2' : '#5e6873';
+          const sc = side.inUse ? ACCENT : '#7d8893';
+          const dotAnim = side.inUse ? 'evpulse 1.8s ease-in-out infinite' : 'none';
+          const connectedLabel = side.inUse
+            ? (side.wc?.vehicleName ?? side.name) + ' charging'
+            : vitals?.vehicleConnected ? 'Vehicle connected · not charging' : 'No vehicle connected';
           return (
-            <div key={wc.side} className="wc-card">
-              <div className="wc-info">
-                <div className="wc-side">{wc.side} Wall Connector</div>
-                <div className="wc-vehicle">{wc.vehicleName}</div>
-                <div className="wc-status">
-                  {wc.vitals ? (charging ? 'Charging' : wc.vitals.vehicleConnected ? 'Plugged in' : 'Available') : 'Offline'}
+            <div key={side.name} style={{ display: 'flex', flexDirection: 'column', gap: 10, background: '#161c22', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: '13px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, letterSpacing: '0.14em', color: '#7d8893' }}>WALL CONNECTOR · {side.name}</span>
+                  <span style={{ fontSize: 15, fontWeight: 600, color: '#d3dae1' }}>{connectedLabel}</span>
                 </div>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flex: 'none', fontFamily: "'JetBrains Mono',monospace", fontSize: 11, fontWeight: 600, color: sc }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc, animation: dotAnim }} />
+                  {side.inUse ? 'IN USE' : 'AVAILABLE'}
+                </span>
               </div>
-              <div className="wc-power">
-                <div className={`wc-amps${amps === 0 ? ' idle' : ''}`}>{amps.toFixed(0)}</div>
-                <div className="wc-unit">A</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+                <span style={{ fontSize: 30, fontWeight: 600, lineHeight: 0.9, letterSpacing: '-0.02em', color: kwColor }}>{kwLabel}</span>
+                <span style={{ fontSize: 13, color: '#a4afba', paddingBottom: 3 }}>kW · {side.amps} A</span>
+              </div>
+              <div style={{ display: 'flex', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 12, marginTop: 'auto' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>SESSION</span>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.inUse ? side.session.toFixed(1) + ' kWh' : '—'}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>TODAY</span>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.session.toFixed(1)} kWh</span>
+                </div>
               </div>
             </div>
           );
         })}
       </div>
+
+      {/* Solar row (if generating) */}
+      {solarPowerW > 0 && (
+        <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'rgba(52,224,196,0.06)', border: '1px solid rgba(52,224,196,0.14)', borderRadius: 12 }}>
+          <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: ACCENT }}>solar_power</span>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: '0.08em', color: '#a4afba' }}>SOLAR</span>
+          <span style={{ fontSize: 16, fontWeight: 600 }}>{(solarPowerW / 1000).toFixed(1)}<span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}> kW</span></span>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Camera Modal ──────────────────────────────────────────────────────────────
 function CameraModal({ streamUrl, garageDoorOpen, onClose, onToggleGarage }: {
-  streamUrl: string;
-  garageDoorOpen: boolean | null;
-  onClose: () => void;
-  onToggleGarage: () => void;
+  streamUrl: string; garageDoorOpen: boolean | null;
+  onClose: () => void; onToggleGarage: () => void;
 }) {
+  const key = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
+  const dm = {
+    open:    { label: 'OPEN',    icon: 'garage_door', color: '#e0b53d', bg: 'rgba(224,181,61,0.15)', action: 'Close Garage' },
+    closed:  { label: 'CLOSED',  icon: 'garage',      color: '#a4afba', bg: '#1b232b',               action: 'Open Garage'  },
+    unknown: { label: 'UNKNOWN', icon: 'garage',      color: '#7d8893', bg: '#1b232b',               action: 'Toggle Garage' },
+  }[key];
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="camera-modal" onClick={e => e.stopPropagation()}>
-        <div className="camera-modal-header">
-          <span className="camera-modal-title">Garage Camera</span>
-          <button className="ctrl-btn" onClick={onClose}>
-            <span className="icon" style={{ fontSize: 18 }}>close</span>
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 30, background: 'rgba(8,11,14,0.82)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'evfade .18s ease-out' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 760, maxWidth: '100%', background: '#12181e', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 20, overflow: 'hidden', boxShadow: '0 40px 90px -40px rgba(0,0,0,.9)', display: 'flex', flexDirection: 'column' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontSize: 16, fontWeight: 600 }}>Garage Camera</span>
+            <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: '0.12em', color: '#7d8893' }}>RTSP · 1080p · WIDE</span>
+          </div>
+          <button onClick={onClose} style={{ appearance: 'none', cursor: 'pointer', width: 34, height: 34, borderRadius: 10, background: '#1b232b', border: '1px solid rgba(255,255,255,0.06)', color: '#d3dae1', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+            <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 20, lineHeight: 1 }}>close</span>
           </button>
         </div>
-
-        <div className="camera-feed">
+        {/* Video area */}
+        <div style={{ position: 'relative', aspectRatio: '16/9', background: 'radial-gradient(120% 90% at 50% 30%, #1c252e 0%, #0c1014 100%)', overflow: 'hidden' }}>
           {streamUrl ? (
-            <img src={streamUrl} alt="Camera feed" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <img src={streamUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Camera" />
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-              <span className="icon" style={{ fontSize: 40, opacity: 0.3 }}>videocam_off</span>
-              <span>Camera not configured</span>
-            </div>
+            <>
+              <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.035) 1px,transparent 1px)', backgroundSize: '34px 34px' }} />
+              <div style={{ position: 'absolute', left: 0, right: 0, height: '14%', background: 'linear-gradient(rgba(52,224,196,0.10),transparent)', animation: 'evscan 3.6s linear infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#5e6873' }}>
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 52 }}>videocam</span>
+                <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: '0.1em', textAlign: 'center', lineHeight: 1.6, color: '#7d8893' }}>LIVE FEED PLACEHOLDER<br />point at your RTSP / MJPEG stream</span>
+              </div>
+            </>
           )}
+          <span style={{ position: 'absolute', top: 14, left: 16, display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(226,104,95,0.18)', color: '#e2685f', fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', padding: '5px 10px', borderRadius: 999 }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#e2685f', animation: 'evpulse 1.4s ease-in-out infinite' }} />LIVE
+          </span>
         </div>
-
-        <div className="camera-modal-footer">
-          <div style={{ fontSize: 12, color: '#6b8599' }}>
-            {garageDoorOpen === null ? 'Garage door status unknown' :
-              garageDoorOpen ? 'Garage door is open' : 'Garage door is closed'}
+        {/* Footer - garage door */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 24, color: dm.color }}>{dm.icon}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>MYQ · GARAGE DOOR</span>
+              <span style={{ fontSize: 15, fontWeight: 600, color: dm.color }}>{dm.label}</span>
+            </div>
           </div>
-          <button
-            className={`garage-btn ${garageDoorOpen === null ? 'unknown' : garageDoorOpen ? 'open' : 'closed'}`}
-            onClick={onToggleGarage}
-          >
-            <span className="icon" style={{ fontSize: 16 }}>
-              {garageDoorOpen ? 'garage' : 'garage'}
-            </span>
-            {garageDoorOpen === null ? 'Toggle Door' : garageDoorOpen ? 'Close Door' : 'Open Door'}
+          <button onClick={onToggleGarage} style={{ appearance: 'none', cursor: 'pointer', padding: '12px 22px', borderRadius: 12, background: dm.bg, border: '1px solid rgba(255,255,255,0.08)', color: dm.color, fontFamily: "'Space Grotesk',sans-serif", fontSize: 14, fontWeight: 600 }}>
+            {dm.action}
           </button>
         </div>
       </div>
@@ -404,25 +407,27 @@ export default function Dashboard() {
   const [feedState, setFeedState] = useState<'live' | 'stale' | 'error'>('stale');
   const [showCamera, setShowCamera] = useState(false);
   const [time, setTime] = useState(new Date());
+  const [ageSec, setAgeSec] = useState(0);
   const [commandPending, setCommandPending] = useState(false);
 
-  const accent = '#34e0c4';
-
-  // Clock
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Data fetch
+  useEffect(() => {
+    const t = setInterval(() => setAgeSec(a => (a + 1) % 60), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch('/api/dashboard', { cache: 'no-store' });
       if (!res.ok) { setFeedState('error'); return; }
       const json = await res.json() as DashboardData;
       setData(json);
-      const ageMs = Date.now() - new Date(json.lastUpdated).getTime();
-      setFeedState(ageMs < 60000 ? 'live' : 'stale');
+      setAgeSec(0);
+      setFeedState(Date.now() - new Date(json.lastUpdated).getTime() < 60000 ? 'live' : 'stale');
     } catch {
       setFeedState('error');
     }
@@ -449,90 +454,128 @@ export default function Dashboard() {
     }
   }
 
-  const dateStr = time.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  const timeStr = time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const vehicles: VehicleData[] = data?.vehicles ?? [
+    { id: 'rivian', name: 'Midknight', model: 'Rivian R1S',  chargerSide: 'LEFT',  state: null, connected: false },
+    { id: 'tesla',  name: 'Tesla',     model: 'Model 3',     chargerSide: 'RIGHT', state: null, connected: false },
+  ];
+  const wallConnectors: WallConnectorData[] = data?.wallConnectors ?? [
+    { side: 'LEFT',  vehicleName: 'Midknight', vitals: null },
+    { side: 'RIGHT', vehicleName: 'Tesla',     vitals: null },
+  ];
+
+  // Header values
   const weather = data?.weather;
+  const dateStr = time.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const timeStr = time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  let feedLabel: string, feedColor: string, feedBg: string, feedPulse: boolean;
+  if (feedState === 'error') {
+    feedLabel = 'API ERROR'; feedColor = '#e2685f'; feedBg = 'rgba(226,104,95,0.15)'; feedPulse = false;
+  } else if (feedState === 'stale') {
+    feedLabel = 'STALE'; feedColor = '#e0b53d'; feedBg = 'rgba(224,181,61,0.15)'; feedPulse = false;
+  } else {
+    feedLabel = `LIVE · ${ageSec}s AGO`; feedColor = ACCENT; feedBg = ACCENT_SOFT; feedPulse = true;
+  }
+
+  const leftWC  = wallConnectors.find(w => w.side === 'LEFT');
+  const rightWC = wallConnectors.find(w => w.side === 'RIGHT');
+  const totalAmps = (leftWC?.vitals?.currentA ?? 0) + (rightWC?.vitals?.currentA ?? 0);
+  const totalKw = kwFor(totalAmps).toFixed(1);
+  const solarPowerW = data?.site?.solarPowerW ?? 0;
+  const solarKw = (solarPowerW / 1000).toFixed(1);
+  const solarOn = solarPowerW > 100; // only show if meaningfully generating
+  const inUseCount = (leftWC?.vitals?.vehicleCharging ? 1 : 0) + (rightWC?.vitals?.vehicleCharging ? 1 : 0);
+  const vehiclesHome = vehicles.filter(v => v.connected && v.state?.online).length;
+
+  // Door
+  const garageDoorOpen = data?.garageDoorOpen ?? null;
+  const doorKey = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
+  const doorDm = {
+    open:    { label: 'OPEN',    icon: 'garage_door', color: '#e0b53d', bg: 'rgba(224,181,61,0.15)' },
+    closed:  { label: 'CLOSED',  icon: 'garage',      color: '#a4afba', bg: '#1b232b' },
+    unknown: { label: '—',       icon: 'garage',      color: '#7d8893', bg: '#1b232b' },
+  }[doorKey];
+
   const streamUrl = '';
 
   return (
-    <div className="dashboard">
-      {/* Header */}
-      <header className="header">
-        <div className="header-left">
-          <span className="site-name">Halton Place</span>
-          <span className="header-time mono">{dateStr} · {timeStr}</span>
-          {weather && (
-            <div className="weather-badge">
-              <span className="icon" style={{ fontSize: 14 }}>wb_sunny</span>
-              <span>{weather.temp}°F</span>
-              <span style={{ color: '#3d5566' }}>·</span>
-              <span style={{ textTransform: 'capitalize' }}>{weather.condition}</span>
-            </div>
-          )}
-        </div>
-        <div className="header-right">
-          <div className={`feed-status`}>
-            <div className={`feed-dot ${feedState}`} />
-            <span style={{ color: '#6b8599', fontSize: 12 }}>
-              {feedState === 'live' ? 'Live' : feedState === 'stale' ? 'Stale' : 'Error'}
-            </span>
-          </div>
-          <button
-            className={`icon-btn${data?.garageDoorOpen ? ' active' : ''}`}
-            onClick={() => setShowCamera(true)}
-            title="Garage / Camera"
-          >
-            <span className="icon" style={{ fontSize: 16 }}>garage</span>
-            <span style={{ fontSize: 12 }}>
-              {data?.garageDoorOpen === true ? 'Open' : data?.garageDoorOpen === false ? 'Closed' : 'Garage'}
-            </span>
-          </button>
-          <button className="icon-btn" onClick={() => setShowCamera(true)} title="Camera">
-            <span className="icon" style={{ fontSize: 16 }}>videocam</span>
-          </button>
-          <a href="/admin" className="icon-btn" title="Settings">
-            <span className="icon" style={{ fontSize: 16 }}>settings</span>
-          </a>
-        </div>
-      </header>
+    <div style={{ position: 'relative', width: 1180, height: 820, overflow: 'hidden', background: 'radial-gradient(1000px 600px at 78% -16%, #1a2530 0%, #0e1216 56%)', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif", padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 11 }}>
 
-      {/* Vehicles */}
-      <div className="vehicles-row">
-        {(data?.vehicles ?? [
-          { id: 'rivian', name: 'Midknight', model: 'Rivian R1S', chargerSide: 'LEFT', state: null, connected: false },
-          { id: 'tesla', name: 'Tesla', model: 'Model 3', chargerSide: 'RIGHT', state: null, connected: false },
-        ]).map(v => (
-          <VehicleCard
-            key={v.id}
-            vehicle={v}
-            accent={accent}
-            onCommand={(cmd, params) => sendCommand(cmd, params)}
-          />
-        ))}
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, flex: 'none' }}>
+        {/* Left: title */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: '0.24em', color: '#7d8893' }}>HOME · GARAGE</span>
+          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>Energy</h1>
+          <span style={{ fontSize: 12, color: '#a4afba' }}>{dateStr} · {timeStr}</span>
+        </div>
+        {/* Right: controls + stat chips */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            {weather && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#d3dae1' }}>
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: ACCENT }}>{owmIcon(weather.icon)}</span>
+                {weather.temp}°F · {weather.condition}
+              </span>
+            )}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: feedBg, color: feedColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: feedColor, animation: feedPulse ? 'evpulse 1.8s ease-in-out infinite' : 'none', flexShrink: 0 }} />
+              {feedLabel}
+            </span>
+            <button
+              onClick={async () => {
+                const command = garageDoorOpen ? 'close' : 'open';
+                await fetch('/api/myq/door', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
+                setTimeout(fetchData, 3000);
+              }}
+              title={garageDoorOpen ? 'Close garage' : 'Open garage'}
+              style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, background: doorDm.bg, color: doorDm.color, border: '1px solid rgba(255,255,255,0.06)', fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 15, lineHeight: 1 }}>{doorDm.icon}</span>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: doorDm.color, flexShrink: 0 }} />
+              GARAGE {doorDm.label}
+            </button>
+            <button onClick={() => setShowCamera(true)} title="Garage camera"
+              style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#d3dae1', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: 0 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>videocam</span>
+            </button>
+            <a href="/admin" title="Settings"
+              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#7d8893', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, textDecoration: 'none' }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>settings</span>
+            </a>
+          </div>
+          {/* Stat chips */}
+          <div style={{ display: 'flex', gap: 11 }}>
+            <StatChip label="DRAWING" value={totalKw} unit="kW" />
+            {solarOn && <StatChip label="SOLAR" value={solarKw} unit="kW" icon="solar_power" />}
+            <StatChip label="CHARGERS" value={String(inUseCount)} unit="/ 2 in use" />
+            <StatChip label="VEHICLES" value={String(vehiclesHome)} unit="home" />
+          </div>
+        </div>
       </div>
 
-      {/* Circuit Panel */}
-      <CircuitPanel
-        wallConnectors={data?.wallConnectors ?? [
-          { side: 'LEFT', vehicleName: 'Midknight', vitals: null },
-          { side: 'RIGHT', vehicleName: 'Tesla', vitals: null },
-        ]}
-        site={data?.site ?? null}
-      />
+      {/* ── Vehicle Cards ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, flex: 'none' }}>
+        {vehicles.map((v, idx) => {
+          const wc = wallConnectors.find(w => w.side === v.chargerSide);
+          return (
+            <VehicleCard key={v.id} v={v} idx={idx} wcPowerW={wc?.vitals?.powerW ?? 0}
+              accent={ACCENT} onCommand={(cmd, params) => sendCommand(cmd, params)} />
+          );
+        })}
+      </div>
 
-      {/* Camera Modal */}
+      {/* ── Circuit Panel ── */}
+      <CircuitPanel wallConnectors={wallConnectors} solarPowerW={solarPowerW} />
+
+      {/* ── Camera Modal ── */}
       {showCamera && (
         <CameraModal
           streamUrl={streamUrl}
-          garageDoorOpen={data?.garageDoorOpen ?? null}
+          garageDoorOpen={garageDoorOpen}
           onClose={() => setShowCamera(false)}
           onToggleGarage={async () => {
-            const command = data?.garageDoorOpen ? 'close' : 'open';
-            await fetch('/api/myq/door', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ command }),
-            });
+            const command = garageDoorOpen ? 'close' : 'open';
+            await fetch('/api/myq/door', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
             setTimeout(fetchData, 3000);
           }}
         />
