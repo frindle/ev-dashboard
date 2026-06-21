@@ -5,7 +5,6 @@ import {
   fetchVehicleState,
   fetchSiteLiveStatus,
   fetchWallConnectorVitals,
-  resolveWallConnectorId,
   TeslaVehicleState,
   TeslaSiteState,
   WallConnectorVitals,
@@ -94,15 +93,8 @@ export async function GET() {
   const rivianConnected = hasRivianTokens();
   const myqConnected = hasMyQTokens();
 
-  // Resolve wall connector serials → device UUIDs (cached after first lookup)
-  const leftWc  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT');
-  const rightWc = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT');
-  const [leftId, rightId] = teslaConnected
-    ? await Promise.all([
-        resolveWallConnectorId(leftWc?.serial  || leftWc?.deviceId  || '', cfg.energySite.id),
-        resolveWallConnectorId(rightWc?.serial || rightWc?.deviceId || '', cfg.energySite.id),
-      ])
-    : ['', ''];
+  const leftId  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.deviceId  ?? '';
+  const rightId = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.deviceId ?? '';
 
   // Fetch all data in parallel
   const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
