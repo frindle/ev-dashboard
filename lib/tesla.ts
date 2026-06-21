@@ -207,6 +207,26 @@ export async function fetchWallConnectorList(siteId: string): Promise<Array<{ se
   }));
 }
 
+// In-memory cache: serial number → device UUID. Lives for the container lifetime.
+const serialCache = new Map<string, string>();
+
+export async function resolveWallConnectorId(serialOrId: string, siteId: string): Promise<string> {
+  if (!serialOrId) return '';
+  // Already a UUID — use directly
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(serialOrId)) return serialOrId;
+  // Cache hit
+  const cached = serialCache.get(serialOrId);
+  if (cached) return cached;
+  // Populate cache from components API
+  try {
+    const list = await fetchWallConnectorList(siteId);
+    for (const wc of list) {
+      if (wc.serial) serialCache.set(wc.serial, wc.deviceId);
+    }
+  } catch { /* non-fatal — fall back to serial as-is */ }
+  return serialCache.get(serialOrId) ?? serialOrId;
+}
+
 export async function wakeVehicle(vin: string): Promise<boolean> {
   const res = await fleetPost<{ result?: boolean }>(`/api/1/vehicles/${vin}/wake_up`, {});
   return !!res;

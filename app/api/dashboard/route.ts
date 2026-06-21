@@ -5,6 +5,7 @@ import {
   fetchVehicleState,
   fetchSiteLiveStatus,
   fetchWallConnectorVitals,
+  resolveWallConnectorId,
   TeslaVehicleState,
   TeslaSiteState,
   WallConnectorVitals,
@@ -93,13 +94,23 @@ export async function GET() {
   const rivianConnected = hasRivianTokens();
   const myqConnected = hasMyQTokens();
 
+  // Resolve wall connector serials → device UUIDs (cached after first lookup)
+  const leftWc  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT');
+  const rightWc = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT');
+  const [leftId, rightId] = teslaConnected
+    ? await Promise.all([
+        resolveWallConnectorId(leftWc?.serial  || leftWc?.deviceId  || '', cfg.energySite.id),
+        resolveWallConnectorId(rightWc?.serial || rightWc?.deviceId || '', cfg.energySite.id),
+      ])
+    : ['', ''];
+
   // Fetch all data in parallel
   const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
     teslaConnected ? fetchVehicleState(cfg.vehicles.tesla.vin) : Promise.resolve(null),
     rivianConnected ? fetchRivianVehicleState() : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
-    teslaConnected ? fetchWallConnectorVitals(cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.deviceId ?? '') : Promise.resolve(null),
-    teslaConnected ? fetchWallConnectorVitals(cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.deviceId ?? '') : Promise.resolve(null),
+    teslaConnected && leftId  ? fetchWallConnectorVitals(leftId)  : Promise.resolve(null),
+    teslaConnected && rightId ? fetchWallConnectorVitals(rightId) : Promise.resolve(null),
     fetchWeather(cfg),
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);

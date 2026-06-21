@@ -2,7 +2,8 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
 export interface WallConnectorConfig {
-  deviceId: string;
+  serial: string;   // S/N from sticker — resolved to deviceId at runtime
+  deviceId: string; // UUID — legacy fallback if serial is empty
   side: 'LEFT' | 'RIGHT';
   vehicleName: string;
 }
@@ -72,8 +73,8 @@ const DEFAULT_CONFIG: AppConfig = {
   energySite: {
     id: '2252299088632281',
     wallConnectors: [
-      { deviceId: '9ded5c3b-f4ca-4061-b400-9e1591268156', side: 'LEFT', vehicleName: 'Midknight' },
-      { deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'RIGHT', vehicleName: 'Tesla' },
+      { serial: '', deviceId: '9ded5c3b-f4ca-4061-b400-9e1591268156', side: 'LEFT', vehicleName: 'Midknight' },
+      { serial: '', deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'RIGHT', vehicleName: 'Tesla' },
     ],
   },
   garage: {
