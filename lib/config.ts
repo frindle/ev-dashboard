@@ -73,8 +73,8 @@ const DEFAULT_CONFIG: AppConfig = {
   energySite: {
     id: '2252299088632281',
     wallConnectors: [
-      { serial: '', deviceId: '9ded5c3b-f4ca-4061-b400-9e1591268156', side: 'LEFT', vehicleName: 'Midknight' },
-      { serial: '', deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'RIGHT', vehicleName: 'Tesla' },
+      { serial: 'B7S23088J08030', deviceId: '9ded5c3b-f4ca-4061-b400-9e1591268156', side: 'LEFT', vehicleName: 'Midknight' },
+      { serial: 'E4A23172000137', deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'RIGHT', vehicleName: 'Tesla' },
     ],
   },
   garage: {
