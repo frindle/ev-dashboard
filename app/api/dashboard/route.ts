@@ -1,4 +1,4 @@
-import { writeFileSync } from 'fs';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { readConfig, readTokens } from '@/lib/config';
 import {
@@ -35,6 +35,7 @@ export interface DashboardData {
   site: TeslaSiteState | null;
   weather: WeatherData | null;
   garageDoorOpen: boolean | null;
+  streamUrl: string;
   lastUpdated: string;
   teslaConnected: boolean;
   rivianConnected: boolean;
@@ -77,7 +78,7 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
     return {
       temp: Math.round(data.main.temp),
       feelsLike: Math.round(data.main.feels_like),
-      condition: data.weather[0]?.description ?? '',
+      condition: (data.weather[0]?.description ?? '').replace(/^\w/, c => c.toUpperCase()),
       icon: data.weather[0]?.icon ?? '',
       humidity: data.main.humidity,
     };
@@ -145,6 +146,7 @@ export async function GET() {
     site: siteState,
     weather,
     garageDoorOpen: doorState === 'open' ? true : doorState === 'closed' ? false : null,
+    streamUrl: cfg.camera.streamUrl,
     lastUpdated: new Date().toISOString(),
     teslaConnected,
     rivianConnected,
@@ -153,7 +155,7 @@ export async function GET() {
   // Persist to disk so the client can show last-known state on restart
   try {
     const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
-    writeFileSync(join(dir, 'last-status.json'), JSON.stringify(data));
+    await writeFile(join(dir, 'last-status.json'), JSON.stringify(data));
   } catch { /* non-fatal */ }
 
   return Response.json(data);

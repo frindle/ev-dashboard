@@ -55,7 +55,7 @@ async function getAccessToken(): Promise<string | null> {
 
 async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
   const clientId = process.env.TESLA_CLIENT_ID;
-  if (!clientId) return tokens.access_token; // fallback
+  if (!clientId) return null;
 
   try {
     const res = await fetch(TOKEN_URL, {
@@ -67,12 +67,12 @@ async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
         refresh_token: tokens.refresh_token,
       }),
     });
-    if (!res.ok) return tokens.access_token;
+    if (!res.ok) return null;
     const fresh = await res.json() as TeslaTokens;
     writeTokens(fresh);
     return fresh.access_token;
   } catch {
-    return tokens.access_token;
+    return null;
   }
 }
 

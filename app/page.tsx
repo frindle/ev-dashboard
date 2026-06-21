@@ -14,7 +14,8 @@ function kwFor(amps: number) { return amps * VOLTS / 1000; }
 
 function fmtEta(min: number): string {
   if (min <= 0) return 'AT TARGET';
-  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  const total = Math.round(min);
+  const h = Math.floor(total / 60), m = total % 60;
   return (h > 0 ? h + 'h ' : '') + m + 'm TO TARGET';
 }
 
@@ -211,7 +212,7 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
           </span>
         </div>
         <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 8.5, letterSpacing: '0.14em', color: '#5e6873', textAlign: sourceAlign as React.CSSProperties['textAlign'] }}>
-          {limitNote} · DRAG DIAL · SOURCE {apiLabel}
+          {limitNote}{canStartStop ? ' · DRAG DIAL' : ''} · SOURCE {apiLabel}
         </span>
       </div>
     </div>
@@ -407,16 +408,10 @@ export default function Dashboard() {
   const [feedState, setFeedState] = useState<'live' | 'stale' | 'error'>('stale');
   const [showCamera, setShowCamera] = useState(false);
   const [time, setTime] = useState(new Date());
-  const [ageSec, setAgeSec] = useState(0);
   const [commandPending, setCommandPending] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    const t = setInterval(() => setAgeSec(a => (a + 1) % 60), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -426,7 +421,6 @@ export default function Dashboard() {
       if (!res.ok) { setFeedState('error'); return; }
       const json = await res.json() as DashboardData;
       setData(json);
-      setAgeSec(0);
       setFeedState(Date.now() - new Date(json.lastUpdated).getTime() < 60000 ? 'live' : 'stale');
     } catch {
       setFeedState('error');
@@ -482,6 +476,8 @@ export default function Dashboard() {
   const dateStr = time.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
   const timeStr = time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
+  const ageSec = data ? Math.max(0, Math.floor((time.getTime() - new Date(data.lastUpdated).getTime()) / 1000)) : 0;
+
   let feedLabel: string, feedColor: string, feedBg: string, feedPulse: boolean;
   if (feedState === 'error') {
     feedLabel = 'API ERROR'; feedColor = '#e2685f'; feedBg = 'rgba(226,104,95,0.15)'; feedPulse = false;
@@ -510,7 +506,7 @@ export default function Dashboard() {
     unknown: { label: '—',       icon: 'garage',      color: '#7d8893', bg: '#1b232b' },
   }[doorKey];
 
-  const streamUrl = '';
+  const streamUrl = data?.streamUrl ?? '';
 
   return (
     <div style={{ position: 'relative', width: 1180, height: 820, overflow: 'hidden', background: 'radial-gradient(1000px 600px at 78% -16%, #1a2530 0%, #0e1216 56%)', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif", padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 11 }}>
