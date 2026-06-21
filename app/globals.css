@@ -694,7 +694,8 @@ html, body {
 }
 .form-input:focus { border-color: var(--accent); }
 .form-input::placeholder { color: var(--text-muted); }
-input[type="password"].form-input { font-family: 'Space Grotesk', sans-serif; }
+input[type="password"].form-input,
+input[type="email"].form-input { font-family: 'Space Grotesk', sans-serif; }
 
 .form-select {
   background: var(--surface2);

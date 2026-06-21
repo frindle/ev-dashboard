@@ -263,7 +263,14 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
 
     const vs = data.vehicleState;
     const chargingStateRaw = vs.chargerState?.value ?? 'disconnected';
-    const isCharging = chargingStateRaw.includes('charging');
+
+    // Only treat as charging when the contactor is actually closed and power is flowing
+    const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active']);
+    const isCharging = CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase());
+
+    // Only show climate as on for explicitly active states; 'system_idle', 'not_available', etc. → off
+    const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
+    const climateVal = (vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
 
     return {
       chargePercent: vs.batteryLevel?.value ?? 0,
@@ -271,9 +278,10 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       isCharging,
       chargingState: chargingStateRaw,
       isLocked: vs.doorFrontLeftLocked?.value === 'locked',
-      climateOn: (vs.cabinPreconditioningStatus?.value ?? 'system_idle') !== 'system_idle',
+      climateOn: CLIMATE_ACTIVE.has(climateVal),
       rangeMi: vs.distanceToEmpty?.value ?? 0,
-      odometer: vs.vehicleMileage?.value ?? 0,
+      // vehicleMileage is returned in meters; convert to miles
+      odometer: Math.round((vs.vehicleMileage?.value ?? 0) / 1609.344),
       minutesToFull: vs.timeToEndOfCharge?.value ?? 0,
       chargeRateMph: 0,
       addedRangeMi: 0,
