@@ -105,8 +105,15 @@ export function readConfig(): AppConfig {
   if (!existsSync(path)) return DEFAULT_CONFIG;
   try {
     const raw = JSON.parse(readFileSync(path, 'utf-8')) as Partial<AppConfig>;
-    // Deep merge with defaults so new fields appear automatically
-    return deepMerge(DEFAULT_CONFIG, raw) as AppConfig;
+    const merged = deepMerge(DEFAULT_CONFIG, raw) as AppConfig;
+    // deepMerge replaces arrays wholesale, so new fields on WC objects (like
+    // serial) don't get seeded from defaults. Back-fill by matching on deviceId.
+    merged.energySite.wallConnectors = merged.energySite.wallConnectors.map(wc => {
+      if (wc.serial) return wc;
+      const def = DEFAULT_CONFIG.energySite.wallConnectors.find(d => d.deviceId === wc.deviceId);
+      return def?.serial ? { ...wc, serial: def.serial } : wc;
+    });
+    return merged;
   } catch {
     return DEFAULT_CONFIG;
   }
