@@ -162,9 +162,9 @@ function VehicleCard({ vehicle: v, accent, onCommand }: VehicleCardProps) {
   const badgeText = chargeBadgeText(v);
 
   const isTesla = v.id === 'tesla';
-  const rangeKm = s ? Math.round(s.rangeKm) : 0;
-  const addedKm = s ? Math.round(s.addedRangeKm) : 0;
-  const chargeRate = s ? Math.round(s.chargeRateMph * 1.60934) : 0;
+  const rangeMi = s ? Math.round(s.rangeMi) : 0;
+  const addedMi = s ? Math.round(s.addedRangeMi) : 0;
+  const chargeRate = s ? Math.round(s.chargeRateMph) : 0;
   const odo = s ? Math.round(s.odometer) : 0;
 
   function handleSetLimit(limit: number) {
@@ -234,23 +234,23 @@ function VehicleCard({ vehicle: v, accent, onCommand }: VehicleCardProps) {
       <div className="stats-grid">
         <div className="stat-cell">
           <div className="stat-label">Range</div>
-          <div className={`stat-value${s ? '' : ' dim'}`}>{s ? `${rangeKm} km` : '—'}</div>
+          <div className={`stat-value${s ? '' : ' dim'}`}>{s ? `${rangeMi} mi` : '—'}</div>
         </div>
         <div className="stat-cell">
           <div className="stat-label">Added</div>
-          <div className={`stat-value${s && addedKm > 0 ? ' accent' : ' dim'}`}>
-            {s && addedKm > 0 ? `+${addedKm} km` : '—'}
+          <div className={`stat-value${s && addedMi > 0 ? ' accent' : ' dim'}`}>
+            {s && addedMi > 0 ? `+${addedMi} mi` : '—'}
           </div>
         </div>
         <div className="stat-cell">
           <div className="stat-label">Charge Rate</div>
           <div className={`stat-value${s && chargeRate > 0 ? '' : ' dim'}`}>
-            {s && chargeRate > 0 ? `${chargeRate} km/h` : '—'}
+            {s && chargeRate > 0 ? `${chargeRate} mph` : '—'}
           </div>
         </div>
         <div className="stat-cell">
           <div className="stat-label">Odometer</div>
-          <div className={`stat-value dim`}>{s ? `${odo.toLocaleString()} km` : '—'}</div>
+          <div className={`stat-value dim`}>{s ? `${odo.toLocaleString()} mi` : '—'}</div>
         </div>
       </div>
 

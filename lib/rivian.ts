@@ -27,10 +27,10 @@ export interface RivianVehicleState {
   chargingState: string;      // chargerState.value raw string
   isLocked: boolean;
   climateOn: boolean;
-  rangeKm: number;            // distanceToEmpty.value converted to km
-  odometer: number;           // vehicleMileage.value converted to km
+  rangeMi: number;            // distanceToEmpty.value (miles)
+  odometer: number;           // vehicleMileage.value (miles)
   chargeRateMph: number;      // not reported by Rivian API — always 0
-  addedRangeKm: number;       // not reported by Rivian API — always 0
+  addedRangeMi: number;       // not reported by Rivian API — always 0
   minutesToFull: number;      // timeToEndOfCharge.value
   online: boolean;
 }
@@ -272,13 +272,11 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       chargingState: chargingStateRaw,
       isLocked: vs.doorFrontLeftLocked?.value === 'locked',
       climateOn: (vs.cabinPreconditioningStatus?.value ?? 'system_idle') !== 'system_idle',
-      // distanceToEmpty is in miles — convert to km
-      rangeKm: (vs.distanceToEmpty?.value ?? 0) * 1.60934,
-      // vehicleMileage is in miles — convert to km
-      odometer: (vs.vehicleMileage?.value ?? 0) * 1.60934,
+      rangeMi: vs.distanceToEmpty?.value ?? 0,
+      odometer: vs.vehicleMileage?.value ?? 0,
       minutesToFull: vs.timeToEndOfCharge?.value ?? 0,
       chargeRateMph: 0,
-      addedRangeKm: 0,
+      addedRangeMi: 0,
       online: vs.cloudConnection?.isOnline ?? true,
     };
   } catch {

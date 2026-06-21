@@ -683,8 +683,9 @@ html, body {
   transition: border-color 0.15s;
   width: 100%;
   min-width: 0;
-  overflow: hidden;
-  position: relative;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
 }
 .form-input:focus { border-color: var(--accent); }
 .form-input::placeholder { color: var(--text-muted); }

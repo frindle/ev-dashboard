@@ -10,10 +10,10 @@ export interface TeslaVehicleState {
   chargingState: string;
   isLocked: boolean;
   climateOn: boolean;
-  rangeKm: number;
+  rangeMi: number;
   odometer: number;
   chargeRateMph: number;
-  addedRangeKm: number;
+  addedRangeMi: number;
   minutesToFull: number;
   chargerActualCurrentA: number;
   chargerVoltage: number;
@@ -142,10 +142,10 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     chargingState: cs.charging_state ?? 'Unknown',
     isLocked: vs.locked ?? true,
     climateOn: cls.is_climate_on ?? false,
-    rangeKm: (cs.battery_range ?? 0) * 1.60934,
-    odometer: (vs.odometer ?? 0) * 1.60934,
+    rangeMi: cs.battery_range ?? 0,
+    odometer: vs.odometer ?? 0,
     chargeRateMph: cs.charge_rate ?? 0,
-    addedRangeKm: (cs.charge_miles_added_rated ?? 0) * 1.60934,
+    addedRangeMi: cs.charge_miles_added_rated ?? 0,
     minutesToFull: cs.minutes_to_full_charge ?? 0,
     chargerActualCurrentA: cs.charger_actual_current ?? 0,
     chargerVoltage: cs.charger_voltage ?? 0,
