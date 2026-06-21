@@ -285,7 +285,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       minutesToFull: vs.timeToEndOfCharge?.value ?? 0,
       chargeRateMph: 0,
       addedRangeMi: 0,
-      online: vs.cloudConnection?.isOnline ?? true,
+      online: vs.cloudConnection?.isOnline ?? false,
     };
   } catch {
     return null;

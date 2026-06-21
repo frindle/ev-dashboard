@@ -225,6 +225,7 @@ export async function myqLogin(email: string, password: string): Promise<void> {
   interface AccountsResp { accounts: Array<{ id: string }> }
   const accountData = await accountRes.json() as AccountsResp;
   const accountId = accountData.accounts[0]?.id ?? '';
+  if (!accountId) throw new Error('MyQ auth succeeded but no account ID returned');
 
   writeMyQTokens({
     access_token: tokenData.access_token,
