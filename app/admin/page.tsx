@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AppConfig } from '@/lib/config';
 
 const TESLA_CLIENT_ID = 'b4a07679-8597-452d-a7c0-8a6a6b632c42';
@@ -31,6 +31,9 @@ export default function AdminPage() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [teslaConnected, setTeslaConnected] = useState(false);
   const [rivianConnected, setRivianConnected] = useState(false);
+  const [myqConnected, setMyqConnected] = useState(false);
+  const [myqLoading, setMyqLoading] = useState(false);
+  const [myqError, setMyqError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -42,6 +45,8 @@ export default function AdminPage() {
   const [rivianStep, setRivianStep] = useState<RivianAuthStep>('idle');
   const [rivianLoading, setRivianLoading] = useState(false);
   const [rivianError, setRivianError] = useState('');
+  const rivianOtpRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (rivianStep === 'otp_required') rivianOtpRef.current?.focus(); }, [rivianStep]);
 
   // globals.css sets overflow:hidden + height:100% on html/body for the dashboard
   // clear both so the admin page can scroll normally
@@ -61,10 +66,11 @@ export default function AdminPage() {
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
-      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean }) => {
+      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean; myqConnected: boolean }) => {
         setConfig(d.config);
         setTeslaConnected(d.teslaConnected);
         setRivianConnected(d.rivianConnected);
+        setMyqConnected(d.myqConnected);
         setRivianEmail(d.config.vehicles.rivian.email);
       });
   }, []);
@@ -166,6 +172,29 @@ export default function AdminPage() {
       setRivianError(String(e));
     } finally {
       setRivianLoading(false);
+    }
+  }
+
+  async function connectMyQ() {
+    if (!config?.garage.email || !config.garage.password) return;
+    setMyqLoading(true);
+    setMyqError('');
+    try {
+      const res = await fetch('/api/myq/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: config.garage.email, password: config.garage.password }),
+      });
+      const data = await res.json() as { connected?: boolean; error?: string };
+      if (!res.ok || data.error) {
+        setMyqError(data.error ?? 'Login failed');
+      } else {
+        setMyqConnected(true);
+      }
+    } catch (e) {
+      setMyqError(String(e));
+    } finally {
+      setMyqLoading(false);
     }
   }
 
@@ -431,12 +460,12 @@ export default function AdminPage() {
                 <div className="form-row" style={{ flex: 1 }}>
                   <label className="form-label">Verification Code</label>
                   <input
+                    ref={rivianOtpRef}
                     className="form-input"
                     value={rivianOtpCode}
                     onChange={e => setRivianOtpCode(e.target.value)}
                     placeholder="123456"
                     maxLength={8}
-                    autoFocus
                     onKeyDown={e => e.key === 'Enter' && submitOtp()}
                     disabled={rivianLoading}
                   />
@@ -472,9 +501,10 @@ export default function AdminPage() {
       <div className="admin-section">
         <div className="admin-section-header">
           <div className="admin-section-title">
-            <div className={`status-dot ${config.garage.email ? 'partial' : 'disconnected'}`} />
+            <div className={`status-dot ${myqConnected ? 'connected' : 'disconnected'}`} />
             MyQ Garage Door
           </div>
+          {myqConnected && <span style={{ fontSize: 12, color: '#34e07a' }}>✓ Connected</span>}
         </div>
         <div className="admin-section-body">
           <div className="form-row-2">
@@ -507,7 +537,21 @@ export default function AdminPage() {
               onChange={e => update('garage', { deviceSerial: e.target.value })}
               placeholder="CG0DD..."
             />
-            <span className="form-hint">Find in MyQ app → Device Info</span>
+            <span className="form-hint">Find in MyQ app → Device Info. Save config first, then connect.</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              className="btn-primary"
+              onClick={connectMyQ}
+              disabled={myqLoading || !config.garage.email || !config.garage.password}
+            >
+              <span className="icon" style={{ fontSize: 16 }}>{myqLoading ? 'sync' : 'garage'}</span>
+              {myqLoading ? 'Connecting…' : myqConnected ? 'Re-connect MyQ' : 'Connect MyQ'}
+            </button>
+            {myqError && <span style={{ fontSize: 12, color: '#e05555' }}>{myqError}</span>}
+          </div>
+          <div className="form-hint">
+            Uses the MyQ Android app API. Credentials are not saved — only OAuth tokens are stored in the keys/ volume.
           </div>
         </div>
       </div>
