@@ -43,13 +43,18 @@ export default function AdminPage() {
   const [rivianLoading, setRivianLoading] = useState(false);
   const [rivianError, setRivianError] = useState('');
 
-  // Fix scroll for admin page — dashboard has overflow:hidden globally
+  // globals.css sets overflow:hidden + height:100% on html/body for the dashboard
+  // clear both so the admin page can scroll normally
   useEffect(() => {
     document.documentElement.style.overflow = 'auto';
+    document.documentElement.style.height = 'auto';
     document.body.style.overflow = 'auto';
+    document.body.style.height = 'auto';
     return () => {
       document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
       document.body.style.overflow = '';
+      document.body.style.height = '';
     };
   }, []);
 
