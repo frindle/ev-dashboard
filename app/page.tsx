@@ -433,6 +433,20 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Load last-known state from disk cache immediately so the dashboard isn't
+  // blank while waiting for the first live poll after a container restart
+  useEffect(() => {
+    fetch('/api/dashboard/cached', { cache: 'no-store' })
+      .then(r => r.status === 204 ? null : r.json())
+      .then((cached: DashboardData | null) => {
+        if (cached) {
+          setData(cached);
+          setFeedState('stale');
+        }
+      })
+      .catch(() => null);
+  }, []);
+
   useEffect(() => {
     fetchData();
     const t = setInterval(fetchData, REFRESH_MS);
