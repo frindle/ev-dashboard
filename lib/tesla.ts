@@ -198,9 +198,11 @@ export async function fetchWallConnectorVitals(deviceId: string): Promise<WallCo
 }
 
 export async function fetchWallConnectorList(siteId: string): Promise<Array<{ serial: string; deviceId: string }>> {
-  interface WCComponent { device_id: string; serial_number?: string; din?: string; }
-  interface Components { wall_connectors?: WCComponent[]; }
+  interface WCComponent { device_id: string; serial_number?: string; din?: string; [k: string]: unknown; }
+  interface Components { wall_connectors?: WCComponent[]; [k: string]: unknown; }
   const data = await fleetGet<Components>(`/api/1/energy_sites/${siteId}/components`);
+  console.log('[wall-connectors] raw components keys:', data ? Object.keys(data) : null);
+  console.log('[wall-connectors] raw wall_connectors:', JSON.stringify(data?.wall_connectors));
   return (data?.wall_connectors ?? []).map(w => ({
     deviceId: w.device_id,
     serial: w.serial_number ?? w.din ?? '',
