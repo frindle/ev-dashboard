@@ -36,6 +36,8 @@ export default function AdminPage() {
   const [myqError, setMyqError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [wcList, setWcList] = useState<Array<{ serial: string; deviceId: string }>>([]);
+  const [wcLoading, setWcLoading] = useState(false);
 
   // Rivian auth flow state
   const [rivianEmail, setRivianEmail] = useState('');
@@ -80,6 +82,17 @@ export default function AdminPage() {
       if (!prev) return prev;
       return { ...prev, [section]: { ...(prev[section] as object), ...patch } } as AppConfig;
     });
+  }
+
+  async function fetchWallConnectors() {
+    setWcLoading(true);
+    try {
+      const res = await fetch('/api/tesla/wall-connectors');
+      const list = await res.json() as Array<{ serial: string; deviceId: string }>;
+      setWcList(list);
+    } finally {
+      setWcLoading(false);
+    }
   }
 
   async function save() {
@@ -335,7 +348,38 @@ export default function AdminPage() {
           </div>
 
           <div className="form-row">
-            <label className="form-label">Wall Connector Device IDs</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <label className="form-label" style={{ marginBottom: 0 }}>Wall Connector Device IDs</label>
+              <button
+                className="btn-secondary"
+                onClick={fetchWallConnectors}
+                disabled={wcLoading || !teslaConnected}
+                style={{ padding: '5px 12px', fontSize: 12 }}
+              >
+                <span className="icon" style={{ fontSize: 14 }}>{wcLoading ? 'sync' : 'search'}</span>
+                {wcLoading ? 'Fetching…' : 'Fetch from Tesla'}
+              </button>
+            </div>
+            {wcList.length > 0 && (
+              <div style={{ background: '#0e1216', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span className="form-hint" style={{ marginBottom: 4 }}>Found {wcList.length} wall connector{wcList.length !== 1 ? 's' : ''} — click to assign to a side:</span>
+                {wcList.map((wc, i) => (
+                  <div key={wc.deviceId} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: '#a4afba', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {wc.serial ? `S/N ${wc.serial}` : `Connector ${i + 1}`} · {wc.deviceId}
+                    </span>
+                    <button className="btn-secondary" style={{ padding: '3px 10px', fontSize: 11 }} onClick={() => {
+                      const wcs = config.energySite.wallConnectors.map(w => w.side === 'LEFT' ? { ...w, deviceId: wc.deviceId } : w);
+                      update('energySite', { ...config.energySite, wallConnectors: wcs });
+                    }}>← LEFT</button>
+                    <button className="btn-secondary" style={{ padding: '3px 10px', fontSize: 11 }} onClick={() => {
+                      const wcs = config.energySite.wallConnectors.map(w => w.side === 'RIGHT' ? { ...w, deviceId: wc.deviceId } : w);
+                      update('energySite', { ...config.energySite, wallConnectors: wcs });
+                    }}>RIGHT →</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="form-row-2">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <span className="form-hint">LEFT connector</span>
@@ -366,6 +410,7 @@ export default function AdminPage() {
                 />
               </div>
             </div>
+            <span className="form-hint">Device IDs are UUIDs, not the serial number on the sticker. Use &quot;Fetch from Tesla&quot; to auto-discover them.</span>
           </div>
         </div>
       </div>

@@ -197,6 +197,16 @@ export async function fetchWallConnectorVitals(deviceId: string): Promise<WallCo
   };
 }
 
+export async function fetchWallConnectorList(siteId: string): Promise<Array<{ serial: string; deviceId: string }>> {
+  interface WCComponent { device_id: string; serial_number?: string; din?: string; }
+  interface Components { wall_connectors?: WCComponent[]; }
+  const data = await fleetGet<Components>(`/api/1/energy_sites/${siteId}/components`);
+  return (data?.wall_connectors ?? []).map(w => ({
+    deviceId: w.device_id,
+    serial: w.serial_number ?? w.din ?? '',
+  }));
+}
+
 export async function wakeVehicle(vin: string): Promise<boolean> {
   const res = await fleetPost<{ result?: boolean }>(`/api/1/vehicles/${vin}/wake_up`, {});
   return !!res;
