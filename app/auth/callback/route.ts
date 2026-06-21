@@ -23,7 +23,9 @@ export async function GET(req: NextRequest) {
       client_id: process.env.TESLA_CLIENT_ID,
       client_secret: process.env.TESLA_CLIENT_SECRET,
       code,
-      redirect_uri: process.env.TESLA_REDIRECT_URI,
+      // Must exactly match the redirect_uri used in the authorization request.
+      // Derive from the incoming request URL so it always matches regardless of env config.
+      redirect_uri: `${req.nextUrl.origin}/auth/callback`,
     }),
   });
 
