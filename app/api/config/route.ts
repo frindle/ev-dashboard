@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { readConfig, writeConfig, AppConfig } from '@/lib/config';
 import { hasTokens } from '@/lib/tesla';
 import { hasRivianTokens } from '@/lib/rivian';
+import { hasMyQTokens } from '@/lib/myq';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,7 @@ export async function GET() {
     config: cfg,
     teslaConnected: hasTokens(),
     rivianConnected: hasRivianTokens(),
+    myqConnected: hasMyQTokens(),
   });
 }
 

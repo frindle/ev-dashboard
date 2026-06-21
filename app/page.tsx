@@ -464,7 +464,7 @@ export default function Dashboard() {
           {weather && (
             <div className="weather-badge">
               <span className="icon" style={{ fontSize: 14 }}>wb_sunny</span>
-              <span>{weather.temp}°C</span>
+              <span>{weather.temp}°F</span>
               <span style={{ color: '#3d5566' }}>·</span>
               <span style={{ textTransform: 'capitalize' }}>{weather.condition}</span>
             </div>
@@ -526,7 +526,15 @@ export default function Dashboard() {
           streamUrl={streamUrl}
           garageDoorOpen={data?.garageDoorOpen ?? null}
           onClose={() => setShowCamera(false)}
-          onToggleGarage={() => { /* MyQ integration TBD */ }}
+          onToggleGarage={async () => {
+            const command = data?.garageDoorOpen ? 'close' : 'open';
+            await fetch('/api/myq/door', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ command }),
+            });
+            setTimeout(fetchData, 3000);
+          }}
         />
       )}
     </div>

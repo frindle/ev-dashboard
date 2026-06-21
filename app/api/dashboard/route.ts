@@ -8,6 +8,7 @@ import {
   WallConnectorVitals,
 } from '@/lib/tesla';
 import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/lib/rivian';
+import { getDoorState, hasMyQTokens } from '@/lib/myq';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,9 +53,9 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
   try {
     let url: string;
     if (lat !== null && lon !== null) {
-      url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric`;
+      url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=imperial`;
     } else if (location) {
-      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(location)}&appid=${apiKey}&units=metric`;
+      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(location)}&appid=${apiKey}&units=imperial`;
     } else {
       return null;
     }
@@ -83,15 +84,17 @@ export async function GET() {
   const cfg = readConfig();
   const teslaConnected = readTokens() !== null;
   const rivianConnected = hasRivianTokens();
+  const myqConnected = hasMyQTokens();
 
   // Fetch all data in parallel
-  const [teslaState, rivianState, siteState, wcLeft, wcRight, weather] = await Promise.all([
+  const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
     teslaConnected ? fetchVehicleState(cfg.vehicles.tesla.vin) : Promise.resolve(null),
     rivianConnected ? fetchRivianVehicleState() : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
     teslaConnected ? fetchWallConnectorVitals(cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.deviceId ?? '') : Promise.resolve(null),
     teslaConnected ? fetchWallConnectorVitals(cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.deviceId ?? '') : Promise.resolve(null),
     fetchWeather(cfg),
+    myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
 
   const vehicles: VehicleData[] = [
@@ -131,7 +134,7 @@ export async function GET() {
     wallConnectors,
     site: siteState,
     weather,
-    garageDoorOpen: null, // MyQ not yet integrated
+    garageDoorOpen: doorState === 'open' ? true : doorState === 'closed' ? false : null,
     lastUpdated: new Date().toISOString(),
     teslaConnected,
     rivianConnected,
