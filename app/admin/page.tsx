@@ -37,6 +37,8 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [wcDiscovered, setWcDiscovered] = useState<Array<{ serial: string; deviceId: string }>>([]);
+  const [wcLoading, setWcLoading] = useState(false);
+  const [wcError, setWcError] = useState('');
 
   // Rivian auth flow state
   const [rivianEmail, setRivianEmail] = useState('');
@@ -73,12 +75,7 @@ export default function AdminPage() {
         setRivianConnected(d.rivianConnected);
         setMyqConnected(d.myqConnected);
         setRivianEmail(d.config.vehicles.rivian.email);
-        if (d.teslaConnected) {
-          fetch('/api/tesla/wall-connectors')
-            .then(r => r.json())
-            .then((list: Array<{ serial: string; deviceId: string }>) => setWcDiscovered(list))
-            .catch(() => null);
-        }
+        if (d.teslaConnected) fetchWallConnectors();
       });
   }, []);
 
@@ -87,6 +84,24 @@ export default function AdminPage() {
       if (!prev) return prev;
       return { ...prev, [section]: { ...(prev[section] as object), ...patch } } as AppConfig;
     });
+  }
+
+  async function fetchWallConnectors() {
+    setWcLoading(true);
+    setWcError('');
+    try {
+      const res = await fetch('/api/tesla/wall-connectors');
+      const body = await res.json() as Array<{ serial: string; deviceId: string }> | { error: string };
+      if (!res.ok || 'error' in body) {
+        setWcError(('error' in body ? body.error : null) ?? `HTTP ${res.status}`);
+        return;
+      }
+      setWcDiscovered(body as Array<{ serial: string; deviceId: string }>);
+    } catch (e) {
+      setWcError(String(e));
+    } finally {
+      setWcLoading(false);
+    }
   }
 
   async function save() {
@@ -379,11 +394,22 @@ export default function AdminPage() {
                 );
               })}
             </div>
-            <span className="form-hint">
-              {wcDiscovered.length > 0
-                ? `${wcDiscovered.length} wall connector${wcDiscovered.length !== 1 ? 's' : ''} discovered from Tesla API.`
-                : teslaConnected ? 'Fetching from Tesla…' : 'Connect Tesla to discover wall connectors.'}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="form-hint">
+                {wcLoading ? 'Fetching from Tesla…'
+                  : wcError ? `Error: ${wcError}`
+                  : wcDiscovered.length > 0 ? `${wcDiscovered.length} wall connector${wcDiscovered.length !== 1 ? 's' : ''} discovered from Tesla API.`
+                  : teslaConnected ? 'No wall connectors found — check energy site ID.'
+                  : 'Connect Tesla to discover wall connectors.'}
+              </span>
+              {teslaConnected && (
+                <button className="btn-secondary" onClick={fetchWallConnectors} disabled={wcLoading}
+                  style={{ padding: '3px 10px', fontSize: 11, flex: 'none' }}>
+                  <span className="icon" style={{ fontSize: 13 }}>{wcLoading ? 'sync' : 'refresh'}</span>
+                  Refresh
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
