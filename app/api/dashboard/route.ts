@@ -1,3 +1,5 @@
+import { writeFileSync } from 'fs';
+import { join } from 'path';
 import { readConfig, readTokens } from '@/lib/config';
 import {
   fetchVehicleState,
@@ -61,7 +63,11 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
     }
 
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`[weather] OWM returned ${res.status}: ${body}`);
+      return null;
+    }
 
     interface OWMResponse {
       main: { temp: number; feels_like: number; humidity: number };
@@ -75,7 +81,8 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
       icon: data.weather[0]?.icon ?? '',
       humidity: data.main.humidity,
     };
-  } catch {
+  } catch (e) {
+    console.error('[weather] fetch error:', e);
     return null;
   }
 }
@@ -139,6 +146,12 @@ export async function GET() {
     teslaConnected,
     rivianConnected,
   };
+
+  // Persist to disk so the client can show last-known state on restart
+  try {
+    const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+    writeFileSync(join(dir, 'last-status.json'), JSON.stringify(data));
+  } catch { /* non-fatal */ }
 
   return Response.json(data);
 }
