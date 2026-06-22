@@ -144,7 +144,7 @@ export async function GET() {
       chargerSide: cfg.vehicles.tesla.chargerSide,
       state: teslaState,
       connected: teslaConnected,
-      atHome: null, // Tesla GPS not in current state query
+      atHome: computeAtHome(teslaState?.lat, teslaState?.lon),
     },
   ];
 
