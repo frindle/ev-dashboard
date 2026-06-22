@@ -34,6 +34,7 @@ export interface DashboardData {
   wallConnectors: WallConnectorData[];
   site: TeslaSiteState | null;
   weather: WeatherData | null;
+  garageConnected: boolean;
   garageDoorOpen: boolean | null;
   streamUrl: string;
   lastUpdated: string;
@@ -145,6 +146,7 @@ export async function GET() {
     wallConnectors,
     site: siteState,
     weather,
+    garageConnected: myqConnected,
     garageDoorOpen: doorState === 'open' ? true : doorState === 'closed' ? false : null,
     streamUrl: cfg.camera.streamUrl,
     lastUpdated: new Date().toISOString(),
