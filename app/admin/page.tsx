@@ -14,6 +14,10 @@ function teslaAuthUrl(redirectUri: string): string {
     redirect_uri: redirectUri,
     scope: TESLA_SCOPES,
     state: 'dashboard',
+    // Force Tesla to re-show the consent screen on every re-auth, so new
+    // scopes added to TESLA_SCOPES actually get granted instead of being
+    // silently dropped when an existing session is reused.
+    prompt: 'login consent',
   });
   return `${TESLA_AUTH_BASE}?${params}`;
 }
