@@ -417,9 +417,9 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, []);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (fresh = false) => {
     try {
-      const res = await fetch('/api/dashboard', { cache: 'no-store' });
+      const res = await fetch(`/api/dashboard${fresh ? '?fresh=1' : ''}`, { cache: 'no-store' });
       if (!res.ok) { setFeedState('error'); return; }
       const json = await res.json() as DashboardData;
       setData(json);
@@ -458,7 +458,7 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: cmd, params }),
       });
-      setTimeout(fetchData, 2000);
+      setTimeout(() => fetchData(true), 2000);
     } finally {
       setCommandPending(false);
     }
