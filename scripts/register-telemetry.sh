@@ -47,7 +47,6 @@ PAYLOAD=$(jq -n \
       client_cert: $client_cert,
       fields: {
         Soc:                 { interval_seconds: 60 },
-        Location:            { interval_seconds: 60 },
         ChargeLimitSoc:      { interval_seconds: 300 },
         DetailedChargeState: { interval_seconds: 30 },
         TimeToFullCharge:    { interval_seconds: 60 },
