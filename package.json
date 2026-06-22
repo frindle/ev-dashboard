@@ -9,13 +9,16 @@
   },
   "dependencies": {
     "next": "15.3.3",
+    "protobufjs": "^7.4.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.5.13",
     "typescript": "^5"
   }
 }

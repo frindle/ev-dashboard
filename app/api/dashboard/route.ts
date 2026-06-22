@@ -110,8 +110,16 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
 const TESLA_CACHE_FILE = 'tesla-state.json';
 const TESLA_INTERVAL_ACTIVE_MS = 30_000;
 const TESLA_INTERVAL_IDLE_MS = 5 * 60_000;
+// If telemetry is pushing data, trust it for up to 10 min between updates.
+// Tesla only pushes on change, so silence != stale — but if we go too long
+// without any update we should still poll once to confirm the vehicle is alive.
+const TELEMETRY_TRUST_WINDOW_MS = 10 * 60_000;
 
-interface TeslaCache { state: TeslaVehicleState; fetchedAt: number; }
+interface TeslaCache {
+  state: TeslaVehicleState;
+  fetchedAt: number;
+  source?: 'poll' | 'telemetry';
+}
 
 async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicleState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
@@ -124,15 +132,24 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
 
   if (!force && cache) {
     const ageMs = Date.now() - cache.fetchedAt;
-    const isActive = cache.state.isCharging || (cache.state.online && cache.state.chargingState === 'Charging');
-    const interval = isActive ? TESLA_INTERVAL_ACTIVE_MS : TESLA_INTERVAL_IDLE_MS;
-    if (ageMs < interval) return cache.state;
+    // Telemetry-sourced data is fresh-by-default; we only poll if it's been
+    // silent for the trust window (in case telemetry connection dropped).
+    if (cache.source === 'telemetry' && ageMs < TELEMETRY_TRUST_WINDOW_MS) {
+      return cache.state;
+    }
+    // Poll-sourced data: use the original cadence (30s active / 5min idle).
+    if (cache.source !== 'telemetry') {
+      const isActive = cache.state.isCharging || (cache.state.online && cache.state.chargingState === 'Charging');
+      const interval = isActive ? TESLA_INTERVAL_ACTIVE_MS : TESLA_INTERVAL_IDLE_MS;
+      if (ageMs < interval) return cache.state;
+    }
   }
 
   const fresh = await fetchVehicleState(vin);
   if (fresh) {
-    try { await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now() } satisfies TeslaCache)); }
-    catch { /* non-fatal */ }
+    try {
+      await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), source: 'poll' } satisfies TeslaCache));
+    } catch { /* non-fatal */ }
     return fresh;
   }
   // Fetch failed — fall back to cached if we have it so the UI doesn't go blank

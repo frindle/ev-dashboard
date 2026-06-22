@@ -3,10 +3,12 @@ services:
     build: .
     ports:
       - "3030:3000"
+      - "50051:50051"
     volumes:
       - /mnt/user/appdata/ev-dashboard/keys:/app/keys
     environment:
       - KEYS_DIR=/app/keys
+      - TELEMETRY_PORT=50051
     env_file:
       - .env
     restart: unless-stopped
