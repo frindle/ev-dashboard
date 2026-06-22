@@ -4,9 +4,11 @@
 #
 # Run AFTER you've:
 #   1. Generated certs (gen-telemetry-certs.sh)
-#   2. Uploaded tesla-ca.crt to Cloudflare → Zero Trust → Access → Service Auth → Mutual TLS
-#   3. Created a Cloudflare Access app for tesla-telemetry.<your-domain>
-#   4. Verified the tunnel routes that hostname to the dashboard container :50051
+#   2. Created a Cloudflare Tunnel public hostname for tesla-telemetry.<domain>
+#      pointing to http://<host>:50051 (no Access mTLS — Plan A)
+#   3. Paired the partner virtual key to the vehicle via BLE:
+#      open https://tesla.com/_ak/<your-domain> on a phone near the car
+#      and approve in the Tesla mobile app
 #
 # Usage:
 #   TESLA_VIN=5YJ... TELEMETRY_HOST=tesla-telemetry.penndalton.com \
@@ -33,17 +35,23 @@ fi
 # Build the telemetry config payload. The fields below mirror what
 # server/telemetry-server.js knows how to decode — add more as needed.
 # interval_seconds: 30 means "send updates at most every 30s when changing"
+# `ca` here is the CA bundle Tesla uses to validate OUR server's TLS cert during
+# the data push. Since we go through Cloudflare which presents its own cert (not
+# our self-signed CA), passing our CA would cause Tesla to fail validation at
+# runtime. Pass an empty string so Tesla uses its default public CA trust bundle.
+# `client_cert` is the cert Tesla would PRESENT to us for mTLS — without
+# Cloudflare Access mTLS in Plan A we don't validate it, but the field is
+# required by the API so we still send it.
 PAYLOAD=$(jq -n \
   --arg vin "$VIN" \
   --arg host "$HOST" \
   --rawfile client_cert "$CLIENT_CRT" \
-  --rawfile ca_cert "$CA_CRT" \
   '{
     vins: [$vin],
     config: {
       hostname: $host,
       port: 443,
-      ca: $ca_cert,
+      ca: "",
       client_cert: $client_cert,
       fields: {
         Soc:                 { interval_seconds: 60 },

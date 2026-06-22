@@ -1,7 +1,10 @@
-// Subset of Tesla Fleet Telemetry vehicle_data.proto sufficient for the fields
-// we currently care about. Source: github.com/teslamotors/fleet-telemetry
-// (public protos). Add fields here as needed — Tesla's protobuf uses field
-// numbers, so unknown fields are silently skipped by the decoder.
+// Subset of Tesla Fleet Telemetry vehicle_data.proto with verified field
+// numbers. Source: github.com/teslamotors/fleet-telemetry/protos/vehicle_data.proto
+// (verified June 2026 against the public main branch).
+//
+// Field numbers in this file are the wire-format tags Tesla uses — they must
+// match the upstream proto exactly or decoding silently misidentifies fields.
+// When adding fields, look up the number in the upstream enum, don't invent.
 syntax = "proto3";
 package telemetry.vehicle_data;
 
@@ -11,6 +14,7 @@ message Payload {
   repeated Datum data = 1;
   google.protobuf.Timestamp created_at = 2;
   string vin = 3;
+  bool is_resend = 4;
 }
 
 message Datum {
@@ -18,6 +22,9 @@ message Datum {
   Value value = 2;
 }
 
+// Tesla's Value oneof has 54 variants. We declare the ones we actually
+// inspect; unknown variants are tolerated by protobufjs and just appear
+// undefined on the decoded object.
 message Value {
   oneof value {
     string string_value = 1;
@@ -30,11 +37,9 @@ message Value {
     ChargeState charging_value = 8;
     ShiftState shift_state_value = 9;
     Invalid invalid = 10;
-    string asleep = 11;
-    Doors door_value = 12;
-    TimeValue time_value = 13;
-    Tire tire_value = 14;
-    DetailedChargeState detailed_charge_state_value = 15;
+    Doors door_value = 21;
+    TimeValue time_value = 31;
+    DetailedChargeStateValue detailed_charge_state_value = 32;
   }
 }
 
@@ -43,6 +48,7 @@ message LocationValue {
   double longitude = 2;
 }
 
+// ChargeState enum used by ChargeState field (charging_value)
 enum ChargeState {
   ChargeStateUnknown = 0;
   ChargeStateDisconnected = 1;
@@ -53,7 +59,8 @@ enum ChargeState {
   ChargeStateStopped = 6;
 }
 
-enum DetailedChargeState {
+// DetailedChargeStateValue enum used by DetailedChargeState field
+enum DetailedChargeStateValue {
   DetailedChargeStateUnknown = 0;
   DetailedChargeStateDisconnected = 1;
   DetailedChargeStateNoPower = 2;
@@ -93,44 +100,30 @@ message TimeValue {
   int32 second = 3;
 }
 
-message Tire {
-  float front_left = 1;
-  float front_right = 2;
-  float rear_left = 3;
-  float rear_right = 4;
-}
-
-// Subset of Field enum — Tesla publishes ~200+ fields. Add as needed; unknown
-// keys are stored as raw numbers in the decoded output for debugging.
+// Field enum — VERIFIED numbers from upstream proto. Tesla has 260 fields
+// total; we declare only the ones we currently decode. Unknown field numbers
+// arriving in payloads are logged when TELEMETRY_DEBUG=1.
 enum Field {
   FieldUnknown = 0;
-  Soc = 74;
-  Location = 72;
-  VehicleSpeed = 122;
-  ChargingState = 33;
-  DetailedChargeStateField = 118;
-  Gear = 41;
-  Odometer = 80;
-  ChargeAmps = 19;
-  ChargeLimitSoc = 25;
-  ChargerActualCurrent = 22;
-  ChargerVoltage = 28;
-  TimeToFullCharge = 142;
-  ChargeRateMilePerHour = 21;
-  PackVoltage = 89;
-  PackCurrent = 88;
-  IdealBatteryRange = 60;
-  BatteryLevel = 7;
-  EstBatteryRange = 35;
-  RatedRange = 95;
-  Locked = 71;
-  HvacACEnabled = 47;
-  InsideTemp = 65;
-  OutsideTemp = 84;
-  Doors = 38;
-  TirePressureFL = 154;
-  TirePressureFR = 155;
-  TirePressureRL = 156;
-  TirePressureRR = 157;
-  VehicleName = 187;
+  ChargeState = 2;
+  VehicleSpeed = 4;
+  Odometer = 5;
+  Soc = 8;
+  Gear = 10;
+  Location = 21;
+  RatedRange = 32;
+  ChargeLimitSoc = 38;
+  EstBatteryRange = 40;
+  IdealBatteryRange = 41;
+  BatteryLevel = 42;
+  TimeToFullCharge = 43;
+  ChargeAmps = 49;
+  Locked = 59;
+  VehicleName = 64;
+  InsideTemp = 85;
+  OutsideTemp = 86;
+  DetailedChargeState = 179;
+  ChargerVoltage = 184;
+  HvacACEnabled = 196;
+  ChargeRateMilePerHour = 256;
 }
