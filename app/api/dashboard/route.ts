@@ -337,10 +337,19 @@ async function handleGet(req: Request) {
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
 
-  function computeAtHome(lat: number | null | undefined, lon: number | null | undefined): boolean | null {
-    if (cfg.home.lat === null || cfg.home.lon === null) return null;
-    if (lat === null || lat === undefined || lon === null || lon === undefined) return null;
-    return distanceMeters(lat, lon, cfg.home.lat, cfg.home.lon) <= cfg.home.radiusMeters;
+  function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined): boolean | null {
+    if (cfg.home.lat === null || cfg.home.lon === null) {
+      console.log(`[home] ${label}: no home coords configured — atHome=null`);
+      return null;
+    }
+    if (lat === null || lat === undefined || lon === null || lon === undefined) {
+      console.log(`[home] ${label}: no vehicle GPS (lat=${lat}, lon=${lon}) — atHome=null`);
+      return null;
+    }
+    const dist = distanceMeters(lat, lon, cfg.home.lat, cfg.home.lon);
+    const atHome = dist <= cfg.home.radiusMeters;
+    console.log(`[home] ${label}: lat=${lat.toFixed(5)},lon=${lon.toFixed(5)} home=${cfg.home.lat.toFixed(5)},${cfg.home.lon.toFixed(5)} dist=${dist.toFixed(0)}m radius=${cfg.home.radiusMeters}m → atHome=${atHome}`);
+    return atHome;
   }
 
   const vehicles: VehicleData[] = [
@@ -351,7 +360,7 @@ async function handleGet(req: Request) {
       chargerSide: cfg.vehicles.rivian.chargerSide,
       state: rivianState,
       connected: rivianConnected,
-      atHome: computeAtHome(rivianState?.lat, rivianState?.lon),
+      atHome: computeAtHome('rivian', rivianState?.lat, rivianState?.lon),
     },
     {
       id: 'tesla',
@@ -360,7 +369,7 @@ async function handleGet(req: Request) {
       chargerSide: cfg.vehicles.tesla.chargerSide,
       state: teslaState,
       connected: teslaConnected,
-      atHome: computeAtHome(teslaState?.lat, teslaState?.lon),
+      atHome: computeAtHome('tesla', teslaState?.lat, teslaState?.lon),
     },
   ];
 
