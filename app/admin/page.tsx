@@ -5,7 +5,7 @@ import type { AppConfig } from '@/lib/config';
 
 const TESLA_CLIENT_ID = 'b4a07679-8597-452d-a7c0-8a6a6b632c42';
 const TESLA_AUTH_BASE = 'https://auth.tesla.com/oauth2/v3/authorize';
-const TESLA_SCOPES = 'openid vehicle_device_data energy_device_data offline_access';
+const TESLA_SCOPES = 'openid vehicle_device_data vehicle_location vehicle_cmds energy_device_data offline_access';
 
 function teslaAuthUrl(redirectUri: string): string {
   const params = new URLSearchParams({
