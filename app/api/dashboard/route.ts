@@ -1,4 +1,5 @@
-import { writeFile } from 'fs/promises';
+import { writeFile, readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { readConfig, readTokens } from '@/lib/config';
 import {
@@ -101,18 +102,58 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
   }
 }
 
-export async function GET() {
+// Smart-poll: pick how often to actually hit vehicle_data based on the
+// last-known state. Burns far less quota than blindly polling every 30s.
+//   - Charging or driving (or unknown): 30s
+//   - Awake but parked: 5 min (state changes slowly when idle)
+//   - Asleep:           5 min (no state can change without a wake)
+const TESLA_CACHE_FILE = 'tesla-state.json';
+const TESLA_INTERVAL_ACTIVE_MS = 30_000;
+const TESLA_INTERVAL_IDLE_MS = 5 * 60_000;
+
+interface TeslaCache { state: TeslaVehicleState; fetchedAt: number; }
+
+async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicleState | null> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, TESLA_CACHE_FILE);
+
+  let cache: TeslaCache | null = null;
+  if (existsSync(path)) {
+    try { cache = JSON.parse(await readFile(path, 'utf-8')) as TeslaCache; } catch { /* fall through */ }
+  }
+
+  if (!force && cache) {
+    const ageMs = Date.now() - cache.fetchedAt;
+    const isActive = cache.state.isCharging || (cache.state.online && cache.state.chargingState === 'Charging');
+    const interval = isActive ? TESLA_INTERVAL_ACTIVE_MS : TESLA_INTERVAL_IDLE_MS;
+    if (ageMs < interval) return cache.state;
+  }
+
+  const fresh = await fetchVehicleState(vin);
+  if (fresh) {
+    try { await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now() } satisfies TeslaCache)); }
+    catch { /* non-fatal */ }
+    return fresh;
+  }
+  // Fetch failed — fall back to cached if we have it so the UI doesn't go blank
+  return cache?.state ?? null;
+}
+
+export async function GET(req: Request) {
   const cfg = readConfig();
   const teslaConnected = readTokens() !== null;
   const rivianConnected = hasRivianTokens();
   const myqConnected = hasMyQTokens();
+
+  // ?fresh=1 forces a real fetch (used right after a command so the UI reflects it)
+  const force = new URL(req.url).searchParams.get('fresh') === '1';
 
   const leftId  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.deviceId  ?? '';
   const rightId = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.deviceId ?? '';
 
   // Fetch all data in parallel
   const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
-    teslaConnected ? fetchVehicleState(cfg.vehicles.tesla.vin) : Promise.resolve(null),
+    teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianVehicleState() : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
     teslaConnected && leftId  ? fetchWallConnectorVitals(leftId)  : Promise.resolve(null),
