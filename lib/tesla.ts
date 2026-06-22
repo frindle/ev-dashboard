@@ -7,6 +7,7 @@ export interface TeslaVehicleState {
   chargePercent: number;
   chargeLimit: number;
   isCharging: boolean;
+  isPluggedIn: boolean;
   chargingState: string;
   isLocked: boolean;
   climateOn: boolean;
@@ -143,6 +144,9 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     chargePercent: cs.battery_level ?? 0,
     chargeLimit: cs.charge_limit_soc ?? 80,
     isCharging: cs.charging_state === 'Charging',
+    // Any non-Disconnected state means the cable is in the port. Tesla's
+    // values: Disconnected | Connected | Charging | Complete | Stopped | NoPower
+    isPluggedIn: cs.charging_state !== undefined && cs.charging_state !== 'Disconnected',
     chargingState: cs.charging_state ?? 'Unknown',
     isLocked: vs.locked ?? true,
     climateOn: cls.is_climate_on ?? false,

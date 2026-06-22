@@ -147,6 +147,13 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
 
   const fresh = await fetchVehicleState(vin);
   if (fresh) {
+    // Preserve last-known GPS when the new poll has nulls (Tesla returns
+    // null lat/lon when the car is asleep). Otherwise an asleep car at home
+    // would show as "unknown location" and stop counting as home.
+    if (cache?.state) {
+      if (fresh.lat === null && cache.state.lat !== null) fresh.lat = cache.state.lat;
+      if (fresh.lon === null && cache.state.lon !== null) fresh.lon = cache.state.lon;
+    }
     try {
       await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), source: 'poll' } satisfies TeslaCache));
     } catch { /* non-fatal */ }
@@ -154,6 +161,33 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
   }
   // Fetch failed — fall back to cached if we have it so the UI doesn't go blank
   return cache?.state ?? null;
+}
+
+// Persist Rivian's last-known GPS so an offline vehicle keeps its
+// home/away status (mirrors the Tesla preservation in smartFetchTesla).
+async function fetchRivianWithGpsCache(): Promise<RivianVehicleState | null> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, 'rivian-state.json');
+
+  let cachedGps: { lat: number | null; lon: number | null } = { lat: null, lon: null };
+  if (existsSync(path)) {
+    try {
+      const cache = JSON.parse(await readFile(path, 'utf-8')) as { lat: number | null; lon: number | null };
+      cachedGps = { lat: cache.lat ?? null, lon: cache.lon ?? null };
+    } catch { /* fall through */ }
+  }
+
+  const fresh = await fetchRivianVehicleState();
+  if (!fresh) return null;
+
+  if (fresh.lat === null && cachedGps.lat !== null) fresh.lat = cachedGps.lat;
+  if (fresh.lon === null && cachedGps.lon !== null) fresh.lon = cachedGps.lon;
+
+  if (fresh.lat !== null && fresh.lon !== null) {
+    try { await writeFile(path, JSON.stringify({ lat: fresh.lat, lon: fresh.lon })); }
+    catch { /* non-fatal */ }
+  }
+  return fresh;
 }
 
 export async function GET(req: Request) {
@@ -171,7 +205,7 @@ export async function GET(req: Request) {
   // Fetch all data in parallel
   const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
-    rivianConnected ? fetchRivianVehicleState() : Promise.resolve(null),
+    rivianConnected ? fetchRivianWithGpsCache() : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
     teslaConnected && leftId  ? fetchWallConnectorVitals(leftId)  : Promise.resolve(null),
     teslaConnected && rightId ? fetchWallConnectorVitals(rightId) : Promise.resolve(null),

@@ -114,10 +114,11 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
   const range  = s ? Math.round(s.rangeMi)       : 0;
   const odoLabel = s ? Math.round(s.odometer).toLocaleString('en-US') : '—';
   const minutesToFull = s?.minutesToFull ?? 0;
-  const isCharging = s?.isCharging ?? false;
-  const isLocked   = s?.isLocked   ?? true;
-  const climateOn  = s?.climateOn  ?? false;
-  const online     = s?.online     ?? false;
+  const isCharging  = s?.isCharging  ?? false;
+  const isPluggedIn = s?.isPluggedIn ?? false;
+  const isLocked    = s?.isLocked    ?? true;
+  const climateOn   = s?.climateOn   ?? false;
+  const online      = s?.online      ?? false;
 
   let badgeLabel: string, badgeAccent: boolean, badgePulse: boolean;
   if (!v.connected)       { badgeLabel = 'DISCONNECTED'; badgeAccent = false; badgePulse = false; }
@@ -132,13 +133,21 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
 
   const rateKw    = wcPowerW / 1000;
   const rateLabel = isCharging && rateKw > 0 ? rateKw.toFixed(1) + ' kW' : '—';
-  const etaLabel  = isCharging ? fmtEta(minutesToFull) : (soc >= limit ? 'AT TARGET' : 'NOT PLUGGED IN');
+  const etaLabel  = isCharging
+    ? fmtEta(minutesToFull)
+    : isPluggedIn
+      ? (soc >= limit ? 'AT TARGET' : 'PLUGGED IN · IDLE')
+      : 'NOT PLUGGED IN';
   const etaColor  = isCharging ? accent : '#7d8893';
 
-  const canStartStop = isTesla && v.connected;
+  // canControl: can change limit / drag dial — Tesla + connected, regardless of plug
+  // canStartStop: can fire charge_start/stop — also requires the plug to be in
+  // (otherwise Tesla returns "not_charging" with no progress)
+  const canControl = isTesla && v.connected;
+  const canStartStop = canControl && (isPluggedIn || isCharging);
   const scheduleOnly = !isTesla && v.connected && s !== null;
   const apiLabel  = isTesla ? 'TESLA FLEET API' : 'RIVIAN · UNOFFICIAL API';
-  const limitNote = canStartStop ? 'CHARGE LIMIT' : 'CHARGE LIMIT · VIA SCHEDULE';
+  const limitNote = canControl ? 'CHARGE LIMIT' : 'CHARGE LIMIT · VIA SCHEDULE';
 
   return (
     <div style={{ background: '#161c22', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14, boxShadow: '0 18px 44px -30px rgba(0,0,0,.85)' }}>
@@ -174,8 +183,8 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
       <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir as React.CSSProperties['flexDirection'] }}>
         <ChargeDial
           soc={soc} limit={limit} accent={accent}
-          draggable={canStartStop}
-          onSetLimit={canStartStop ? l => onCommand('set_charge_limit', { percent: l }) : undefined}
+          draggable={canControl}
+          onSetLimit={canControl ? l => onCommand('set_charge_limit', { percent: l }) : undefined}
         />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '13px 18px', flex: 1, textAlign: statsAlign as React.CSSProperties['textAlign'] }}>
           {([
@@ -212,7 +221,7 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
           </span>
         </div>
         <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 8.5, letterSpacing: '0.14em', color: '#5e6873', textAlign: sourceAlign as React.CSSProperties['textAlign'] }}>
-          {limitNote}{canStartStop ? ' · DRAG DIAL' : ''} · SOURCE {apiLabel}
+          {limitNote}{canControl ? ' · DRAG DIAL' : ''} · SOURCE {apiLabel}
         </span>
       </div>
     </div>
