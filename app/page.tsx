@@ -257,9 +257,14 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
     : 'ONE CONNECTOR ACTIVE';
   const statusColor = activeCount > 0 ? ACCENT : '#7d8893';
 
+  // Per-side accent colors so when both connectors are active the user can
+  // see at a glance how the demand is split. LEFT = Rivian (cool steel grey),
+  // RIGHT = Tesla (cool blue). When idle, both fall back to a dim grey.
+  const LEFT_COLOR  = '#9aa5b1';
+  const RIGHT_COLOR = '#5b8def';
   const sides = [
-    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh  },
-    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh },
+    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh,  color: LEFT_COLOR  },
+    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh, color: RIGHT_COLOR },
   ];
 
   return (
@@ -285,14 +290,14 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
       {/* Split bar */}
       <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ position: 'relative', height: 24, borderRadius: 12, background: '#1b232b', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: leftPct, background: ACCENT, borderRadius: 12, transition: 'width .4s ease' }} />
-          <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: rightPct, background: ACCENT, borderRadius: 12, transition: 'width .4s ease' }} />
+          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: leftPct, background: LEFT_COLOR, borderRadius: 12, transition: 'width .4s ease' }} />
+          <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: rightPct, background: RIGHT_COLOR, borderRadius: 12, transition: 'width .4s ease' }} />
           <div style={{ position: 'absolute', left: '50%', top: 3, bottom: 3, width: 1, background: 'rgba(255,255,255,0.14)' }} />
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: "'JetBrains Mono',monospace", fontSize: 10, color: '#a4afba' }}>
-          <span>◀ LEFT · {Math.round(leftAmps)} A</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: "'JetBrains Mono',monospace", fontSize: 10 }}>
+          <span style={{ color: LEFT_COLOR }}>◀ {left?.vehicleName ?? 'LEFT'} · {Math.round(leftAmps)} A</span>
           <span style={{ color: '#7d8893' }}>{freeAmps} A free</span>
-          <span>RIGHT · {Math.round(rightAmps)} A ▶</span>
+          <span style={{ color: RIGHT_COLOR }}>{right?.vehicleName ?? 'RIGHT'} · {Math.round(rightAmps)} A ▶</span>
         </div>
       </div>
 
@@ -301,8 +306,8 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
         {sides.map(side => {
           const vitals = side.wc?.vitals;
           const kwLabel = vitals ? kwFor(vitals.currentA).toFixed(1) : '0.0';
-          const kwColor = side.inUse ? '#e8edf2' : '#5e6873';
-          const sc = side.inUse ? ACCENT : '#7d8893';
+          const kwColor = side.inUse ? side.color : '#5e6873';
+          const sc = side.inUse ? side.color : '#7d8893';
           const dotAnim = side.inUse ? 'evpulse 1.8s ease-in-out infinite' : 'none';
           const connectedLabel = side.inUse
             ? (side.wc?.vehicleName ?? side.name) + ' charging'
