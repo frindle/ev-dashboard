@@ -147,12 +147,24 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
 
   const fresh = await fetchVehicleState(vin);
   if (fresh) {
-    // Preserve last-known GPS when the new poll has nulls (Tesla returns
-    // null lat/lon when the car is asleep). Otherwise an asleep car at home
-    // would show as "unknown location" and stop counting as home.
+    // Tesla returns a stripped response when the car is asleep — missing
+    // fields fall back to defaults in fetchVehicleState (chargeLimit→80,
+    // chargePercent→0, lat/lon→null, etc.) which silently overwrite the
+    // real last-known values. Preserve cached values for slowly-changing
+    // fields whenever the fresh poll reports the car as offline.
     if (cache?.state) {
       if (fresh.lat === null && cache.state.lat !== null) fresh.lat = cache.state.lat;
       if (fresh.lon === null && cache.state.lon !== null) fresh.lon = cache.state.lon;
+      if (!fresh.online) {
+        // Asleep — Tesla's response is incomplete. Restore last-known good.
+        fresh.chargePercent = cache.state.chargePercent;
+        fresh.chargeLimit   = cache.state.chargeLimit;
+        fresh.rangeMi       = cache.state.rangeMi;
+        fresh.odometer      = cache.state.odometer || fresh.odometer;
+        fresh.isLocked      = cache.state.isLocked;
+        fresh.isPluggedIn   = cache.state.isPluggedIn;
+        fresh.chargingState = cache.state.chargingState;
+      }
     }
     try {
       await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), source: 'poll' } satisfies TeslaCache));
