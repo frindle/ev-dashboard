@@ -25,6 +25,8 @@ export interface RivianVehicleState {
   chargeLimit: number;        // batteryLimit.value (0-100)
   isCharging: boolean;
   isPluggedIn: boolean;
+  isThrottled: boolean;       // chargerDerateStatus indicates active throttling
+  derateReason: string;       // raw chargerDerateStatus value
   chargingState: string;      // chargerState.value raw string
   isLocked: boolean;
   climateOn: boolean;
@@ -219,6 +221,7 @@ query GetVehicleState($vehicleID: String!) {
     timeToEndOfCharge { timeStamp value }
     chargerState { timeStamp value }
     chargerStatus { timeStamp value }
+    chargerDerateStatus { timeStamp value }
     powerState { timeStamp value }
     vehicleMileage { timeStamp value }
     doorFrontLeftLocked { timeStamp value }
@@ -237,6 +240,7 @@ interface RawVehicleState {
   timeToEndOfCharge: { value: number } | null;
   chargerState: { value: string } | null;
   chargerStatus: { value: string } | null;
+  chargerDerateStatus: { value: string } | null;
   powerState: { value: string } | null;
   vehicleMileage: { value: number } | null;
   doorFrontLeftLocked: { value: string } | null;
@@ -277,6 +281,17 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     // charging_active, charge_complete
     const isPluggedIn = chargingStateRaw.toLowerCase() !== 'disconnected' && chargingStateRaw !== '';
 
+    // Rivian charger derate (throttling). Treat anything that's not empty
+    // / "no_derate" / "none" / "inactive" as throttled. Specific reason
+    // strings are surfaced verbatim — we don't have a documented enum.
+    const derateRaw = (vs.chargerDerateStatus?.value ?? '').trim();
+    const derateLower = derateRaw.toLowerCase();
+    const isThrottled = derateRaw !== '' &&
+      derateLower !== 'no_derate' &&
+      derateLower !== 'none' &&
+      derateLower !== 'inactive' &&
+      derateLower !== 'normal';
+
     // Only show climate as on for explicitly active states; 'system_idle', 'not_available', etc. → off
     const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
     const climateVal = (vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
@@ -286,6 +301,8 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       chargeLimit: vs.batteryLimit?.value ?? 80,
       isCharging,
       isPluggedIn,
+      isThrottled,
+      derateReason: derateRaw,
       chargingState: chargingStateRaw,
       isLocked: vs.doorFrontLeftLocked?.value === 'locked',
       climateOn: CLIMATE_ACTIVE.has(climateVal),
