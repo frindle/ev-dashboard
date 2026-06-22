@@ -1,13 +1,16 @@
 // Tesla Fleet Telemetry receiver.
 //
-// Architecture:
-//   Tesla vehicle → mTLS (validated by Cloudflare Access at edge) →
-//   Cloudflare Tunnel (HTTPS) → this server (plain ws on localhost) →
-//   decodes protobuf → writes keys/tesla-state.json
+// Architecture (Plan A — no Cloudflare mTLS, free Zero Trust tier):
+//   Tesla vehicle → HTTPS → Cloudflare Tunnel → this server (plain ws on
+//   localhost:50051) → decodes protobuf → writes keys/tesla-state.json
 //
-// Cloudflare strips the mTLS layer at the edge after validation, so this
-// server accepts plain WebSocket connections. Trust is enforced by the fact
-// that only Cloudflare Tunnel can reach this port (not exposed externally).
+// Cloudflare's free Zero Trust doesn't allow uploading a CA root for Access
+// mTLS, so we don't validate Tesla's client cert at edge. Instead, we enforce
+// VIN matching on every Payload: the `vin` field must equal the configured
+// Tesla VIN from config.json. Worst case: a targeted attacker who knows your
+// VIN and the proto format could feed bad numbers — they can't touch the
+// car or read data. The endpoint is only reachable via the tunnel, not
+// directly from the internet.
 
 const http = require('http');
 const fs = require('fs');
@@ -67,61 +70,75 @@ function writeState(state) {
   }
 }
 
-// Map a single Datum into our TeslaVehicleState shape. Many of these are
-// best-effort — Tesla's field semantics aren't fully documented and this
-// will need iteration once we see real production data. Unknown keys are
-// logged for visibility.
+// Map a single Datum into our TeslaVehicleState shape.
+//
+// Field names here must match the upstream Field enum exactly (verified June
+// 2026 against teslamotors/fleet-telemetry vehicle_data.proto). When adding
+// support for a new field, look up the canonical name in the upstream proto
+// and add a case here — don't guess.
+//
+// Tesla's enums are encoded as integers; protobufjs decodes them with our
+// `enums: Number` option so we compare against the numeric value (e.g.
+// ChargeStateCharging = 4) rather than strings.
 function applyDatum(state, key, value) {
   const fieldName = fieldNumberToName.get(key) || `Field${key}`;
-  // value is an object with one populated oneof field
+  // Extract the populated oneof variant. Tesla packs primitives into typed
+  // fields; we read whichever one is present.
   const v = value.stringValue ?? value.intValue ?? value.longValue
          ?? value.floatValue ?? value.doubleValue ?? value.booleanValue
          ?? value.locationValue ?? value.chargingValue ?? value.shiftStateValue
-         ?? value.asleep ?? value.doorValue ?? value.tireValue
          ?? value.detailedChargeStateValue ?? null;
 
   switch (fieldName) {
-    case 'BatteryLevel':
+    // Battery / range
     case 'Soc':
+    case 'BatteryLevel':
       state.chargePercent = Number(v) || 0; break;
     case 'ChargeLimitSoc':
       state.chargeLimit = Number(v) || 80; break;
-    case 'ChargingState':
-    case 'DetailedChargeStateField':
-      // v is an enum number like ChargeStateCharging = 4
-      state.isCharging = (v === 4 || v === 'ChargeStateCharging' || v === 'DetailedChargeStateCharging');
-      state.chargingState = String(v); break;
-    case 'Locked':
-      state.isLocked = Boolean(v); break;
-    case 'HvacACEnabled':
-      state.climateOn = Boolean(v); break;
+    case 'RatedRange':
     case 'IdealBatteryRange':
     case 'EstBatteryRange':
-    case 'RatedRange':
       state.rangeMi = Number(v) || 0; break;
     case 'Odometer':
       state.odometer = Number(v) || 0; break;
+
+    // Charging state — ChargeStateCharging = 4, DetailedChargeStateCharging = 4
+    case 'ChargeState':
+    case 'DetailedChargeState':
+      state.isCharging = (v === 4);
+      state.chargingState = String(v); break;
+
+    // Charging power / progress
+    case 'ChargeAmps':
     case 'ChargeRateMilePerHour':
       state.chargeRateMph = Number(v) || 0; break;
     case 'TimeToFullCharge':
       // Tesla reports hours as float, our model uses minutes
       state.minutesToFull = Math.round((Number(v) || 0) * 60); break;
-    case 'ChargerActualCurrent':
-      state.chargerActualCurrentA = Number(v) || 0; break;
     case 'ChargerVoltage':
       state.chargerVoltage = Number(v) || 0; break;
+
+    // Access / climate
+    case 'Locked':
+      state.isLocked = Boolean(v); break;
+    case 'HvacACEnabled':
+      state.climateOn = Boolean(v); break;
+
+    // Position
     case 'Location':
       if (value.locationValue) {
         state.lat = value.locationValue.latitude;
         state.lon = value.locationValue.longitude;
       }
       break;
+
+    // Gear → if we get any gear value the car is awake
     case 'Gear':
-      // ShiftStateP = 2 means parked — vehicle is online
       state.online = (v !== null && v !== undefined);
       break;
+
     default:
-      // Log unknown so we can grow the mapping table
       if (process.env.TELEMETRY_DEBUG === '1') {
         console.log(`[telemetry] unmapped field ${fieldName}=${JSON.stringify(v)}`);
       }
