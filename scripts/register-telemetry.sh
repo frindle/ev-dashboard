@@ -46,20 +46,15 @@ PAYLOAD=$(jq -n \
       ca: $ca_cert,
       client_cert: $client_cert,
       fields: {
-        Soc:                  { interval_seconds: 60 },
-        Location:             { interval_seconds: 60 },
-        ChargingState:        { interval_seconds: 30 },
-        DetailedChargeState:  { interval_seconds: 30 },
-        ChargeLimitSoc:       { interval_seconds: 300 },
-        ChargeRateMilePerHour:{ interval_seconds: 30 },
-        TimeToFullCharge:     { interval_seconds: 30 },
-        ChargerActualCurrent: { interval_seconds: 30 },
-        ChargerVoltage:       { interval_seconds: 30 },
-        RatedRange:           { interval_seconds: 300 },
-        Odometer:             { interval_seconds: 600 },
-        Locked:               { interval_seconds: 30 },
-        HvacACEnabled:        { interval_seconds: 30 },
-        Gear:                 { interval_seconds: 30 }
+        Soc:                 { interval_seconds: 60 },
+        Location:            { interval_seconds: 60 },
+        ChargeLimitSoc:      { interval_seconds: 300 },
+        DetailedChargeState: { interval_seconds: 30 },
+        TimeToFullCharge:    { interval_seconds: 60 },
+        RatedRange:          { interval_seconds: 300 },
+        Odometer:            { interval_seconds: 600 },
+        Locked:              { interval_seconds: 60 },
+        Gear:                { interval_seconds: 30 }
       }
     }
   }')
