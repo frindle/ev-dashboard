@@ -18,7 +18,24 @@ const protobuf = require('protobufjs');
 const PORT = parseInt(process.env.TELEMETRY_PORT || '50051', 10);
 const KEYS_DIR = process.env.KEYS_DIR || path.join(process.cwd(), 'keys');
 const STATE_FILE = path.join(KEYS_DIR, 'tesla-state.json');
+const CONFIG_FILE = path.join(KEYS_DIR, 'config.json');
 const PROTO_PATH = path.join(process.cwd(), 'protos', 'vehicle_data.proto');
+
+// Plan A trust model: no Cloudflare mTLS in front of us. Anything that reaches
+// our endpoint via the tunnel could be spoofed, so we enforce two checks:
+//   1. The VIN in every Payload must match the configured Tesla VIN
+//   2. Per-connection rate limiting prevents flooding
+// Worst case: someone who knows your VIN AND the proto format can feed bad
+// numbers to your dashboard. They can't touch the car or read anything.
+const MAX_MSGS_PER_CONN_PER_SEC = 20;
+const MAX_CONNECTIONS_PER_IP = 5;
+
+function getExpectedVin() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+    return (cfg?.vehicles?.tesla?.vin || '').trim().toUpperCase();
+  } catch { return ''; }
+}
 
 let Payload = null;
 let fieldNumberToName = new Map();
@@ -124,17 +141,56 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, path: '/' });
 
+// Track open connections per IP so a single client can't open thousands
+const connectionsByIp = new Map();
+
 wss.on('connection', (ws, req) => {
   const ip = req.headers['cf-connecting-ip'] || req.socket.remoteAddress;
   const certSubject = req.headers['cf-client-cert-subject-dn'] || '(no cert header)';
+
+  const openCount = connectionsByIp.get(ip) || 0;
+  if (openCount >= MAX_CONNECTIONS_PER_IP) {
+    console.warn(`[telemetry] rejecting connection from ${ip} (${openCount} already open)`);
+    ws.close(1008, 'too many connections');
+    return;
+  }
+  connectionsByIp.set(ip, openCount + 1);
+
   console.log(`[telemetry] connection from ${ip} cert=${certSubject}`);
+
+  // Per-message rate limit: simple sliding window over the last second
+  let msgsInWindow = 0;
+  let windowStart = Date.now();
 
   ws.on('message', (data, isBinary) => {
     if (!isBinary || !Payload) return;
+
+    const now = Date.now();
+    if (now - windowStart >= 1000) {
+      msgsInWindow = 0;
+      windowStart = now;
+    }
+    msgsInWindow++;
+    if (msgsInWindow > MAX_MSGS_PER_CONN_PER_SEC) {
+      console.warn(`[telemetry] ${ip}: rate limit exceeded, dropping`);
+      return;
+    }
+
     try {
       const msg = Payload.decode(data);
       const obj = Payload.toObject(msg, { enums: Number, defaults: false });
-      const vin = obj.vin || 'unknown';
+      const incomingVin = (obj.vin || '').trim().toUpperCase();
+
+      // VIN gate: reject any payload not from our configured vehicle
+      const expectedVin = getExpectedVin();
+      if (expectedVin && incomingVin !== expectedVin) {
+        console.warn(`[telemetry] ${ip}: VIN mismatch (got ${incomingVin || '<empty>'}, want ${expectedVin}) — rejecting`);
+        return;
+      }
+      if (!expectedVin) {
+        console.warn('[telemetry] no expected VIN configured; accepting payload but you should set vehicles.tesla.vin');
+      }
+
       const existing = readState();
       const merged = { ...(existing.state || {}) };
       for (const datum of obj.data || []) {
@@ -142,11 +198,10 @@ wss.on('connection', (ws, req) => {
       }
       writeState(merged);
       if (process.env.TELEMETRY_DEBUG === '1') {
-        console.log(`[telemetry] vin=${vin} ${(obj.data || []).length} fields`);
+        console.log(`[telemetry] vin=${incomingVin} ${(obj.data || []).length} fields`);
       }
     } catch (e) {
       console.error('[telemetry] decode failed:', e.message);
-      // Save raw bytes for offline analysis if we can't decode
       try {
         const dumpPath = path.join(KEYS_DIR, `telemetry-raw-${Date.now()}.bin`);
         fs.writeFileSync(dumpPath, data);
@@ -155,7 +210,11 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', () => console.log(`[telemetry] disconnected ${ip}`));
+  ws.on('close', () => {
+    const c = (connectionsByIp.get(ip) || 1) - 1;
+    if (c <= 0) connectionsByIp.delete(ip); else connectionsByIp.set(ip, c);
+    console.log(`[telemetry] disconnected ${ip}`);
+  });
   ws.on('error', (e) => console.error(`[telemetry] ws error: ${e.message}`));
 });
 
