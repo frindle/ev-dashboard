@@ -211,16 +211,18 @@ export async function GET(req: Request) {
   // ?fresh=1 forces a real fetch (used right after a command so the UI reflects it)
   const force = new URL(req.url).searchParams.get('fresh') === '1';
 
-  const leftId  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.deviceId  ?? '';
-  const rightId = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.deviceId ?? '';
+  const leftSerial  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.serial  ?? '';
+  const rightSerial = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.serial ?? '';
 
-  // Fetch all data in parallel
+  // Fetch all data in parallel. Site live_status and per-connector vitals now
+  // share one underlying API call (Tesla deprecated /wall_connectors/{id}/vitals
+  // and moved per-connector fields into the same live_status response).
   const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache() : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
-    teslaConnected && leftId  ? fetchWallConnectorVitals(leftId)  : Promise.resolve(null),
-    teslaConnected && rightId ? fetchWallConnectorVitals(rightId) : Promise.resolve(null),
+    teslaConnected && leftSerial  ? fetchWallConnectorVitals(cfg.energySite.id, leftSerial)  : Promise.resolve(null),
+    teslaConnected && rightSerial ? fetchWallConnectorVitals(cfg.energySite.id, rightSerial) : Promise.resolve(null),
     fetchWeather(cfg),
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
