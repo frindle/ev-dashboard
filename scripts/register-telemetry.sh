@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Register a Tesla Fleet Telemetry config with Tesla's Fleet API.
 # This tells Tesla "send these signals to my server."
 #
@@ -10,8 +10,8 @@
 #
 # Usage:
 #   TESLA_VIN=5YJ... TELEMETRY_HOST=tesla-telemetry.penndalton.com \
-#     bash scripts/register-telemetry.sh
-set -euo pipefail
+#     sh scripts/register-telemetry.sh
+set -eu
 
 KEYS_DIR="${KEYS_DIR:-$(pwd)/keys}"
 VIN="${TESLA_VIN:?Set TESLA_VIN to your vehicle VIN}"
@@ -22,11 +22,13 @@ CLIENT_KEY="$KEYS_DIR/tesla-client.key"
 CA_CRT="$KEYS_DIR/tesla-ca.crt"
 
 for f in "$TOKENS_FILE" "$CLIENT_CRT" "$CLIENT_KEY" "$CA_CRT"; do
-  [[ -f "$f" ]] || { echo "Missing: $f"; exit 1; }
+  [ -f "$f" ] || { echo "Missing: $f"; exit 1; }
 done
 
 ACCESS_TOKEN=$(jq -r '.access_token' "$TOKENS_FILE")
-[[ -n "$ACCESS_TOKEN" && "$ACCESS_TOKEN" != "null" ]] || { echo "No access_token in $TOKENS_FILE"; exit 1; }
+if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
+  echo "No access_token in $TOKENS_FILE"; exit 1
+fi
 
 # Build the telemetry config payload. The fields below mirror what
 # server/telemetry-server.js knows how to decode — add more as needed.
