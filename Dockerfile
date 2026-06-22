@@ -1,5 +1,14 @@
 FROM node:20-alpine AS base
 
+# Build Tesla's vehicle-command HTTP proxy from source. Required for any
+# Fleet API endpoint that demands a signed request (fleet_telemetry_config,
+# vehicle commands on modern firmware, etc.).
+FROM golang:1.22-alpine AS proxy-builder
+RUN apk add --no-cache git
+WORKDIR /build
+RUN git clone --depth 1 https://github.com/teslamotors/vehicle-command.git .
+RUN cd cmd/tesla-http-proxy && CGO_ENABLED=0 go build -o /out/tesla-http-proxy
+
 FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
@@ -37,9 +46,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/protos ./protos
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=telemetry-deps --chown=nextjs:nodejs /app/node_modules ./server/node_modules
 
+# Tesla vehicle-command HTTP proxy binary
+COPY --from=proxy-builder /out/tesla-http-proxy /usr/local/bin/tesla-http-proxy
+
 USER nextjs
 EXPOSE 3000 50051
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV TELEMETRY_PORT=50051
+ENV PROXY_PORT=4443
 CMD ["node", "server/start.js"]

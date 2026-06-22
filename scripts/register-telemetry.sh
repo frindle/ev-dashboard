@@ -67,8 +67,13 @@ PAYLOAD=$(jq -n \
 echo "→ Registering telemetry config for $VIN → $HOST"
 echo "$PAYLOAD" | jq '.config.fields | keys' >/dev/null  # sanity
 
-RESPONSE=$(curl -sS -X POST \
-  "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/fleet_telemetry_config" \
+# Route through the tesla-http-proxy running locally. The proxy signs the
+# request with our partner private key and forwards to Tesla's Fleet API.
+# -k because the proxy uses a self-signed cert (localhost only — safe).
+PROXY_URL="${PROXY_URL:-https://localhost:4443}"
+
+RESPONSE=$(curl -sS -k -X POST \
+  "$PROXY_URL/api/1/vehicles/fleet_telemetry_config" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD")
