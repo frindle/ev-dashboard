@@ -24,6 +24,7 @@ export interface RivianVehicleState {
   chargePercent: number;      // batteryLevel.value (0-100)
   chargeLimit: number;        // batteryLimit.value (0-100)
   isCharging: boolean;
+  isPluggedIn: boolean;
   chargingState: string;      // chargerState.value raw string
   isLocked: boolean;
   climateOn: boolean;
@@ -269,8 +270,12 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const chargingStateRaw = vs.chargerState?.value ?? 'disconnected';
 
     // Only treat as charging when the contactor is actually closed and power is flowing
-    const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active']);
+    const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active', 'charging_ac_1ph', 'charging_ac_3ph']);
     const isCharging = CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase());
+    // Anything other than "disconnected" means the plug is in the port.
+    // Values seen: disconnected, not_charging, charging_ready, charging,
+    // charging_active, charge_complete
+    const isPluggedIn = chargingStateRaw.toLowerCase() !== 'disconnected' && chargingStateRaw !== '';
 
     // Only show climate as on for explicitly active states; 'system_idle', 'not_available', etc. → off
     const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
@@ -280,6 +285,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       chargePercent: vs.batteryLevel?.value ?? 0,
       chargeLimit: vs.batteryLimit?.value ?? 80,
       isCharging,
+      isPluggedIn,
       chargingState: chargingStateRaw,
       isLocked: vs.doorFrontLeftLocked?.value === 'locked',
       climateOn: CLIMATE_ACTIVE.has(climateVal),
