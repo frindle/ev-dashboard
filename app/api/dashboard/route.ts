@@ -2,6 +2,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { readConfig, readTokens } from '@/lib/config';
+import { logError } from '@/lib/logger';
 import {
   fetchVehicleState,
   fetchSiteLiveStatus,
@@ -40,6 +41,8 @@ export interface WallConnectorData {
   side: 'LEFT' | 'RIGHT';
   vehicleName: string;
   vitals: WallConnectorVitals | null;
+  sessionKwh: number;  // integrated since most recent idle→active transition
+  todayKwh: number;    // integrated since local midnight
 }
 
 export interface DashboardData {
@@ -81,6 +84,7 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       console.error(`[weather] OWM returned ${res.status}: ${body}`);
+      void logError('weather', new Error(`OWM ${res.status}: ${body}`));
       return null;
     }
 
@@ -98,6 +102,7 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
     };
   } catch (e) {
     console.error('[weather] fetch error:', e);
+    void logError('weather', e);
     return null;
   }
 }
@@ -175,6 +180,101 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
   return cache?.state ?? null;
 }
 
+// ── Wall connector session/today kWh integration ────────────────────────────
+// Tesla's new live_status response no longer exposes session_energy_wh. We
+// integrate the live power reading ourselves: each poll cycle, multiply
+// current power (W) by the elapsed seconds since the previous poll and
+// accumulate into per-side session + today buckets. Persisted in keys/
+// so the totals survive container restarts.
+
+interface SessionRecord {
+  sessionKwh: number;
+  todayKwh: number;
+  todayDate: string;
+  lastInUse: boolean;
+  lastUpdate: number;
+  sessionStartedAt: number; // ms epoch — 0 when no session in progress
+}
+interface SessionFile { left: SessionRecord; right: SessionRecord; }
+interface ChargeHistoryRow {
+  side: 'LEFT' | 'RIGHT';
+  vehicleName: string;
+  startedAt: string;   // ISO
+  endedAt: string;     // ISO
+  durationMin: number;
+  energyKwh: number;
+}
+
+function emptySession(): SessionRecord {
+  return { sessionKwh: 0, todayKwh: 0, todayDate: localDateStr(), lastInUse: false, lastUpdate: 0, sessionStartedAt: 0 };
+}
+function localDateStr(): string {
+  return new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+}
+
+async function appendChargeHistory(row: ChargeHistoryRow) {
+  const historyDir = process.env.CHARGE_HISTORY_DIR ?? process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(historyDir, 'charge-history.jsonl');
+  try { await writeFile(path, JSON.stringify(row) + '\n', { flag: 'a' }); }
+  catch (e) { console.error('[charge-history] append failed:', e); }
+}
+
+async function updateSessionKwh(
+  leftPowerW: number, leftInUse: boolean,
+  rightPowerW: number, rightInUse: boolean,
+  leftVehicleName: string, rightVehicleName: string,
+): Promise<{ left: SessionRecord; right: SessionRecord }> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, 'charge-sessions.json');
+
+  let file: SessionFile = { left: emptySession(), right: emptySession() };
+  if (existsSync(path)) {
+    try { file = JSON.parse(await readFile(path, 'utf-8')) as SessionFile; } catch { /* keep defaults */ }
+  }
+
+  const now = Date.now();
+  const today = localDateStr();
+  const endedSessions: Array<{ side: 'LEFT' | 'RIGHT'; row: ChargeHistoryRow }> = [];
+
+  function step(rec: SessionRecord, side: 'LEFT' | 'RIGHT', vehicleName: string, powerW: number, inUse: boolean): SessionRecord {
+    // Roll over today bucket at local midnight
+    if (rec.todayDate !== today) { rec = { ...rec, todayKwh: 0, todayDate: today }; }
+    // Idle → active: start new session
+    if (inUse && !rec.lastInUse) { rec = { ...rec, sessionKwh: 0, sessionStartedAt: now }; }
+    // Active → idle: log the completed session if it had any energy
+    if (!inUse && rec.lastInUse && rec.sessionKwh > 0.01 && rec.sessionStartedAt > 0) {
+      endedSessions.push({
+        side,
+        row: {
+          side, vehicleName,
+          startedAt: new Date(rec.sessionStartedAt).toISOString(),
+          endedAt:   new Date(now).toISOString(),
+          durationMin: Math.round((now - rec.sessionStartedAt) / 60_000),
+          energyKwh: Math.round(rec.sessionKwh * 100) / 100,
+        },
+      });
+    }
+    // Integrate while in use. Skip on first cycle since restart, or if the
+    // gap is implausibly large (container was down >10 min).
+    if (inUse && rec.lastUpdate > 0 && now - rec.lastUpdate < 10 * 60_000) {
+      const elapsedHours = (now - rec.lastUpdate) / 3_600_000;
+      const kwh = (powerW / 1000) * elapsedHours;
+      rec = { ...rec, sessionKwh: rec.sessionKwh + kwh, todayKwh: rec.todayKwh + kwh };
+    }
+    return { ...rec, lastInUse: inUse, lastUpdate: now };
+  }
+
+  const left  = step(file.left,  'LEFT',  leftVehicleName,  leftPowerW,  leftInUse);
+  const right = step(file.right, 'RIGHT', rightVehicleName, rightPowerW, rightInUse);
+
+  try { await writeFile(path, JSON.stringify({ left, right } satisfies SessionFile)); }
+  catch { /* non-fatal */ }
+
+  for (const { row } of endedSessions) await appendChargeHistory(row);
+
+  return { left, right };
+}
+
 // Persist Rivian's last-known GPS so an offline vehicle keeps its
 // home/away status (mirrors the Tesla preservation in smartFetchTesla).
 async function fetchRivianWithGpsCache(): Promise<RivianVehicleState | null> {
@@ -203,6 +303,16 @@ async function fetchRivianWithGpsCache(): Promise<RivianVehicleState | null> {
 }
 
 export async function GET(req: Request) {
+  try {
+    return await handleGet(req);
+  } catch (e) {
+    console.error('[dashboard] unhandled error:', e);
+    void logError('dashboard', e);
+    return Response.json({ error: 'internal error', detail: String(e) }, { status: 500 });
+  }
+}
+
+async function handleGet(req: Request) {
   const cfg = readConfig();
   const teslaConnected = readTokens() !== null;
   const rivianConnected = hasRivianTokens();
@@ -254,16 +364,32 @@ export async function GET(req: Request) {
     },
   ];
 
+  // Integrate live power into session/today kWh. Appends a row to the history
+  // log when a session ends (transition from active → idle).
+  const leftVehicleName  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.vehicleName  ?? 'Rivian';
+  const rightVehicleName = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.vehicleName ?? 'Tesla';
+  const sessions = teslaConnected
+    ? await updateSessionKwh(
+        wcLeft?.powerW ?? 0,  wcLeft?.vehicleCharging ?? false,
+        wcRight?.powerW ?? 0, wcRight?.vehicleCharging ?? false,
+        leftVehicleName, rightVehicleName,
+      )
+    : { left: { sessionKwh: 0, todayKwh: 0 }, right: { sessionKwh: 0, todayKwh: 0 } };
+
   const wallConnectors: WallConnectorData[] = [
     {
       side: 'LEFT',
-      vehicleName: cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.vehicleName ?? 'Rivian',
+      vehicleName: leftVehicleName,
       vitals: wcLeft,
+      sessionKwh: sessions.left.sessionKwh,
+      todayKwh:   sessions.left.todayKwh,
     },
     {
       side: 'RIGHT',
-      vehicleName: cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.vehicleName ?? 'Tesla',
+      vehicleName: rightVehicleName,
       vitals: wcRight,
+      sessionKwh: sessions.right.sessionKwh,
+      todayKwh:   sessions.right.todayKwh,
     },
   ];
 

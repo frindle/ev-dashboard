@@ -188,11 +188,17 @@ interface LiveStatus {
 let liveStatusCache: { siteId: string; data: LiveStatus; at: number } | null = null;
 
 async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
+  // Serve a fresh-enough cached response without hitting the API at all.
   if (liveStatusCache && liveStatusCache.siteId === energySiteId && Date.now() - liveStatusCache.at < 5000) {
     return liveStatusCache.data;
   }
   const data = await fleetGet<LiveStatus>(`/api/1/energy_sites/${energySiteId}/live_status`);
-  if (!data) return null;
+  if (!data) {
+    // Fresh fetch failed (Tesla hiccup, timeout, etc.). Prefer last-known
+    // over null so the dashboard doesn't blink to 0 kW. The smart-poll's
+    // 30s tick will retry; intermittent failures shouldn't be user-visible.
+    return liveStatusCache?.siteId === energySiteId ? liveStatusCache.data : null;
+  }
   liveStatusCache = { siteId: energySiteId, data, at: Date.now() };
   return data;
 }
