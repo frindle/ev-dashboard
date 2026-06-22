@@ -23,6 +23,7 @@ RUN npm ci --omit=dev --no-audit --no-fund
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apk add --no-cache openssl curl jq
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 
 # Next.js standalone bundle (includes its own node_modules)
@@ -33,6 +34,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # don't conflict with Next.js's bundled modules.
 COPY --from=builder --chown=nextjs:nodejs /app/server ./server
 COPY --from=builder --chown=nextjs:nodejs /app/protos ./protos
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=telemetry-deps --chown=nextjs:nodejs /app/node_modules ./server/node_modules
 
 USER nextjs

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # One-time setup: generate the CA + client cert used for Tesla Fleet Telemetry mTLS.
 #
 # Output files in keys/:
@@ -8,14 +8,14 @@
 #   tesla-client.crt  — Client cert (uploaded to Tesla via Fleet API)
 #
 # Run from the project root:
-#   bash scripts/gen-telemetry-certs.sh
-set -euo pipefail
+#   sh scripts/gen-telemetry-certs.sh
+set -eu
 
 KEYS_DIR="${KEYS_DIR:-$(pwd)/keys}"
 mkdir -p "$KEYS_DIR"
 cd "$KEYS_DIR"
 
-if [[ -f tesla-ca.crt ]]; then
+if [ -f tesla-ca.crt ]; then
   echo "tesla-ca.crt already exists in $KEYS_DIR"
   echo "Delete the existing cert files first if you really want to regenerate."
   exit 1
