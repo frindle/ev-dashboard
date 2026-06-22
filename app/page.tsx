@@ -114,11 +114,13 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
   const range  = s ? Math.round(s.rangeMi)       : 0;
   const odoLabel = s ? Math.round(s.odometer).toLocaleString('en-US') : '—';
   const minutesToFull = s?.minutesToFull ?? 0;
-  const isCharging  = s?.isCharging  ?? false;
-  const isPluggedIn = s?.isPluggedIn ?? false;
-  const isLocked    = s?.isLocked    ?? true;
-  const climateOn   = s?.climateOn   ?? false;
-  const online      = s?.online      ?? false;
+  const isCharging   = s?.isCharging   ?? false;
+  const isPluggedIn  = s?.isPluggedIn  ?? false;
+  const isThrottled  = s?.isThrottled  ?? false;
+  const derateReason = s?.derateReason ?? '';
+  const isLocked     = s?.isLocked     ?? true;
+  const climateOn    = s?.climateOn    ?? false;
+  const online       = s?.online       ?? false;
 
   let badgeLabel: string, badgeAccent: boolean, badgePulse: boolean;
   if (!v.connected)       { badgeLabel = 'DISCONNECTED'; badgeAccent = false; badgePulse = false; }
@@ -158,10 +160,18 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
           <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, color: '#a4afba', letterSpacing: '0.03em' }}>{v.model}</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: badgeAlign as React.CSSProperties['alignItems'], gap: 8, flex: 'none' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: badgeBg, color: badgeColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: '0.06em', padding: '6px 12px', borderRadius: 999 }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: badgeDotColor, animation: badgeDotAnim, flexShrink: 0 }} />
-            {badgeLabel}
-          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: badgeAlign as React.CSSProperties['alignItems'] }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: badgeBg, color: badgeColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: '0.06em', padding: '6px 12px', borderRadius: 999 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: badgeDotColor, animation: badgeDotAnim, flexShrink: 0 }} />
+              {badgeLabel}
+            </span>
+            {isThrottled && isCharging && (
+              <span title={`Charger derate: ${derateReason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(224,181,61,0.15)', color: '#e0b53d', fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', padding: '4px 10px', borderRadius: 999 }}>
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 12, lineHeight: 1 }}>warning</span>
+                THROTTLED · {derateReason.replace(/_/g, ' ').toUpperCase()}
+              </span>
+            )}
+          </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={isTesla ? () => onCommand(isLocked ? 'unlock' : 'lock') : undefined}
