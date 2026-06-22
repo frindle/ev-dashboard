@@ -163,15 +163,42 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
   };
 }
 
-export async function fetchSiteLiveStatus(energySiteId: string): Promise<TeslaSiteState | null> {
-  interface LiveStatus {
-    solar_power?: number;
-    grid_power?: number;
-    battery_power?: number;
-    load_power?: number;
-    wall_charger_power?: number;
+// As of mid-2026 Tesla deprecated /api/1/wall_connectors/{id}/vitals (returns
+// 404). Per-connector data now lives inside the energy site live_status response
+// under wall_connectors[], keyed by DIN like "1457768-02-H--<serial>".
+interface LiveStatusWC {
+  din: string;
+  wall_connector_state?: number;   // 1=in use, 2=idle, observed
+  wall_connector_fault_state?: number;
+  wall_connector_power?: number;   // watts
+  ocpp_status?: number;
+  powershare_session_state?: number;
+}
+interface LiveStatus {
+  solar_power?: number;
+  grid_power?: number;
+  battery_power?: number;
+  load_power?: number;
+  wall_charger_power?: number;
+  wall_connectors?: LiveStatusWC[];
+}
+
+// Module-level cache so fetchSiteLiveStatus and fetchWallConnectorVitals don't
+// each make a separate API call on the same poll cycle. Cached for 5 seconds.
+let liveStatusCache: { siteId: string; data: LiveStatus; at: number } | null = null;
+
+async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
+  if (liveStatusCache && liveStatusCache.siteId === energySiteId && Date.now() - liveStatusCache.at < 5000) {
+    return liveStatusCache.data;
   }
   const data = await fleetGet<LiveStatus>(`/api/1/energy_sites/${energySiteId}/live_status`);
+  if (!data) return null;
+  liveStatusCache = { siteId: energySiteId, data, at: Date.now() };
+  return data;
+}
+
+export async function fetchSiteLiveStatus(energySiteId: string): Promise<TeslaSiteState | null> {
+  const data = await getLiveStatus(energySiteId);
   if (!data) return null;
   return {
     solarPowerW: data.solar_power ?? 0,
@@ -182,27 +209,27 @@ export async function fetchSiteLiveStatus(energySiteId: string): Promise<TeslaSi
   };
 }
 
-export async function fetchWallConnectorVitals(deviceId: string): Promise<WallConnectorVitals | null> {
-  interface Vitals {
-    vehicle_connected?: boolean;
-    contactor_closed?: boolean;
-    current_a_a?: number;
-    current_b_a?: number;
-    input_voltage_v?: number;
-    session_energy_wh?: number;
-  }
-  const data = await fleetGet<Vitals>(`/api/1/wall_connectors/${deviceId}/vitals`);
-  if (!data) return null;
+// Now takes (siteId, serial) since per-connector data comes from live_status
+// matched by DIN suffix. Session energy is no longer exposed in this response —
+// we report 0 for sessionEnergyWh. Current is derived from power / voltage.
+export async function fetchWallConnectorVitals(siteId: string, serial: string): Promise<WallConnectorVitals | null> {
+  if (!serial) return null;
+  const data = await getLiveStatus(siteId);
+  const wc = data?.wall_connectors?.find(w => w.din?.endsWith(`--${serial}`));
+  if (!wc) return null;
 
-  const currentA = (data.current_a_a ?? 0) + (data.current_b_a ?? 0);
-  const voltageV = data.input_voltage_v ?? 240;
+  const powerW = wc.wall_connector_power ?? 0;
+  const voltageV = 240; // US split-phase assumption
+  const currentA = powerW > 0 ? powerW / voltageV : 0;
+  // state: 1 = in use / charging, 2 = idle. Treat any positive draw as charging.
+  const inUse = (wc.wall_connector_state === 1) || powerW > 100;
   return {
-    vehicleConnected: data.vehicle_connected ?? false,
-    vehicleCharging: data.contactor_closed ?? false,
+    vehicleConnected: inUse,
+    vehicleCharging: inUse,
     currentA,
     voltageV,
-    sessionEnergyWh: data.session_energy_wh ?? 0,
-    powerW: currentA * voltageV,
+    sessionEnergyWh: 0,
+    powerW,
     online: true,
   };
 }
