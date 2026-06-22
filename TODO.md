@@ -95,10 +95,45 @@ scope). Telemetry registration excludes `Location` until this is resolved.
 
 ---
 
+## Display hardware decision
+
+iPad works fine if it's healthy (Guided Access + Safari fullscreen, kiosk mode).
+If/when it needs replacing:
+
+- [ ] **Recommended:** Raspberry Pi 4 (4 GB) + 10.1" touch display kit (GeeekPi
+  or ELECROW, ~$180-220 on Amazon). Install FullPageOS — boots straight into
+  a fullscreen Chromium tab pointing at the dashboard. Zero-touch after setup.
+- [ ] Pi Zero / Zero 2 W is **not** powerful enough — Chromium chokes on the
+  dashboard's animated SVGs and gradients with 512 MB RAM
+- [ ] Pi 5 works too but is overkill; Pi 4 is the sweet spot
+
+## Storage layout (optional, when convenient)
+
+- [ ] Mount `CHARGE_HISTORY_DIR` to an Unraid array path so the
+  charge-history.jsonl + charge-sessions.json files live on the array, not
+  the cache pool. Add to docker-compose:
+  ```yaml
+  environment:
+    - CHARGE_HISTORY_DIR=/charge-history
+  volumes:
+    - /mnt/user/<your-array-path>:/charge-history
+  ```
+  Without this, history files default to KEYS_DIR (currently appdata/keys).
+
 ## Future / nice-to-have
 
-- **ratgdo** integration when the hardware is installed (replaces MyQ)
-- **Camera stream URL** in admin once camera is set up — dashboard already
+- [ ] **ratgdo** integration when the hardware is installed (replaces MyQ).
+  See [project_ev_dashboard](../README.md) — server-side stubs are intact
+  so the dashboard re-enables the garage button automatically once a working
+  source is wired up.
+- [ ] **Camera stream URL** in admin once camera is set up — dashboard already
   reads `data.streamUrl` from config and renders it in the modal
-- **Rivian commands** (lock/unlock/climate) — requires BLE-paired phone
-  key pair, similar to Tesla
+- [ ] **Rivian commands** (lock/unlock/climate) — requires BLE-paired phone
+  key pair, similar to Tesla's pairing requirement
+- [ ] **Refine Rivian throttle reasons** once we see real `chargerDerateStatus`
+  values in production — currently displayed verbatim with underscores
+  replaced by spaces. May want to map specific reason codes to friendly text
+  (e.g. `battery_too_cold` → `Battery cold`)
+- [ ] **Wall connector "in use" detection** — currently uses
+  `state===1 || power>100W`. If we see false positives/negatives once Tesla
+  is also charging, refine the heuristic
