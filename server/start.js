@@ -11,12 +11,18 @@ const PROXY_PORT = process.env.PROXY_PORT || '4443';
 const children = [];
 
 function launch(name, command, args, opts = {}) {
+  const critical = opts.critical !== false; // default: process death = container death
+  delete opts.critical;
   console.log(`[supervisor] starting ${name}: ${command} ${args.join(' ')}`);
   const proc = spawn(command, args, { stdio: 'inherit', ...opts });
   proc.on('exit', (code, signal) => {
     console.error(`[supervisor] ${name} exited (code=${code} signal=${signal})`);
-    children.forEach(c => { if (c !== proc) c.kill('SIGTERM'); });
-    process.exit(code === 0 ? 1 : (code ?? 1));
+    if (critical) {
+      children.forEach(c => { if (c !== proc) c.kill('SIGTERM'); });
+      process.exit(code === 0 ? 1 : (code ?? 1));
+    } else {
+      console.warn(`[supervisor] ${name} is non-critical, not restarting container`);
+    }
   });
   children.push(proc);
   return proc;
@@ -45,7 +51,7 @@ if (fs.existsSync(partnerKey)) {
     '-port', PROXY_PORT,
     '-host', '127.0.0.1',
     '-verbose',
-  ]);
+  ], { critical: false });
 } else {
   console.warn(`[supervisor] ${partnerKey} not found; skipping tesla-http-proxy`);
 }
