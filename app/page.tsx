@@ -248,9 +248,13 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
   const leftPct  = `${Math.round((leftAmps  / CIRCUIT_AMPS) * 100)}%`;
   const rightPct = `${Math.round((rightAmps / CIRCUIT_AMPS) * 100)}%`;
 
-  const leftSessionKwh  = (left?.vitals?.sessionEnergyWh  ?? 0) / 1000;
-  const rightSessionKwh = (right?.vitals?.sessionEnergyWh ?? 0) / 1000;
-  const todayKwh = leftSessionKwh + rightSessionKwh;
+  // session + today kWh now come from server-side integration (Tesla stopped
+  // exposing session_energy_wh on the new live_status endpoint).
+  const leftSessionKwh  = left?.sessionKwh  ?? 0;
+  const rightSessionKwh = right?.sessionKwh ?? 0;
+  const leftTodayKwh    = left?.todayKwh    ?? 0;
+  const rightTodayKwh   = right?.todayKwh   ?? 0;
+  const todayKwh = leftTodayKwh + rightTodayKwh;
 
   const statusLabel = activeCount === 0 ? 'IDLE — NOTHING CHARGING'
     : activeCount === 2 ? 'BOTH CHARGING — WITHIN CIRCUIT LIMIT'
@@ -263,8 +267,8 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
   const LEFT_COLOR  = '#9aa5b1';
   const RIGHT_COLOR = '#5b8def';
   const sides = [
-    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh,  color: LEFT_COLOR  },
-    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh, color: RIGHT_COLOR },
+    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh,  today: leftTodayKwh,  color: LEFT_COLOR  },
+    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh, today: rightTodayKwh, color: RIGHT_COLOR },
   ];
 
   return (
@@ -331,11 +335,11 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
               <div style={{ display: 'flex', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 12, marginTop: 'auto' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
                   <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>SESSION</span>
-                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.inUse ? side.session.toFixed(1) + ' kWh' : '—'}</span>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.session > 0 ? side.session.toFixed(1) + ' kWh' : '—'}</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
                   <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>TODAY</span>
-                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.session.toFixed(1)} kWh</span>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.today.toFixed(1)} kWh</span>
                 </div>
               </div>
             </div>
@@ -431,6 +435,26 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, []);
 
+  // Forward any uncaught client error to the server so it lands in keys/errors.log.
+  // Without this, an iPad kiosk error is invisible — no devtools, no console access.
+  useEffect(() => {
+    const report = (source: string, message: string, stack?: string) => {
+      fetch('/api/errors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, message, stack, extra: { ua: navigator.userAgent, url: location.href } }),
+      }).catch(() => null);
+    };
+    const onError = (e: ErrorEvent) => report('client.window', e.message, e.error?.stack);
+    const onRejection = (e: PromiseRejectionEvent) => report('client.promise', String(e.reason), e.reason?.stack);
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
+
   const fetchData = useCallback(async (fresh = false) => {
     try {
       const res = await fetch(`/api/dashboard${fresh ? '?fresh=1' : ''}`, { cache: 'no-store' });
@@ -483,8 +507,8 @@ export default function Dashboard() {
     { id: 'tesla',  name: 'Tesla',     model: 'Model 3',     chargerSide: 'RIGHT', state: null, connected: false, atHome: null },
   ];
   const wallConnectors: WallConnectorData[] = data?.wallConnectors ?? [
-    { side: 'LEFT',  vehicleName: 'Midknight', vitals: null },
-    { side: 'RIGHT', vehicleName: 'Tesla',     vitals: null },
+    { side: 'LEFT',  vehicleName: 'Midknight', vitals: null, sessionKwh: 0, todayKwh: 0 },
+    { side: 'RIGHT', vehicleName: 'Tesla',     vitals: null, sessionKwh: 0, todayKwh: 0 },
   ];
 
   // Header values
