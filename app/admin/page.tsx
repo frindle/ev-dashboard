@@ -623,6 +623,76 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* ── Home Location ── */}
+      <div className="admin-section">
+        <div className="admin-section-header">
+          <div className="admin-section-title">
+            <div className={`status-dot ${config.home.lat !== null && config.home.lon !== null ? 'connected' : 'disconnected'}`} />
+            Home Location
+          </div>
+        </div>
+        <div className="admin-section-body">
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">Latitude</label>
+              <input
+                className="form-input"
+                type="number"
+                step="0.000001"
+                value={config.home.lat ?? ''}
+                onChange={e => update('home', { lat: e.target.value ? parseFloat(e.target.value) : null })}
+                placeholder="e.g. 33.123456"
+              />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Longitude</label>
+              <input
+                className="form-input"
+                type="number"
+                step="0.000001"
+                value={config.home.lon ?? ''}
+                onChange={e => update('home', { lon: e.target.value ? parseFloat(e.target.value) : null })}
+                placeholder="e.g. -84.123456"
+              />
+            </div>
+          </div>
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">Home Radius (meters)</label>
+              <input
+                className="form-input"
+                type="number"
+                step="10"
+                min="25"
+                value={config.home.radiusMeters}
+                onChange={e => update('home', { radiusMeters: e.target.value ? parseInt(e.target.value, 10) : 150 })}
+              />
+            </div>
+            <div className="form-row" style={{ justifyContent: 'flex-end' }}>
+              <label className="form-label">&nbsp;</label>
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  if (!navigator.geolocation) { alert('Geolocation not supported by this browser'); return; }
+                  navigator.geolocation.getCurrentPosition(
+                    pos => update('home', { lat: pos.coords.latitude, lon: pos.coords.longitude }),
+                    err => alert(`Could not get location: ${err.message}`),
+                    { enableHighAccuracy: true, timeout: 10000 },
+                  );
+                }}
+              >
+                <span className="icon" style={{ fontSize: 16 }}>my_location</span>
+                Use current location
+              </button>
+            </div>
+          </div>
+          <div className="form-hint">
+            Used to detect whether a vehicle is home. A vehicle within the radius counts as &quot;home&quot;.
+            150m covers most driveways/garages. If unset, the dashboard falls back to using each vehicle&apos;s online status.
+          </div>
+        </div>
+      </div>
+
       {/* Save bar */}
       <div className="save-bar">
         {saved && (

@@ -48,6 +48,11 @@ export interface AppConfig {
     lat: number | null;
     lon: number | null;
   };
+  home: {
+    lat: number | null;
+    lon: number | null;
+    radiusMeters: number; // how close counts as "home"
+  };
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -92,6 +97,11 @@ const DEFAULT_CONFIG: AppConfig = {
     location: 'Halton Place',
     lat: null,
     lon: null,
+  },
+  home: {
+    lat: null,
+    lon: null,
+    radiusMeters: 150,
   },
 };
 
