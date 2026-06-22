@@ -18,6 +18,8 @@ export interface TeslaVehicleState {
   chargerActualCurrentA: number;
   chargerVoltage: number;
   online: boolean;
+  lat: number | null;
+  lon: number | null;
 }
 
 export interface TeslaSiteState {
@@ -126,14 +128,16 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     };
     vehicle_state?: { locked?: boolean; odometer?: number };
     climate_state?: { is_climate_on?: boolean };
+    drive_state?: { latitude?: number; longitude?: number };
   }
 
-  const data = await fleetGet<VehicleData>(`/api/1/vehicles/${vin}/vehicle_data?endpoints=charge_state%3Bvehicle_state%3Bclimate_state`);
+  const data = await fleetGet<VehicleData>(`/api/1/vehicles/${vin}/vehicle_data?endpoints=charge_state%3Bvehicle_state%3Bclimate_state%3Bdrive_state%3Blocation_data`);
   if (!data) return null;
 
   const cs = data.charge_state ?? {};
   const vs = data.vehicle_state ?? {};
   const cls = data.climate_state ?? {};
+  const ds = data.drive_state ?? {};
 
   return {
     chargePercent: cs.battery_level ?? 0,
@@ -150,6 +154,8 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     chargerActualCurrentA: cs.charger_actual_current ?? 0,
     chargerVoltage: cs.charger_voltage ?? 0,
     online: data.state === 'online',
+    lat: ds.latitude ?? null,
+    lon: ds.longitude ?? null,
   };
 }
 
