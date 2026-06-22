@@ -342,8 +342,8 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
 }
 
 // ── Camera Modal ──────────────────────────────────────────────────────────────
-function CameraModal({ streamUrl, garageDoorOpen, onClose, onToggleGarage }: {
-  streamUrl: string; garageDoorOpen: boolean | null;
+function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onToggleGarage }: {
+  streamUrl: string; garageConnected: boolean; garageDoorOpen: boolean | null;
   onClose: () => void; onToggleGarage: () => void;
 }) {
   const key = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
@@ -384,19 +384,21 @@ function CameraModal({ streamUrl, garageDoorOpen, onClose, onToggleGarage }: {
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#e2685f', animation: 'evpulse 1.4s ease-in-out infinite' }} />LIVE
           </span>
         </div>
-        {/* Footer - garage door */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 24, color: dm.color }}>{dm.icon}</span>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>MYQ · GARAGE DOOR</span>
-              <span style={{ fontSize: 15, fontWeight: 600, color: dm.color }}>{dm.label}</span>
+        {/* Footer - garage door (only when connected) */}
+        {garageConnected && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 24, color: dm.color }}>{dm.icon}</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>GARAGE DOOR</span>
+                <span style={{ fontSize: 15, fontWeight: 600, color: dm.color }}>{dm.label}</span>
+              </div>
             </div>
+            <button onClick={onToggleGarage} style={{ appearance: 'none', cursor: 'pointer', padding: '12px 22px', borderRadius: 12, background: dm.bg, border: '1px solid rgba(255,255,255,0.08)', color: dm.color, fontFamily: "'Space Grotesk',sans-serif", fontSize: 14, fontWeight: 600 }}>
+              {dm.action}
+            </button>
           </div>
-          <button onClick={onToggleGarage} style={{ appearance: 'none', cursor: 'pointer', padding: '12px 22px', borderRadius: 12, background: dm.bg, border: '1px solid rgba(255,255,255,0.08)', color: dm.color, fontFamily: "'Space Grotesk',sans-serif", fontSize: 14, fontWeight: 600 }}>
-            {dm.action}
-          </button>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -498,6 +500,7 @@ export default function Dashboard() {
   const vehiclesHome = vehicles.filter(v => v.connected && v.state?.online).length;
 
   // Door
+  const garageConnected = data?.garageConnected ?? false;
   const garageDoorOpen = data?.garageDoorOpen ?? null;
   const doorKey = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
   const doorDm = {
@@ -515,7 +518,7 @@ export default function Dashboard() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, flex: 'none' }}>
         {/* Left: title */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: '0.24em', color: '#7d8893' }}>HOME · GARAGE</span>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: '0.24em', color: '#7d8893' }}>HOME · ENERGY</span>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>Energy</h1>
           <span style={{ fontSize: 12, color: '#a4afba' }}>{dateStr} · {timeStr}</span>
         </div>
@@ -532,22 +535,26 @@ export default function Dashboard() {
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: feedColor, animation: feedPulse ? 'evpulse 1.8s ease-in-out infinite' : 'none', flexShrink: 0 }} />
               {feedLabel}
             </span>
-            <button
-              onClick={async () => {
-                const command = garageDoorOpen ? 'close' : 'open';
-                await fetch('/api/myq/door', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
-                setTimeout(fetchData, 3000);
-              }}
-              title={garageDoorOpen ? 'Close garage' : 'Open garage'}
-              style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, background: doorDm.bg, color: doorDm.color, border: '1px solid rgba(255,255,255,0.06)', fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 15, lineHeight: 1 }}>{doorDm.icon}</span>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: doorDm.color, flexShrink: 0 }} />
-              GARAGE {doorDm.label}
-            </button>
-            <button onClick={() => setShowCamera(true)} title="Garage camera"
-              style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#d3dae1', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: 0 }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>videocam</span>
-            </button>
+            {garageConnected && (
+              <button
+                onClick={async () => {
+                  const command = garageDoorOpen ? 'close' : 'open';
+                  await fetch('/api/myq/door', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
+                  setTimeout(fetchData, 3000);
+                }}
+                title={garageDoorOpen ? 'Close garage' : 'Open garage'}
+                style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, background: doorDm.bg, color: doorDm.color, border: '1px solid rgba(255,255,255,0.06)', fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 15, lineHeight: 1 }}>{doorDm.icon}</span>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: doorDm.color, flexShrink: 0 }} />
+                GARAGE {doorDm.label}
+              </button>
+            )}
+            {streamUrl && (
+              <button onClick={() => setShowCamera(true)} title="Garage camera"
+                style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#d3dae1', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: 0 }}>
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>videocam</span>
+              </button>
+            )}
             <a href="/admin" title="Settings"
               style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#7d8893', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, textDecoration: 'none' }}>
               <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>settings</span>
@@ -581,6 +588,7 @@ export default function Dashboard() {
       {showCamera && (
         <CameraModal
           streamUrl={streamUrl}
+          garageConnected={garageConnected}
           garageDoorOpen={garageDoorOpen}
           onClose={() => setShowCamera(false)}
           onToggleGarage={async () => {

@@ -31,9 +31,6 @@ export default function AdminPage() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [teslaConnected, setTeslaConnected] = useState(false);
   const [rivianConnected, setRivianConnected] = useState(false);
-  const [myqConnected, setMyqConnected] = useState(false);
-  const [myqLoading, setMyqLoading] = useState(false);
-  const [myqError, setMyqError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [wcDiscovered, setWcDiscovered] = useState<Array<{ serial: string; deviceId: string }>>([]);
@@ -69,11 +66,10 @@ export default function AdminPage() {
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
-      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean; myqConnected: boolean }) => {
+      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean }) => {
         setConfig(d.config);
         setTeslaConnected(d.teslaConnected);
         setRivianConnected(d.rivianConnected);
-        setMyqConnected(d.myqConnected);
         setRivianEmail(d.config.vehicles.rivian.email);
         if (d.teslaConnected) fetchWallConnectors();
       });
@@ -194,29 +190,6 @@ export default function AdminPage() {
       setRivianError(String(e));
     } finally {
       setRivianLoading(false);
-    }
-  }
-
-  async function connectMyQ() {
-    if (!config?.garage.email || !config.garage.password) return;
-    setMyqLoading(true);
-    setMyqError('');
-    try {
-      const res = await fetch('/api/myq/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: config.garage.email, password: config.garage.password }),
-      });
-      const data = await res.json() as { connected?: boolean; error?: string };
-      if (!res.ok || data.error) {
-        setMyqError(data.error ?? 'Login failed');
-      } else {
-        setMyqConnected(true);
-      }
-    } catch (e) {
-      setMyqError(String(e));
-    } finally {
-      setMyqLoading(false);
     }
   }
 
@@ -541,61 +514,20 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* ── MyQ Garage ── */}
+      {/* ── Garage Door (planned: ratgdo) ── */}
       <div className="admin-section">
         <div className="admin-section-header">
           <div className="admin-section-title">
-            <div className={`status-dot ${myqConnected ? 'connected' : 'disconnected'}`} />
-            MyQ Garage Door
+            <div className="status-dot disconnected" />
+            Garage Door
           </div>
-          {myqConnected && <span style={{ fontSize: 12, color: '#34e07a' }}>✓ Connected</span>}
+          <span style={{ fontSize: 12, color: '#a4afba' }}>Planned: ratgdo</span>
         </div>
         <div className="admin-section-body">
-          <div className="form-row-2">
-            <div className="form-row">
-              <label className="form-label">MyQ Email</label>
-              <input
-                className="form-input"
-                type="email"
-                value={config.garage.email}
-                onChange={e => update('garage', { email: e.target.value })}
-                placeholder="you@example.com"
-              />
-            </div>
-            <div className="form-row">
-              <label className="form-label">MyQ Password</label>
-              <input
-                className="form-input"
-                type="password"
-                value={config.garage.password}
-                onChange={e => update('garage', { password: e.target.value })}
-                placeholder="••••••••"
-              />
-            </div>
-          </div>
-          <div className="form-row">
-            <label className="form-label">Device Serial</label>
-            <input
-              className="form-input"
-              value={config.garage.deviceSerial}
-              onChange={e => update('garage', { deviceSerial: e.target.value })}
-              placeholder="CG0DD..."
-            />
-            <span className="form-hint">Find in MyQ app → Device Info. Save config first, then connect.</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button
-              className="btn-primary"
-              onClick={connectMyQ}
-              disabled={myqLoading || !config.garage.email || !config.garage.password}
-            >
-              <span className="icon" style={{ fontSize: 16 }}>{myqLoading ? 'sync' : 'garage'}</span>
-              {myqLoading ? 'Connecting…' : myqConnected ? 'Re-connect MyQ' : 'Connect MyQ'}
-            </button>
-            {myqError && <span style={{ fontSize: 12, color: '#e05555' }}>{myqError}</span>}
-          </div>
           <div className="form-hint">
-            Uses the MyQ Android app API. Credentials are not saved — only OAuth tokens are stored in the keys/ volume.
+            MyQ integration was removed — Chamberlain now blocks third-party API access (401.122).
+            Future support: <strong>ratgdo</strong> (local WiFi board, ~$30) for direct control.
+            Until installed, the dashboard hides the garage button.
           </div>
         </div>
       </div>
