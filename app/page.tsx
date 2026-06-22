@@ -465,8 +465,8 @@ export default function Dashboard() {
   }
 
   const vehicles: VehicleData[] = data?.vehicles ?? [
-    { id: 'rivian', name: 'Midknight', model: 'Rivian R1S',  chargerSide: 'LEFT',  state: null, connected: false },
-    { id: 'tesla',  name: 'Tesla',     model: 'Model 3',     chargerSide: 'RIGHT', state: null, connected: false },
+    { id: 'rivian', name: 'Midknight', model: 'Rivian R1S',  chargerSide: 'LEFT',  state: null, connected: false, atHome: null },
+    { id: 'tesla',  name: 'Tesla',     model: 'Model 3',     chargerSide: 'RIGHT', state: null, connected: false, atHome: null },
   ];
   const wallConnectors: WallConnectorData[] = data?.wallConnectors ?? [
     { side: 'LEFT',  vehicleName: 'Midknight', vitals: null },
@@ -497,7 +497,9 @@ export default function Dashboard() {
   const solarKw = (solarPowerW / 1000).toFixed(1);
   const solarOn = solarPowerW > 100; // only show if meaningfully generating
   const inUseCount = (leftWC?.vitals?.vehicleCharging ? 1 : 0) + (rightWC?.vitals?.vehicleCharging ? 1 : 0);
-  const vehiclesHome = vehicles.filter(v => v.connected && v.state?.online).length;
+  const vehiclesHome = vehicles.filter(v =>
+    v.connected && (v.atHome === true || (v.atHome === null && v.state?.online))
+  ).length;
 
   // Door
   const garageConnected = data?.garageConnected ?? false;

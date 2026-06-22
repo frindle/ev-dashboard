@@ -33,6 +33,8 @@ export interface RivianVehicleState {
   addedRangeMi: number;       // not reported by Rivian API — always 0
   minutesToFull: number;      // timeToEndOfCharge.value
   online: boolean;
+  lat: number | null;         // gnssLocation.latitude
+  lon: number | null;         // gnssLocation.longitude
 }
 
 // ── Token storage ─────────────────────────────────────────────────────────────
@@ -222,6 +224,7 @@ query GetVehicleState($vehicleID: String!) {
     doorFrontRightLocked { timeStamp value }
     cabinPreconditioningStatus { timeStamp value }
     chargePortState { timeStamp value }
+    gnssLocation { timeStamp latitude longitude }
   }
 }`;
 
@@ -237,6 +240,7 @@ interface RawVehicleState {
   vehicleMileage: { value: number } | null;
   doorFrontLeftLocked: { value: string } | null;
   cabinPreconditioningStatus: { value: string } | null;
+  gnssLocation: { latitude: number; longitude: number } | null;
 }
 
 function authHeaders(t: RivianTokens): Record<string, string> {
@@ -286,6 +290,8 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       chargeRateMph: 0,
       addedRangeMi: 0,
       online: vs.cloudConnection?.isOnline ?? false,
+      lat: vs.gnssLocation?.latitude ?? null,
+      lon: vs.gnssLocation?.longitude ?? null,
     };
   } catch {
     return null;

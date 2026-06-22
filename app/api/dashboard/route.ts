@@ -21,6 +21,18 @@ export interface VehicleData {
   chargerSide: 'LEFT' | 'RIGHT';
   state: TeslaVehicleState | RivianVehicleState | null;
   connected: boolean;
+  atHome: boolean | null; // true/false when GPS known, null when unknown
+}
+
+// Haversine distance in meters
+function distanceMeters(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6371000;
+  const φ1 = aLat * Math.PI / 180;
+  const φ2 = bLat * Math.PI / 180;
+  const Δφ = (bLat - aLat) * Math.PI / 180;
+  const Δλ = (bLon - aLon) * Math.PI / 180;
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 export interface WallConnectorData {
@@ -109,6 +121,12 @@ export async function GET() {
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
 
+  function computeAtHome(lat: number | null | undefined, lon: number | null | undefined): boolean | null {
+    if (cfg.home.lat === null || cfg.home.lon === null) return null;
+    if (lat === null || lat === undefined || lon === null || lon === undefined) return null;
+    return distanceMeters(lat, lon, cfg.home.lat, cfg.home.lon) <= cfg.home.radiusMeters;
+  }
+
   const vehicles: VehicleData[] = [
     {
       id: 'rivian',
@@ -117,6 +135,7 @@ export async function GET() {
       chargerSide: cfg.vehicles.rivian.chargerSide,
       state: rivianState,
       connected: rivianConnected,
+      atHome: computeAtHome(rivianState?.lat, rivianState?.lon),
     },
     {
       id: 'tesla',
@@ -125,6 +144,7 @@ export async function GET() {
       chargerSide: cfg.vehicles.tesla.chargerSide,
       state: teslaState,
       connected: teslaConnected,
+      atHome: null, // Tesla GPS not in current state query
     },
   ];
 
