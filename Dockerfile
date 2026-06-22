@@ -3,7 +3,7 @@ FROM node:20-alpine AS base
 # Build Tesla's vehicle-command HTTP proxy from source. Required for any
 # Fleet API endpoint that demands a signed request (fleet_telemetry_config,
 # vehicle commands on modern firmware, etc.).
-FROM golang:1.22-alpine AS proxy-builder
+FROM golang:1.23-alpine AS proxy-builder
 RUN apk add --no-cache git
 WORKDIR /build
 RUN git clone --depth 1 https://github.com/teslamotors/vehicle-command.git .
