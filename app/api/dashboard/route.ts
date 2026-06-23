@@ -339,11 +339,17 @@ async function handleGet(req: Request) {
 
   function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined): boolean | null {
     if (cfg.home.lat === null || cfg.home.lon === null) {
+      // Config-level issue — log once-per-request so the user knows the
+      // dashboard can never compute atHome until home coords are set.
       console.log(`[home] ${label}: no home coords configured — atHome=null`);
       return null;
     }
     if (lat === null || lat === undefined || lon === null || lon === undefined) {
-      console.log(`[home] ${label}: no vehicle GPS (lat=${lat}, lon=${lon}) — atHome=null`);
+      // Vehicle GPS unavailable AND no cached fallback survived. Silent —
+      // the smartFetchTesla / fetchRivianWithGpsCache helpers already
+      // preserve last-known lat/lon across polls; if we're here, the
+      // vehicle has never reported a non-null GPS and there's nothing
+      // useful to log on every request.
       return null;
     }
     const dist = distanceMeters(lat, lon, cfg.home.lat, cfg.home.lon);
