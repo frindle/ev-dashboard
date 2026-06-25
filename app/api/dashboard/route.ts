@@ -348,11 +348,18 @@ async function handleGet(req: Request) {
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
 
+  // Resolve "home" coordinates. If the admin hasn't filled out the home
+  // section, fall back to the weather location — for most setups that's
+  // literally where the user lives (your "weather" lat/lon is your house's
+  // postcode), and requiring two separate inputs for the same physical
+  // location just leaves home-detection silently broken.
+  const homeLat = cfg.home.lat ?? cfg.weather.lat ?? null;
+  const homeLon = cfg.home.lon ?? cfg.weather.lon ?? null;
+  const homeRadius = cfg.home.radiusMeters > 0 ? cfg.home.radiusMeters : 150;
+
   function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined): boolean | null {
-    if (cfg.home.lat === null || cfg.home.lon === null) {
-      // Log once-per-process so we don't fill the log with the same
-      // message every poll. The user only needs to be told once that
-      // home coords need to be set in the admin.
+    if (homeLat === null || homeLon === null) {
+      // Neither home coords nor weather location set — nothing to compute against.
       noHomeCoordsWarned ||= warnNoHomeOnce();
       return null;
     }
@@ -364,9 +371,9 @@ async function handleGet(req: Request) {
       // useful to log on every request.
       return null;
     }
-    const dist = distanceMeters(lat, lon, cfg.home.lat, cfg.home.lon);
-    const atHome = dist <= cfg.home.radiusMeters;
-    console.log(`[home] ${label}: lat=${lat.toFixed(5)},lon=${lon.toFixed(5)} home=${cfg.home.lat.toFixed(5)},${cfg.home.lon.toFixed(5)} dist=${dist.toFixed(0)}m radius=${cfg.home.radiusMeters}m → atHome=${atHome}`);
+    const dist = distanceMeters(lat, lon, homeLat, homeLon);
+    const atHome = dist <= homeRadius;
+    console.log(`[home] ${label}: lat=${lat.toFixed(5)},lon=${lon.toFixed(5)} home=${homeLat.toFixed(5)},${homeLon.toFixed(5)} dist=${dist.toFixed(0)}m radius=${homeRadius}m → atHome=${atHome}`);
     return atHome;
   }
 
