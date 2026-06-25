@@ -239,12 +239,13 @@ interface RawVehicleState {
   batteryLimit: { value: number } | null;
   timeToEndOfCharge: { value: number } | null;
   chargerState: { value: string; timeStamp?: string } | null;
-  chargerStatus: { value: string } | null;
+  chargerStatus: { value: string; timeStamp?: string } | null;
   chargerDerateStatus: { value: string } | null;
-  powerState: { value: string } | null;
+  powerState: { value: string; timeStamp?: string } | null;
   vehicleMileage: { value: number } | null;
   doorFrontLeftLocked: { value: string } | null;
   cabinPreconditioningStatus: { value: string } | null;
+  chargePortState: { value: string; timeStamp?: string } | null;
   gnssLocation: { latitude: number; longitude: number } | null;
 }
 
@@ -273,28 +274,65 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const vs = data.vehicleState;
     const chargingStateRaw = vs.chargerState?.value ?? 'disconnected';
     const chargerStateTs = vs.chargerState?.timeStamp;
-    // Rivian's API holds the last-known chargerState forever — it
-    // doesn't push an "unplugged" event when the user pulls the cable.
-    // If the timestamp is more than this threshold old, treat the
-    // value as stale and assume the car is no longer plugged in. The
-    // dashboard polls every few seconds, so anything older than ~15
-    // minutes means the car was either disconnected without
-    // reporting it (the common case) or completely out of contact
-    // (we'd see online=false separately).
+    const chargerStatusRaw = vs.chargerStatus?.value ?? '';
+    const chargerStatusTs = vs.chargerStatus?.timeStamp;
+    const chargePortRaw = vs.chargePortState?.value ?? '';
+    const chargePortTs = vs.chargePortState?.timeStamp;
+    const powerStateRaw = vs.powerState?.value ?? '';
+    const powerStateTs = vs.powerState?.timeStamp;
+
+    // Log every charge-related field with its timestamp so we can see
+    // which ones Rivian actually keeps fresh in the wild. The Rivian
+    // mobile app shows correct plug status while our parsing was lying
+    // — there's a fresher source somewhere; this log narrows it down.
+    console.log(
+      `[rivian] chargerState="${chargingStateRaw}"@${chargerStateTs ?? '?'} ` +
+      `chargerStatus="${chargerStatusRaw}"@${chargerStatusTs ?? '?'} ` +
+      `chargePortState="${chargePortRaw}"@${chargePortTs ?? '?'} ` +
+      `powerState="${powerStateRaw}"@${powerStateTs ?? '?'} ` +
+      `online=${vs.cloudConnection?.isOnline ?? '?'}`
+    );
+
+    // Staleness threshold for the chargerState (legacy logic). Once we
+    // confirm chargePortState is fresh and behaves correctly, this can
+    // be replaced with a direct chargePortState read.
     const STALE_MS = 15 * 60 * 1000;
     const chargerStateStale = chargerStateTs
       ? (Date.now() - new Date(chargerStateTs).getTime()) > STALE_MS
       : false;
-    console.log(`[rivian] chargerState="${chargingStateRaw}" ts=${chargerStateTs ?? '?'} stale=${chargerStateStale} online=${vs.cloudConnection?.isOnline ?? '?'}`);
+
+    // Prefer chargePortState as the source of truth when it has a fresh
+    // timestamp. Rivian seems to push port-open / port-closed events
+    // promptly (vs chargerState which only updates on charging cycle
+    // transitions). Values seen so far: open, closed, in_use. Treat
+    // anything other than "closed" / empty as plugged in.
+    const portFresh = chargePortTs
+      ? (Date.now() - new Date(chargePortTs).getTime()) < STALE_MS
+      : false;
+    const portSaysPluggedIn = chargePortRaw !== '' &&
+      !/^(closed|disconnected|empty)$/i.test(chargePortRaw);
+    const portSaysUnplugged = chargePortRaw !== '' &&
+      /^(closed|disconnected|empty)$/i.test(chargePortRaw);
 
     // Only treat as charging when the contactor is actually closed and power is flowing
     const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active', 'charging_ac_1ph', 'charging_ac_3ph']);
     const isCharging = !chargerStateStale && CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase());
-    // Anything other than "disconnected" means the plug is in the port.
-    // Values seen: disconnected, not_charging, charging_ready, charging,
-    // charging_active, charge_complete. Force-false when the chargerState
-    // reading is stale (see comment above).
-    const isPluggedIn = !chargerStateStale && chargingStateRaw.toLowerCase() !== 'disconnected' && chargingStateRaw !== '';
+
+    // isPluggedIn resolution order:
+    //   1. Fresh chargePortState says unplugged → false (most reliable)
+    //   2. Fresh chargePortState says plugged → true
+    //   3. Fall back to chargerState only if it's not stale
+    //   4. Default false (don't lie about plug status)
+    let isPluggedIn: boolean;
+    if (portFresh && portSaysUnplugged) {
+      isPluggedIn = false;
+    } else if (portFresh && portSaysPluggedIn) {
+      isPluggedIn = true;
+    } else if (!chargerStateStale) {
+      isPluggedIn = chargingStateRaw.toLowerCase() !== 'disconnected' && chargingStateRaw !== '';
+    } else {
+      isPluggedIn = false;
+    }
 
     // Rivian charger derate (throttling). Treat anything that's not empty
     // / "no_derate" / "none" / "inactive" as throttled. Specific reason
