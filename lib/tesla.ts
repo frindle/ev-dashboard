@@ -143,7 +143,14 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     drive_state?: { latitude?: number; longitude?: number };
   }
 
-  const data = await fleetGet<VehicleData>(`/api/1/vehicles/${vin}/vehicle_data?endpoints=charge_state%3Bvehicle_state%3Bclimate_state%3Bdrive_state%3Blocation_data`);
+  // `location_data` (and drive_state's latitude/longitude) require the
+  // vehicle_location scope. Tesla currently refuses to grant that scope
+  // on our developer app despite the portal showing it checked, so
+  // requesting it 403s the entire call. Drop location_data so the rest
+  // of vehicle_data (charge / vehicle / climate state) comes through.
+  // Tesla at-home detection has to come via Fleet Telemetry once the
+  // scope ticket clears and BLE pairing is done at the car.
+  const data = await fleetGet<VehicleData>(`/api/1/vehicles/${vin}/vehicle_data?endpoints=charge_state%3Bvehicle_state%3Bclimate_state`);
   if (!data) return null;
 
   const cs = data.charge_state ?? {};
