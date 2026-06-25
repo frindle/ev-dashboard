@@ -163,6 +163,11 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
 
   const fresh = await fetchVehicleState(vin);
   if (fresh) {
+    // Track whether the lat/lon in the returned object came from this
+    // poll vs was restored from the cache. atHome detection should only
+    // trust fresh GPS — cached coords get stale the moment the car
+    // drives off and Tesla stops reporting (sleep / offline).
+    const freshGpsFromPoll = fresh.lat !== null && fresh.lon !== null;
     // Tesla returns a stripped response when the car is asleep — missing
     // fields fall back to defaults in fetchVehicleState (chargeLimit→80,
     // chargePercent→0, lat/lon→null, etc.) which silently overwrite the
@@ -185,9 +190,13 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     try {
       await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), source: 'poll' } satisfies TeslaCache));
     } catch { /* non-fatal */ }
+    // Mutate-attach so the caller can tell what happened. (Avoids changing
+    // the public return type while still threading the flag through.)
+    (fresh as TeslaVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
     return fresh;
   }
-  // Fetch failed — fall back to cached if we have it so the UI doesn't go blank
+  // Fetch failed — fall back to cached if we have it so the UI doesn't go blank.
+  if (cache?.state) (cache.state as TeslaVehicleState & { _gpsFresh?: boolean })._gpsFresh = false;
   return cache?.state ?? null;
 }
 
@@ -303,13 +312,15 @@ async function fetchRivianWithGpsCache(): Promise<RivianVehicleState | null> {
   const fresh = await fetchRivianVehicleState();
   if (!fresh) return null;
 
+  const freshGpsFromPoll = fresh.lat !== null && fresh.lon !== null;
   if (fresh.lat === null && cachedGps.lat !== null) fresh.lat = cachedGps.lat;
   if (fresh.lon === null && cachedGps.lon !== null) fresh.lon = cachedGps.lon;
 
-  if (fresh.lat !== null && fresh.lon !== null) {
+  if (freshGpsFromPoll) {
     try { await writeFile(path, JSON.stringify({ lat: fresh.lat, lon: fresh.lon })); }
     catch { /* non-fatal */ }
   }
+  (fresh as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
   return fresh;
 }
 
@@ -357,18 +368,20 @@ async function handleGet(req: Request) {
   const homeLon = cfg.home.lon ?? cfg.weather.lon ?? null;
   const homeRadius = cfg.home.radiusMeters > 0 ? cfg.home.radiusMeters : 150;
 
-  function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined): boolean | null {
+  function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined, gpsFresh: boolean): boolean | null {
     if (homeLat === null || homeLon === null) {
-      // Neither home coords nor weather location set — nothing to compute against.
       noHomeCoordsWarned ||= warnNoHomeOnce();
       return null;
     }
     if (lat === null || lat === undefined || lon === null || lon === undefined) {
-      // Vehicle GPS unavailable AND no cached fallback survived. Silent —
-      // the smartFetchTesla / fetchRivianWithGpsCache helpers already
-      // preserve last-known lat/lon across polls; if we're here, the
-      // vehicle has never reported a non-null GPS and there's nothing
-      // useful to log on every request.
+      return null;
+    }
+    if (!gpsFresh) {
+      // Lat/lon came from cache, not this poll. We can't tell if the car
+      // is still here or drove off — return null instead of falsely
+      // reporting at-home. (UI keeps showing cached coords for "last
+      // seen at" purposes, but the at-home dot stays neutral.)
+      console.log(`[home] ${label}: GPS stale (from cache) — atHome=null until vehicle reports fresh location`);
       return null;
     }
     const dist = distanceMeters(lat, lon, homeLat, homeLon);
@@ -385,7 +398,7 @@ async function handleGet(req: Request) {
       chargerSide: cfg.vehicles.rivian.chargerSide,
       state: rivianState,
       connected: rivianConnected,
-      atHome: computeAtHome('rivian', rivianState?.lat, rivianState?.lon),
+      atHome: computeAtHome('rivian', rivianState?.lat, rivianState?.lon, !!(rivianState && (rivianState as { _gpsFresh?: boolean })._gpsFresh)),
     },
     {
       id: 'tesla',
@@ -394,7 +407,7 @@ async function handleGet(req: Request) {
       chargerSide: cfg.vehicles.tesla.chargerSide,
       state: teslaState,
       connected: teslaConnected,
-      atHome: computeAtHome('tesla', teslaState?.lat, teslaState?.lon),
+      atHome: computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh)),
     },
   ];
 
