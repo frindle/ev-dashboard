@@ -238,7 +238,7 @@ interface RawVehicleState {
   distanceToEmpty: { value: number } | null;
   batteryLimit: { value: number } | null;
   timeToEndOfCharge: { value: number } | null;
-  chargerState: { value: string } | null;
+  chargerState: { value: string; timeStamp?: string } | null;
   chargerStatus: { value: string } | null;
   chargerDerateStatus: { value: string } | null;
   powerState: { value: string } | null;
@@ -272,6 +272,11 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
 
     const vs = data.vehicleState;
     const chargingStateRaw = vs.chargerState?.value ?? 'disconnected';
+    // Log the raw plug/charge fields per poll so we can see when Rivian's
+    // state goes stale (e.g. shows isPluggedIn=true when the user is at
+    // work). The chargerState.timeStamp is when Rivian last received that
+    // value from the car — useful for figuring out staleness.
+    console.log(`[rivian] chargerState="${chargingStateRaw}" ts=${vs.chargerState?.timeStamp ?? '?'} online=${vs.cloudConnection?.isOnline ?? '?'}`);
 
     // Only treat as charging when the contactor is actually closed and power is flowing
     const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active', 'charging_ac_1ph', 'charging_ac_3ph']);
