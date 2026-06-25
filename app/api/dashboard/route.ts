@@ -126,6 +126,17 @@ interface TeslaCache {
   source?: 'poll' | 'telemetry';
 }
 
+// Log "no home coords configured" exactly once per process. The dashboard
+// is polled every few seconds; before this, the user got the same warning
+// line for every vehicle on every poll.
+let noHomeCoordsWarned = false;
+function warnNoHomeOnce(): true {
+  if (!noHomeCoordsWarned) {
+    console.log('[home] no home coords configured in admin — atHome detection disabled until set');
+  }
+  return true;
+}
+
 async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicleState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, TESLA_CACHE_FILE);
@@ -339,9 +350,10 @@ async function handleGet(req: Request) {
 
   function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined): boolean | null {
     if (cfg.home.lat === null || cfg.home.lon === null) {
-      // Config-level issue — log once-per-request so the user knows the
-      // dashboard can never compute atHome until home coords are set.
-      console.log(`[home] ${label}: no home coords configured — atHome=null`);
+      // Log once-per-process so we don't fill the log with the same
+      // message every poll. The user only needs to be told once that
+      // home coords need to be set in the admin.
+      noHomeCoordsWarned ||= warnNoHomeOnce();
       return null;
     }
     if (lat === null || lat === undefined || lon === null || lon === undefined) {
