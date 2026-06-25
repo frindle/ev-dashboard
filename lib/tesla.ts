@@ -83,16 +83,25 @@ async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
 
 async function fleetGet<T>(path: string): Promise<T | null> {
   const token = await getAccessToken();
-  if (!token) return null;
+  if (!token) { console.log(`[tesla] ${path}: no access token`); return null; }
   try {
     const res = await fetch(`${FLEET_BASE}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // Log the status + short body so the user can see why polling isn't
+      // returning data. 408 typically means "vehicle is asleep" on
+      // /vehicle_data and is normal; 401 means token expired; 403 means
+      // missing scope; 5xx means Tesla side.
+      const body = await res.text().catch(() => '');
+      console.log(`[tesla] ${path}: HTTP ${res.status} ${body.slice(0, 160).replace(/\s+/g, ' ')}`);
+      return null;
+    }
     const json = await res.json() as { response: T };
     return json.response ?? null;
-  } catch {
+  } catch (e) {
+    console.log(`[tesla] ${path}: fetch error ${String(e).slice(0, 160)}`);
     return null;
   }
 }
