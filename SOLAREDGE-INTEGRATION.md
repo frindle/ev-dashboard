@@ -46,6 +46,12 @@ There is no v1 vs v2 split — `monitoringapi.solaredge.com` is the only
 public REST surface and SolarEdge has not announced a v2. They sometimes
 call it "Monitoring API v1" internally; the URLs are unversioned.
 
+**Reference docs (current as of 2026-06-26)** — SolarEdge moved these
+since the old "se-modbus-tcp-application-note.pdf" we initially linked
+now 404s:
+- SunSpec Implementation Technical Note (June 2025) — `https://knowledge-center.solaredge.com/sites/kc/files/sunspec-implementation-technical-note.pdf`
+- Communication Options Application Note — `https://knowledge-center.solaredge.com/sites/kc/files/solaredge-communication_options_application_note_v2_250_and_above.pdf`
+
 **Rate limits**: 300 requests/day per account, plus 300/day per site.
 Easy to fit a 5-minute poll into (288 polls/day). Not enough for real-
 time (sub-minute) updates.

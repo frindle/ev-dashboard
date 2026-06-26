@@ -13,6 +13,17 @@
 
 ---
 
+## Reference docs (SolarEdge moved them — these links are current as of 2026-06-26)
+
+- **SunSpec Implementation Technical Note** (June 2025) — register map, Modbus TCP config, FC03 details:
+  `https://knowledge-center.solaredge.com/sites/kc/files/sunspec-implementation-technical-note.pdf`
+- **Communication Options Application Note** (firmware 2.50+, SetApp menu walkthrough):
+  `https://knowledge-center.solaredge.com/sites/kc/files/solaredge-communication_options_application_note_v2_250_and_above.pdf`
+
+(The old `se-modbus-tcp-application-note.pdf` link from earlier 404s — SolarEdge dropped the standalone PDF and rolled the content into the two above.)
+
+---
+
 ## At the inverter
 
 1. **Flip into SetApp mode**
