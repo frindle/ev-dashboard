@@ -1,5 +1,8 @@
 import { NextRequest } from 'next/server';
 import { readConfig } from '@/lib/config';
+import { existsSync } from 'fs';
+import { readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
 import {
   wakeVehicle,
   setChargeLimit,
@@ -9,9 +12,28 @@ import {
   unlockDoors,
   startClimate,
   stopClimate,
+  type TeslaVehicleState,
 } from '@/lib/tesla';
 
 export const dynamic = 'force-dynamic';
+
+// Tesla returns success on set_charge_limit but our cached vehicle_data
+// snapshot keeps the old value until the next poll — which can be 5 min
+// out if the car is awake/parked. The slider snaps back to the stale
+// value during that window, looking like the command failed. We
+// optimistically patch the cache with the new value the moment Tesla
+// confirms the change, so the next dashboard render shows it.
+async function patchTeslaCache(patch: Partial<TeslaVehicleState>): Promise<void> {
+  try {
+    const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+    const path = join(dir, 'tesla-state.json');
+    if (!existsSync(path)) return;
+    const raw = JSON.parse(await readFile(path, 'utf-8')) as { state: TeslaVehicleState; fetchedAt: number; source?: string };
+    raw.state = { ...raw.state, ...patch };
+    raw.fetchedAt = Date.now();
+    await writeFile(path, JSON.stringify(raw));
+  } catch { /* non-fatal */ }
+}
 
 type CommandName =
   | 'wake'
@@ -40,9 +62,12 @@ export async function POST(req: NextRequest) {
       case 'charge_stop':
         result = await stopCharging(vin);
         break;
-      case 'set_charge_limit':
-        result = await setChargeLimit(vin, params?.percent as number);
+      case 'set_charge_limit': {
+        const percent = params?.percent as number;
+        result = await setChargeLimit(vin, percent);
+        if (result) await patchTeslaCache({ chargeLimit: percent });
         break;
+      }
       case 'lock':
         result = await lockDoors(vin);
         break;
