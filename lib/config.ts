@@ -53,6 +53,13 @@ export interface AppConfig {
     lon: number | null;
     radiusMeters: number; // how close counts as "home"
   };
+  solar: {
+    enabled: boolean;     // master switch — UI hides until true AND host is set
+    host: string;         // inverter LAN IP, e.g. "10.0.5.50"
+    port: number;         // Modbus/TCP port, SolarEdge default is 1502 (not 502)
+    unitId: number;       // Modbus device ID; default 1 for single inverter
+    pollIntervalSec: number; // how often to read live registers
+  };
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -102,6 +109,13 @@ const DEFAULT_CONFIG: AppConfig = {
     lat: null,
     lon: null,
     radiusMeters: 150,
+  },
+  solar: {
+    enabled: false,
+    host: '',
+    port: 1502,
+    unitId: 1,
+    pollIntervalSec: 10,
   },
 };
 

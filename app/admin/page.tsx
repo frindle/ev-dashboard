@@ -697,6 +697,79 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* ── SolarEdge ── */}
+      <div className="admin-section">
+        <div className="admin-section-header">
+          <div className="admin-section-title">
+            <div className={`status-dot ${config.solar.enabled && config.solar.host ? 'connected' : 'disconnected'}`} />
+            SolarEdge Inverter
+          </div>
+        </div>
+        <div className="admin-section-body">
+          <div className="form-row">
+            <label className="form-label">
+              <input
+                type="checkbox"
+                checked={config.solar.enabled}
+                onChange={e => update('solar', { enabled: e.target.checked })}
+                style={{ marginRight: 8 }}
+              />
+              Enable SolarEdge polling
+            </label>
+            <div className="form-hint">
+              Off by default. The dashboard ignores SolarEdge entirely until this is on AND the Inverter IP is set below.
+            </div>
+          </div>
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">Inverter IP</label>
+              <input
+                className="form-input"
+                type="text"
+                value={config.solar.host}
+                onChange={e => update('solar', { host: e.target.value.trim() })}
+                placeholder="10.0.5.50"
+              />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Modbus Port</label>
+              <input
+                className="form-input"
+                type="number"
+                value={config.solar.port}
+                onChange={e => update('solar', { port: e.target.value ? parseInt(e.target.value, 10) : 1502 })}
+              />
+            </div>
+          </div>
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">Device ID</label>
+              <input
+                className="form-input"
+                type="number"
+                value={config.solar.unitId}
+                onChange={e => update('solar', { unitId: e.target.value ? parseInt(e.target.value, 10) : 1 })}
+              />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Poll Interval (sec)</label>
+              <input
+                className="form-input"
+                type="number"
+                min="5"
+                value={config.solar.pollIntervalSec}
+                onChange={e => update('solar', { pollIntervalSec: e.target.value ? parseInt(e.target.value, 10) : 10 })}
+              />
+            </div>
+          </div>
+          <div className="form-hint">
+            SolarEdge uses port 1502 (not the Modbus standard 502). Device ID 1 is correct for a single inverter.
+            Only one Modbus/TCP client may connect at a time — disable Home Assistant&apos;s SolarEdge integration if you have one.
+            After enabling Modbus on the inverter, the first poll must arrive within ~2 minutes or the port closes.
+          </div>
+        </div>
+      </div>
+
       {/* Save bar */}
       <div className="save-bar">
         {saved && (
