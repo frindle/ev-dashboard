@@ -187,9 +187,19 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
         fresh.chargingState = cache.state.chargingState;
       }
     }
-    try {
-      await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), source: 'poll' } satisfies TeslaCache));
-    } catch { /* non-fatal */ }
+    // Only persist when we got a real online response, OR when we
+    // already have a cached snapshot and just restored fields onto fresh.
+    // The cold-start case (no prior cache + car asleep) returns Tesla's
+    // stripped response with chargePercent=0, rangeMi=0, etc. — caching
+    // those zeros poisons every subsequent read until the car wakes. We
+    // skip the write and let the next poll retry.
+    if (fresh.online || cache?.state) {
+      try {
+        await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), source: 'poll' } satisfies TeslaCache));
+      } catch { /* non-fatal */ }
+    } else {
+      console.log('[tesla] cold-start asleep — not persisting stripped response');
+    }
     // Mutate-attach so the caller can tell what happened. (Avoids changing
     // the public return type while still threading the flag through.)
     (fresh as TeslaVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
