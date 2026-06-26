@@ -260,16 +260,43 @@ export async function fetchWallConnectorVitals(siteId: string, serial: string): 
   };
 }
 
+// Sticky disable for /components — Tesla removed it from a lot of energy
+// sites and it 404s on every dashboard load. Once we see a 404 we skip the
+// endpoint for the lifetime of the process. Config-side wall-connector
+// data is the source of truth; the API call is enrichment only.
+const componentsUnavailableSites = new Set<string>();
+
 export async function fetchWallConnectorList(siteId: string): Promise<Array<{ serial: string; deviceId: string }>> {
+  if (componentsUnavailableSites.has(siteId)) return [];
   interface WCComponent { device_id: string; serial_number?: string; din?: string; [k: string]: unknown; }
   interface Components { wall_connectors?: WCComponent[]; [k: string]: unknown; }
-  const data = await fleetGet<Components>(`/api/1/energy_sites/${siteId}/components`);
-  console.log('[wall-connectors] raw components keys:', data ? Object.keys(data) : null);
-  console.log('[wall-connectors] raw wall_connectors:', JSON.stringify(data?.wall_connectors));
-  return (data?.wall_connectors ?? []).map(w => ({
-    deviceId: w.device_id,
-    serial: w.serial_number ?? w.din ?? '',
-  }));
+  const path = `/api/1/energy_sites/${siteId}/components`;
+  const token = await getAccessToken();
+  if (!token) return [];
+  try {
+    const res = await fetch(`${FLEET_BASE}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.status === 404) {
+      componentsUnavailableSites.add(siteId);
+      console.log(`[wall-connectors] /components 404 for site ${siteId} — disabling for this process`);
+      return [];
+    }
+    if (!res.ok) {
+      console.log(`[wall-connectors] ${path}: HTTP ${res.status}`);
+      return [];
+    }
+    const json = await res.json() as { response: Components };
+    const data = json.response ?? null;
+    return (data?.wall_connectors ?? []).map(w => ({
+      deviceId: w.device_id,
+      serial: w.serial_number ?? w.din ?? '',
+    }));
+  } catch (e) {
+    console.log(`[wall-connectors] ${path}: fetch error ${String(e).slice(0, 160)}`);
+    return [];
+  }
 }
 
 
