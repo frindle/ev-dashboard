@@ -130,16 +130,19 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
   const online       = s?.online       ?? false;
 
   // atHome: true = confirmed home (GPS within radius), false = confirmed away,
-  // null = unknown (no fresh GPS). Treat null as "home" so an asleep car at
-  // home doesn't suddenly read AWAY whenever Tesla stops reporting location.
-  const atHome       = v.atHome !== false;
-  const chargingHome = isCharging && atHome;
+  // null = unknown (no fresh GPS — e.g. Tesla asleep, vehicle_location scope
+  // missing). Only show AWAY on explicit false; null falls through to
+  // ASLEEP / IDLE so a stale-GPS vehicle doesn't get falsely flagged.
+  // chargingHome treats null as "probably home" so a charging car with
+  // stale GPS still pulses the accent badge instead of CHARGING · AWAY.
+  const confirmedAway = v.atHome === false;
+  const chargingHome  = isCharging && !confirmedAway;
 
   let badgeLabel: string, badgeAccent: boolean, badgePulse: boolean;
-  if      (!v.connected)   { badgeLabel = 'DISCONNECTED';   badgeAccent = false; badgePulse = false; }
+  if      (!v.connected)   { badgeLabel = 'DISCONNECTED';    badgeAccent = false; badgePulse = false; }
   else if (chargingHome)   { badgeLabel = 'CHARGING';        badgeAccent = true;  badgePulse = true;  }
   else if (isCharging)     { badgeLabel = 'CHARGING · AWAY'; badgeAccent = true;  badgePulse = true;  }
-  else if (!atHome)        { badgeLabel = 'AWAY';            badgeAccent = false; badgePulse = false; }
+  else if (confirmedAway)  { badgeLabel = 'AWAY';            badgeAccent = false; badgePulse = false; }
   else if (!online)        { badgeLabel = 'ASLEEP';          badgeAccent = false; badgePulse = false; }
   else                     { badgeLabel = 'IDLE';            badgeAccent = false; badgePulse = false; }
 
@@ -156,7 +159,7 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
     ? fmtEta(minutesToFull)
     : isCharging
       ? 'CHARGING AWAY'
-      : !atHome
+      : confirmedAway
         ? 'AWAY'
         : isPluggedIn
           ? (soc >= limit ? 'AT TARGET' : 'PLUGGED IN · IDLE')
