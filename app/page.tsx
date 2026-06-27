@@ -109,6 +109,13 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
   const footerDir  = isLeft ? 'row'        : 'row-reverse';
   const sourceAlign = isLeft ? 'left'      : 'right';
 
+  // 2026-06-26 design port: stats columns mirror so RANGE LEFT + TARGET
+  // (the live driving / control numbers) always hug the dial regardless
+  // of which side of the dashboard the card sits on. `grid-auto-flow:dense`
+  // + explicit grid-column on each cell drives the swap.
+  const colInside  = isLeft ? 2 : 1;
+  const colOutside = isLeft ? 1 : 2;
+
   const soc    = s ? Math.round(s.chargePercent) : 0;
   const limit  = s ? Math.round(s.chargeLimit)   : 80;
   const range  = s ? Math.round(s.rangeMi)       : 0;
@@ -122,11 +129,19 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
   const climateOn    = s?.climateOn    ?? false;
   const online       = s?.online       ?? false;
 
+  // atHome: true = confirmed home (GPS within radius), false = confirmed away,
+  // null = unknown (no fresh GPS). Treat null as "home" so an asleep car at
+  // home doesn't suddenly read AWAY whenever Tesla stops reporting location.
+  const atHome       = v.atHome !== false;
+  const chargingHome = isCharging && atHome;
+
   let badgeLabel: string, badgeAccent: boolean, badgePulse: boolean;
-  if (!v.connected)       { badgeLabel = 'DISCONNECTED'; badgeAccent = false; badgePulse = false; }
-  else if (isCharging)    { badgeLabel = 'CHARGING';     badgeAccent = true;  badgePulse = true;  }
-  else if (!online)       { badgeLabel = 'ASLEEP';       badgeAccent = false; badgePulse = false; }
-  else                    { badgeLabel = 'IDLE';         badgeAccent = false; badgePulse = false; }
+  if      (!v.connected)   { badgeLabel = 'DISCONNECTED';   badgeAccent = false; badgePulse = false; }
+  else if (chargingHome)   { badgeLabel = 'CHARGING';        badgeAccent = true;  badgePulse = true;  }
+  else if (isCharging)     { badgeLabel = 'CHARGING · AWAY'; badgeAccent = true;  badgePulse = true;  }
+  else if (!atHome)        { badgeLabel = 'AWAY';            badgeAccent = false; badgePulse = false; }
+  else if (!online)        { badgeLabel = 'ASLEEP';          badgeAccent = false; badgePulse = false; }
+  else                     { badgeLabel = 'IDLE';            badgeAccent = false; badgePulse = false; }
 
   const badgeColor    = badgeAccent ? accent    : '#a4afba';
   const badgeBg       = badgeAccent ? ACCENT_SOFT : '#1b232b';
@@ -134,12 +149,18 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
   const badgeDotAnim  = badgePulse ? 'evpulse 1.8s ease-in-out infinite' : 'none';
 
   const rateKw    = wcPowerW / 1000;
-  const rateLabel = isCharging && rateKw > 0 ? rateKw.toFixed(1) + ' kW' : '—';
-  const etaLabel  = isCharging
+  const rateLabel = chargingHome && rateKw > 0
+    ? rateKw.toFixed(1) + ' kW'
+    : (isCharging ? 'away' : '—');
+  const etaLabel  = chargingHome
     ? fmtEta(minutesToFull)
-    : isPluggedIn
-      ? (soc >= limit ? 'AT TARGET' : 'PLUGGED IN · IDLE')
-      : 'NOT PLUGGED IN';
+    : isCharging
+      ? 'CHARGING AWAY'
+      : !atHome
+        ? 'AWAY'
+        : isPluggedIn
+          ? (soc >= limit ? 'AT TARGET' : 'PLUGGED IN · IDLE')
+          : 'NOT PLUGGED IN';
   const etaColor  = isCharging ? accent : '#7d8893';
 
   // canControl: can change limit / drag dial — Tesla + connected, regardless of plug
@@ -196,14 +217,18 @@ function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
           draggable={canControl}
           onSetLimit={canControl ? l => onCommand('set_charge_limit', { percent: l }) : undefined}
         />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '13px 18px', flex: 1, textAlign: statsAlign as React.CSSProperties['textAlign'] }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridAutoFlow: 'dense', gap: '13px 18px', flex: 1, textAlign: statsAlign as React.CSSProperties['textAlign'] }}>
+          {/* RANGE LEFT and TARGET sit in colInside (the column next to the
+              dial); ODOMETER and CHARGE RATE sit in colOutside. The grid
+              flips between the left + right cards via the colInside/colOutside
+              swap above, so range/target always hug the dial. */}
           {([
-            ['RANGE LEFT', s ? String(range) : '—', s ? 'mi' : ''],
-            ['ODOMETER',   s ? odoLabel       : '—', s ? 'mi' : ''],
-            ['TARGET',     `${limit}%`,               ''],
-            ['CHARGE RATE', rateLabel,                ''],
-          ] as [string, string, string][]).map(([label, val, unit]) => (
-            <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            ['RANGE LEFT',  s ? String(range) : '—', s ? 'mi' : '', colInside],
+            ['ODOMETER',    s ? odoLabel       : '—', s ? 'mi' : '', colOutside],
+            ['TARGET',      `${limit}%`,               '',           colInside],
+            ['CHARGE RATE', rateLabel,                 '',           colOutside],
+          ] as [string, string, string, number][]).map(([label, val, unit, col]) => (
+            <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: col }}>
               <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>{label}</span>
               <span style={{ fontSize: 17, fontWeight: 600 }}>
                 {val}{unit && <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}> {unit}</span>}
