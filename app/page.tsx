@@ -573,9 +573,13 @@ export default function Dashboard() {
   const solarKw = (solarPowerW / 1000).toFixed(1);
   const solarOn = solarPowerW > 100; // only show if meaningfully generating
   const inUseCount = (leftWC?.vitals?.vehicleCharging ? 1 : 0) + (rightWC?.vitals?.vehicleCharging ? 1 : 0);
-  const vehiclesHome = vehicles.filter(v =>
-    v.connected && (v.atHome === true || (v.atHome === null && v.state?.online))
-  ).length;
+  // Strict: only count vehicles with explicit positive home GPS. The earlier
+  // "null + online → home" heuristic over-counted any vehicle that lost its
+  // GPS reading mid-day (Tesla without vehicle_location scope is a common
+  // case — falsely showed 2 home when only 1 was). Matches the per-card
+  // badge logic: card shows AWAY only on explicit false, but the rollup is
+  // about "how many do I know are home" — so we want positive evidence.
+  const vehiclesHome = vehicles.filter(v => v.connected && v.atHome === true).length;
 
   // Door
   const garageConnected = data?.garageConnected ?? false;
