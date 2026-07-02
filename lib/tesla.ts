@@ -1,4 +1,5 @@
 import { readTokens, writeTokens, TeslaTokens } from './config';
+import { markTeslaReauthRequired, clearTeslaReauthRequired } from './sessionFlags';
 
 const FLEET_BASE = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
 const TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
@@ -60,7 +61,11 @@ async function getAccessToken(): Promise<string | null> {
 
 async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
   const clientId = process.env.TESLA_CLIENT_ID;
-  if (!clientId) return null;
+  if (!clientId) {
+    markTeslaReauthRequired('TESLA_CLIENT_ID env var missing at refresh');
+    console.warn('[tesla] refresh skipped: TESLA_CLIENT_ID env var missing');
+    return null;
+  }
 
   try {
     const res = await fetch(TOKEN_URL, {
@@ -72,11 +77,25 @@ async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
         refresh_token: tokens.refresh_token,
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      const short = body.slice(0, 200).replace(/\s+/g, ' ');
+      console.warn(`[tesla] refresh failed: HTTP ${res.status} ${short}`);
+      // 400 invalid_grant means the refresh token chain is dead — user re-auth
+      // is the only path out. Flag it so the dashboard can surface a banner.
+      if (res.status === 400 || res.status === 401) {
+        markTeslaReauthRequired(`refresh HTTP ${res.status}: ${short}`);
+      }
+      return null;
+    }
     const fresh = await res.json() as TeslaTokens;
     writeTokens(fresh);
+    clearTeslaReauthRequired();
+    console.log('[tesla] refresh ok — new token valid for', fresh.expires_in, 's');
     return fresh.access_token;
-  } catch {
+  } catch (e) {
+    console.warn('[tesla] refresh threw:', String(e).slice(0, 200));
+    markTeslaReauthRequired('refresh threw: ' + String(e).slice(0, 120));
     return null;
   }
 }
@@ -96,6 +115,9 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       // missing scope; 5xx means Tesla side.
       const body = await res.text().catch(() => '');
       console.log(`[tesla] ${path}: HTTP ${res.status} ${body.slice(0, 160).replace(/\s+/g, ' ')}`);
+      if (res.status === 401) {
+        markTeslaReauthRequired(`401 from ${path}`);
+      }
       return null;
     }
     const json = await res.json() as { response: T };

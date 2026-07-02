@@ -1,7 +1,62 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { markRivianReauthRequired, markRivianReauthDueSoon, clearRivianReauthFlags } from './sessionFlags';
 
 const GATEWAY = 'https://rivian.com/api/gql/gateway/graphql';
+
+// Rivian sessions appear to last on the order of 90 days with no documented
+// refresh mutation. Track from savedAt so we can warn the user at day 83
+// and hard-flag at day 90 before we start seeing 401s in the wild.
+const RIVIAN_SESSION_DAYS = 90;
+const RIVIAN_SESSION_WARN_DAYS = 7;
+
+export function checkRivianSessionAge(): { daysOld: number; daysLeft: number } | null {
+  const t = readRivianTokens();
+  if (!t) return null;
+  const daysOld = Math.floor((Date.now() - t.savedAt) / (24 * 60 * 60 * 1000));
+  const daysLeft = RIVIAN_SESSION_DAYS - daysOld;
+  if (daysLeft <= 0) {
+    markRivianReauthRequired(`session age ${daysOld}d ≥ ${RIVIAN_SESSION_DAYS}d`);
+  } else if (daysLeft <= RIVIAN_SESSION_WARN_DAYS) {
+    markRivianReauthDueSoon(daysLeft);
+  }
+  return { daysOld, daysLeft };
+}
+
+// Exported so a successful login callback can wipe the reauth flags.
+export function noteRivianAuthRefreshed(): void {
+  clearRivianReauthFlags();
+}
+
+// ── Exponential backoff on state-poll errors ─────────────────────────────
+// Community guidance: Rivian throttling is opaque. Back off 15/30/60/120/240 min
+// on consecutive errors and reset on the first success.
+const BACKOFF_STEPS_MIN = [15, 30, 60, 120, 240];
+let backoffAttempt = 0;
+let nextAllowedAt = 0;
+
+function nextBackoffMs(): number {
+  const idx = Math.min(backoffAttempt, BACKOFF_STEPS_MIN.length - 1);
+  return BACKOFF_STEPS_MIN[idx] * 60 * 1000;
+}
+
+function inBackoffWindow(): boolean {
+  return Date.now() < nextAllowedAt;
+}
+
+function recordBackoffError(): void {
+  backoffAttempt = Math.min(backoffAttempt + 1, BACKOFF_STEPS_MIN.length);
+  nextAllowedAt = Date.now() + nextBackoffMs();
+  console.warn(`[rivian] backoff step ${backoffAttempt}, next attempt in ${nextBackoffMs() / 60000}m`);
+}
+
+function resetBackoff(): void {
+  if (backoffAttempt !== 0) {
+    console.log('[rivian] backoff reset after successful fetch');
+  }
+  backoffAttempt = 0;
+  nextAllowedAt = 0;
+}
 
 const BASE_HEADERS = {
   'User-Agent': 'RivianApp/707 CFNetwork/1237 Darwin/20.4.0',
@@ -38,6 +93,23 @@ export interface RivianVehicleState {
   online: boolean;
   lat: number | null;         // gnssLocation.latitude
   lon: number | null;         // gnssLocation.longitude
+  gnssTimeStamp: string | null;
+  gnssSpeedMph: number | null;
+  gnssAltitudeM: number | null;
+  gnssErrorM: number | null;
+  hvThermalEvent: string;     // batteryHvThermalEvent raw
+  hvThermalPropagation: string; // batteryHvThermalEventPropagation raw
+  wiperFluidState: string;    // '' | 'normal' | 'low'
+  brakeFluidLow: boolean;
+  tirePressureFL: string;     // 'normal' | 'low' | 'critical' | ''
+  tirePressureFR: string;
+  tirePressureRL: string;
+  tirePressureRR: string;
+  otaCurrentVersion: string;  // otaCurrentVersionNumber
+  otaAvailableVersion: string;// otaAvailableVersionNumber
+  otaStatus: string;          // otaStatus / otaCurrentStatus
+  otaUpdateAvailable: boolean;
+  otaInstalling: boolean;
 }
 
 // ── Token storage ─────────────────────────────────────────────────────────────
@@ -229,6 +301,21 @@ query GetVehicleState($vehicleID: String!) {
     cabinPreconditioningStatus { timeStamp value }
     chargePortState { timeStamp value }
     gnssLocation { timeStamp latitude longitude }
+    gnssSpeed { timeStamp value }
+    gnssAltitude { timeStamp value }
+    gnssError { timeStamp positionHorizontal positionVertical speed bearing }
+    wiperFluidState { timeStamp value }
+    brakeFluidLow { timeStamp value }
+    tirePressureStatusFrontLeft { timeStamp value }
+    tirePressureStatusFrontRight { timeStamp value }
+    tirePressureStatusRearLeft { timeStamp value }
+    tirePressureStatusRearRight { timeStamp value }
+    batteryHvThermalEvent { timeStamp value }
+    batteryHvThermalEventPropagation { timeStamp value }
+    otaCurrentVersionNumber { timeStamp value }
+    otaAvailableVersionNumber { timeStamp value }
+    otaStatus { timeStamp value }
+    otaCurrentStatus { timeStamp value }
   }
 }`;
 
@@ -240,13 +327,28 @@ interface RawVehicleState {
   timeToEndOfCharge: { value: number } | null;
   chargerState: { value: string; timeStamp?: string } | null;
   chargerStatus: { value: string; timeStamp?: string } | null;
-  chargerDerateStatus: { value: string } | null;
+  chargerDerateStatus: { value: string; timeStamp?: string } | null;
   powerState: { value: string; timeStamp?: string } | null;
   vehicleMileage: { value: number } | null;
   doorFrontLeftLocked: { value: string } | null;
   cabinPreconditioningStatus: { value: string } | null;
   chargePortState: { value: string; timeStamp?: string } | null;
-  gnssLocation: { latitude: number; longitude: number } | null;
+  gnssLocation: { latitude: number; longitude: number; timeStamp?: string } | null;
+  gnssSpeed: { value: number; timeStamp?: string } | null;
+  gnssAltitude: { value: number; timeStamp?: string } | null;
+  gnssError: { positionHorizontal?: number; positionVertical?: number; speed?: number; bearing?: number; timeStamp?: string } | null;
+  wiperFluidState: { value: string; timeStamp?: string } | null;
+  brakeFluidLow: { value: boolean | string; timeStamp?: string } | null;
+  tirePressureStatusFrontLeft: { value: string; timeStamp?: string } | null;
+  tirePressureStatusFrontRight: { value: string; timeStamp?: string } | null;
+  tirePressureStatusRearLeft: { value: string; timeStamp?: string } | null;
+  tirePressureStatusRearRight: { value: string; timeStamp?: string } | null;
+  batteryHvThermalEvent: { value: string; timeStamp?: string } | null;
+  batteryHvThermalEventPropagation: { value: string; timeStamp?: string } | null;
+  otaCurrentVersionNumber: { value: string; timeStamp?: string } | null;
+  otaAvailableVersionNumber: { value: string; timeStamp?: string } | null;
+  otaStatus: { value: string; timeStamp?: string } | null;
+  otaCurrentStatus: { value: string; timeStamp?: string } | null;
 }
 
 function authHeaders(t: RivianTokens): Record<string, string> {
@@ -264,6 +366,14 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
   const vid = vehicleId ?? tokens.vehicleId;
   if (!vid) return null;
 
+  // Rivian throttling is opaque — respect our own backoff clock.
+  if (inBackoffWindow()) {
+    return null;
+  }
+
+  // Piggyback the 90-day session-age check on the poll cycle. Cheap.
+  checkRivianSessionAge();
+
   try {
     const data = await gql<{ vehicleState: RawVehicleState }>(
       GET_VEHICLE_STATE,
@@ -271,6 +381,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       authHeaders(tokens),
     );
 
+    resetBackoff();
     const vs = data.vehicleState;
     const chargingStateRaw = vs.chargerState?.value ?? 'disconnected';
     const chargerStateTs = vs.chargerState?.timeStamp;
@@ -281,16 +392,25 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const powerStateRaw = vs.powerState?.value ?? '';
     const powerStateTs = vs.powerState?.timeStamp;
 
-    // Log every charge-related field with its timestamp so we can see
-    // which ones Rivian actually keeps fresh in the wild. The Rivian
-    // mobile app shows correct plug status while our parsing was lying
-    // — there's a fresher source somewhere; this log narrows it down.
+    const derateRawEarly = vs.chargerDerateStatus?.value ?? '';
+    const hvThermalRaw = vs.batteryHvThermalEvent?.value ?? '';
+    const hvThermalPropRaw = vs.batteryHvThermalEventPropagation?.value ?? '';
+    const wiperFluidRaw = vs.wiperFluidState?.value ?? '';
+    const brakeFluidRaw = vs.brakeFluidLow?.value;
+    const tpFL = vs.tirePressureStatusFrontLeft?.value ?? '';
+    const tpFR = vs.tirePressureStatusFrontRight?.value ?? '';
+    const tpRL = vs.tirePressureStatusRearLeft?.value ?? '';
+    const tpRR = vs.tirePressureStatusRearRight?.value ?? '';
+    const gnssErrH = vs.gnssError?.positionHorizontal;
     console.log(
       `[rivian] chargerState="${chargingStateRaw}"@${chargerStateTs ?? '?'} ` +
       `chargerStatus="${chargerStatusRaw}"@${chargerStatusTs ?? '?'} ` +
       `chargePortState="${chargePortRaw}"@${chargePortTs ?? '?'} ` +
       `powerState="${powerStateRaw}"@${powerStateTs ?? '?'} ` +
-      `online=${vs.cloudConnection?.isOnline ?? '?'}`
+      `derate="${derateRawEarly}" hvThermal="${hvThermalRaw}" hvProp="${hvThermalPropRaw}" ` +
+      `tires=FL:${tpFL}/FR:${tpFR}/RL:${tpRL}/RR:${tpRR} ` +
+      `wiper="${wiperFluidRaw}" brakeLow=${brakeFluidRaw} ` +
+      `gnssErrH=${gnssErrH ?? '?'} online=${vs.cloudConnection?.isOnline ?? '?'}`
     );
 
     // Staleness threshold for the chargerState (legacy logic). Once we
@@ -357,6 +477,15 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
     const climateVal = (vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
 
+    const otaCurrent = vs.otaCurrentVersionNumber?.value ?? '';
+    const otaAvailable = vs.otaAvailableVersionNumber?.value ?? '';
+    const otaStatusRaw = (vs.otaStatus?.value ?? vs.otaCurrentStatus?.value ?? '').toString();
+    const otaStatusLower = otaStatusRaw.toLowerCase();
+    const otaInstalling = /install|download|apply|updating/.test(otaStatusLower);
+    const otaUpdateAvailable = otaAvailable !== '' && otaAvailable !== otaCurrent;
+
+    const brakeLowBool = brakeFluidRaw === true || brakeFluidRaw === 'low' || brakeFluidRaw === 'true';
+
     return {
       chargePercent: vs.batteryLevel?.value ?? 0,
       chargeLimit: vs.batteryLimit?.value ?? 80,
@@ -376,10 +505,42 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       online: vs.cloudConnection?.isOnline ?? false,
       lat: vs.gnssLocation?.latitude ?? null,
       lon: vs.gnssLocation?.longitude ?? null,
+      gnssTimeStamp: vs.gnssLocation?.timeStamp ?? null,
+      gnssSpeedMph: vs.gnssSpeed?.value != null ? vs.gnssSpeed.value * 2.23694 : null,
+      gnssAltitudeM: vs.gnssAltitude?.value ?? null,
+      gnssErrorM: vs.gnssError?.positionHorizontal ?? null,
+      hvThermalEvent: hvThermalRaw,
+      hvThermalPropagation: hvThermalPropRaw,
+      wiperFluidState: wiperFluidRaw,
+      brakeFluidLow: brakeLowBool,
+      tirePressureFL: tpFL,
+      tirePressureFR: tpFR,
+      tirePressureRL: tpRL,
+      tirePressureRR: tpRR,
+      otaCurrentVersion: otaCurrent,
+      otaAvailableVersion: otaAvailable,
+      otaStatus: otaStatusRaw,
+      otaUpdateAvailable,
+      otaInstalling,
     };
-  } catch {
+  } catch (e) {
+    const msg = String(e);
+    // 401 in the error body → session expired. Set the reauth flag so the
+    // dashboard can surface a banner.
+    if (/401|unauthori[sz]ed|invalid[_ ]session|expired/i.test(msg)) {
+      try { markRivianReauthRequired('401 from vehicleState: ' + msg.slice(0, 200)); } catch {}
+    }
+    recordBackoffError();
+    console.warn('[rivian] fetchRivianVehicleState failed:', msg.slice(0, 240));
     return null;
   }
+}
+
+// Clear backoff + reauth flags after a successful login. Called from
+// admin login endpoints.
+export function noteRivianLoginSuccess(): void {
+  resetBackoff();
+  noteRivianAuthRefreshed();
 }
 
 export function hasRivianTokens(): boolean {
