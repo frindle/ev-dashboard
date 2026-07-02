@@ -13,6 +13,7 @@ import {
 } from '@/lib/tesla';
 import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/lib/rivian';
 import { getDoorState, hasMyQTokens } from '@/lib/myq';
+import { readFlags } from '@/lib/sessionFlags';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,6 +46,23 @@ export interface WallConnectorData {
   todayKwh: number;    // integrated since local midnight
 }
 
+export interface DashboardFlags {
+  teslaReauthRequired: boolean;
+  teslaReauthReason: string | null;
+  rivianReauthDueSoon: boolean;
+  rivianReauthDaysLeft: number | null;
+  rivianReauthRequired: boolean;
+  rivianReauthReason: string | null;
+  rivianOtaUpdateAvailable: boolean;
+  rivianOtaInstalling: boolean;
+  rivianDerateActive: boolean;
+  rivianDerateReason: string | null;
+  rivianHvThermalEvent: boolean;
+  rivianTirePressureLow: boolean;
+  rivianWiperFluidLow: boolean;
+  rivianBrakeFluidLow: boolean;
+}
+
 export interface DashboardData {
   vehicles: VehicleData[];
   wallConnectors: WallConnectorData[];
@@ -56,6 +74,7 @@ export interface DashboardData {
   lastUpdated: string;
   teslaConnected: boolean;
   rivianConnected: boolean;
+  flags: DashboardFlags;
 }
 
 export interface WeatherData {
@@ -322,9 +341,16 @@ async function fetchRivianWithGpsCache(): Promise<RivianVehicleState | null> {
   const fresh = await fetchRivianVehicleState();
   if (!fresh) return null;
 
-  const freshGpsFromPoll = fresh.lat !== null && fresh.lon !== null;
-  if (fresh.lat === null && cachedGps.lat !== null) fresh.lat = cachedGps.lat;
-  if (fresh.lon === null && cachedGps.lon !== null) fresh.lon = cachedGps.lon;
+  // Trust GNSS only when it's < 15 min old and horizontal error is reasonable.
+  // Older readings (last known before sleep) may lie about the current position.
+  const GPS_STALE_MS = 15 * 60 * 1000;
+  const gnssMs = fresh.gnssTimeStamp ? new Date(fresh.gnssTimeStamp).getTime() : 0;
+  const gnssFresh = gnssMs > 0 && Date.now() - gnssMs < GPS_STALE_MS;
+  const gnssTrustworthy = gnssFresh && (fresh.gnssErrorM == null || fresh.gnssErrorM < 100);
+  const freshGpsFromPoll = fresh.lat !== null && fresh.lon !== null && gnssTrustworthy;
+
+  if ((fresh.lat === null || !gnssTrustworthy) && cachedGps.lat !== null) fresh.lat = cachedGps.lat;
+  if ((fresh.lon === null || !gnssTrustworthy) && cachedGps.lon !== null) fresh.lon = cachedGps.lon;
 
   if (freshGpsFromPoll) {
     try { await writeFile(path, JSON.stringify({ lat: fresh.lat, lon: fresh.lon })); }
@@ -450,6 +476,30 @@ async function handleGet(req: Request) {
     },
   ];
 
+  const flagsPersisted = readFlags();
+  const rivState = rivianState as RivianVehicleState | null;
+  const tirePressureLow = !!rivState && [
+    rivState.tirePressureFL, rivState.tirePressureFR,
+    rivState.tirePressureRL, rivState.tirePressureRR,
+  ].some(v => v && /low|critical/i.test(v));
+
+  const flags: DashboardFlags = {
+    teslaReauthRequired: !!flagsPersisted.tesla_reauth_required,
+    teslaReauthReason: flagsPersisted.tesla_reauth_required?.reason ?? null,
+    rivianReauthDueSoon: !!flagsPersisted.rivian_reauth_due_soon,
+    rivianReauthDaysLeft: flagsPersisted.rivian_reauth_due_soon?.daysLeft ?? null,
+    rivianReauthRequired: !!flagsPersisted.rivian_reauth_required,
+    rivianReauthReason: flagsPersisted.rivian_reauth_required?.reason ?? null,
+    rivianOtaUpdateAvailable: !!rivState?.otaUpdateAvailable,
+    rivianOtaInstalling: !!rivState?.otaInstalling,
+    rivianDerateActive: !!rivState?.isThrottled,
+    rivianDerateReason: rivState?.isThrottled ? rivState.derateReason : null,
+    rivianHvThermalEvent: !!rivState && (rivState.hvThermalEvent !== '' || rivState.hvThermalPropagation !== ''),
+    rivianTirePressureLow: tirePressureLow,
+    rivianWiperFluidLow: !!rivState && /low/i.test(rivState.wiperFluidState),
+    rivianBrakeFluidLow: !!rivState?.brakeFluidLow,
+  };
+
   const data: DashboardData = {
     vehicles,
     wallConnectors,
@@ -461,6 +511,7 @@ async function handleGet(req: Request) {
     lastUpdated: new Date().toISOString(),
     teslaConnected,
     rivianConnected,
+    flags,
   };
 
   // Persist to disk so the client can show last-known state on restart

@@ -1,5 +1,48 @@
 # TODO
 
+## Active — session 2026-07-01
+
+### Rivian — expand GraphQL query with new fields
+Add to `lib/rivian.ts` `GetVehicleState` query: `gnssLocation`, `gnssSpeed`, `gnssAltitude`, `wiperFluidState`, `brakeFluidLow`, `tirePressureStatusFrontLeft`, `tirePressureStatusFrontRight`, `tirePressureStatusRearLeft`, `tirePressureStatusRearRight`, `otaCurrentVersionNumber`, `otaAvailableVersionNumber`, `otaStatus`, `otaCurrentStatus`, `batteryHvThermalEvent`, `batteryHvThermalEventPropagation`. Expose in the returned `RivianVehicleState` shape.
+
+### Rivian — log all new fields incl. thermal + derate
+Append to the `[rivian]` diagnostic log line: `chargerDerateStatus`, `batteryHvThermalEvent`, `batteryHvThermalEventPropagation`, `wiperFluidState`, `brakeFluidLow`, `tirePressureStatus*`, `gnssError`. Goal: capture the exact strings when charging is derated / handle-temp warning fires.
+
+### Rivian — GNSS-based home detection
+Use `gnssLocation` when the timestamp is <15 min old and `gnssError` is low; fall back to the last-known cached coord otherwise. Reuse the 150 m home radius from the Tesla path. Log the same `[home] rivian: lat=… home=… dist=…m radius=…m → atHome=…` line as Tesla so both cars appear side-by-side in the log.
+
+### Rivian — 90-day proactive re-auth scheduler
+Rivian tokens are session-based (no documented refresh mutation). Track `rivian_tokens_issued_at`; when we hit day 83, set a `rivian_reauth_due_soon` flag; at day 90, set `rivian_reauth_required` flag. Dashboard banner (design incoming). Pushover push at day 83.
+
+### Rivian — session-expiry detection on 401
+Catch 401 responses from the GraphQL gateway → set `rivian_reauth_required` → banner + Pushover.
+
+### Rivian — exponential backoff on API errors
+Per community guidance: retry cadence 15 → 30 → 60 → 120 → 240 min on consecutive failures. Reset on first success. Applies to state-poll only; not to interactive command calls.
+
+### Rivian — OTA update-available badge + Pushover
+Small badge on the Rivian card when `otaAvailableVersionNumber != otaCurrentVersionNumber` (design incoming). Pushover push the first time we see a new available version (dedupe by version number so we don't spam every poll).
+
+### Rivian — wire warning card for derate + thermal events (design incoming)
+User will import the card design. Data source: any non-empty `chargerDerateStatus` OR `batteryHvThermalEvent` non-empty. Once real values captured in log, refine copy per specific string.
+
+### Rivian — update api-docs/Rivian/api.md
+Append the full field list from RivDocs (`https://rivian-api.kaedenb.org/app/vehicle-info/vehicle-state/`) including WS subscription endpoint, rate-limit backoff strategy, 90-day session assumption.
+
+### Tesla — log refresh failure reason (not silent catch)
+In `lib/tesla.ts` `refreshAccessToken`: replace silent `catch {}` with `console.warn('[tesla] refresh failed:', status, body.slice(0,200))`. Also log successful refresh at info level.
+
+### Tesla — "reauth needed" dashboard banner
+When `refreshAccessToken` returns null OR we get a 401 from a Fleet API call, set a `tesla_reauth_required` flag surfaced on the dashboard. Pushover push once per lapse (not per call).
+
+### Tesla — redo OAuth with `vehicle_location`
+Not code — user action. Current `scp` is `openid vehicle_device_data energy_device_data offline_access`. Need to re-run authorize flow with the enlarged scope list so token grants `vehicle_location`. Virtual key skipped for now (commands still work through legacy path; only GPS blocked).
+
+### Tesla — scope-editable authorize starter (if needed)
+Confirm whether current admin bootstrap hard-codes the scope list. If so, add editable input so user can request the enlarged scope set from the dashboard without touching env.
+
+---
+
 ## Tesla Fleet Telemetry — virtual key pairing (at the car)
 
 **Status:** Telemetry config registration is failing with `missing_key`. The
