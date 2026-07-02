@@ -1,7 +1,16 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import type { DashboardData, VehicleData, WallConnectorData } from '@/app/api/dashboard/route';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
+import {
+  AuthBanner,
+  VehicleCard as DesignVehicleCard,
+  buildTopBanner,
+  type Vehicle as DesignVehicle,
+  type AlertInputs,
+} from '@/components/VehicleCard';
+import type { RivianVehicleState } from '@/lib/rivian';
+import type { TeslaVehicleState } from '@/lib/tesla';
 
 const REFRESH_MS = 30_000;
 const CIRCUIT_AMPS = 48;
@@ -49,221 +58,70 @@ function StatChip({ label, value, unit, icon }: {
   );
 }
 
-// ── Charge Dial ───────────────────────────────────────────────────────────────
-function ChargeDial({ soc, limit, accent, draggable, onSetLimit }: {
-  soc: number; limit: number; accent: string; draggable: boolean;
-  onSetLimit?: (l: number) => void;
-}) {
-  const [drag, setDrag] = useState(false);
-  const valueOffset = C - C * (soc / 100);
-  const lAng = (limit / 100) * Math.PI * 2;
-  const tx1 = (60 + 43 * Math.sin(lAng)).toFixed(2);
-  const ty1 = (60 - 43 * Math.cos(lAng)).toFixed(2);
-  const tx2 = (60 + 61 * Math.sin(lAng)).toFixed(2);
-  const ty2 = (60 - 61 * Math.cos(lAng)).toFixed(2);
-
-  function dialSet(e: React.PointerEvent<SVGSVGElement>) {
-    if (!onSetLimit) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const dx = e.clientX - (r.left + r.width / 2);
-    const dy = e.clientY - (r.top + r.height / 2);
-    let ang = Math.atan2(dx, -dy);
-    if (ang < 0) ang += Math.PI * 2;
-    let pct = (ang / (Math.PI * 2)) * 100;
-    pct = Math.max(50, Math.min(100, Math.round(pct / 5) * 5));
-    onSetLimit(pct);
-  }
-
-  return (
-    <svg width="128" height="128" viewBox="0 0 120 120"
-      onPointerDown={e => { if (!draggable) return; setDrag(true); try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {} dialSet(e); }}
-      onPointerMove={e => { if (drag) dialSet(e); }}
-      onPointerUp={() => setDrag(false)}
-      style={{ flex: 'none', cursor: draggable ? 'grab' : 'default', touchAction: 'none' }}>
-      <circle cx="60" cy="60" r="52" fill="none" stroke="#222b34" strokeWidth="9" />
-      <g transform="rotate(-90 60 60)">
-        <circle cx="60" cy="60" r="52" fill="none" stroke={accent} strokeWidth="9"
-          strokeLinecap="round" strokeDasharray={C} strokeDashoffset={valueOffset} />
-      </g>
-      <line x1={tx1} y1={ty1} x2={tx2} y2={ty2} stroke="#e2685f" strokeWidth="3" strokeLinecap="round" />
-      <text x="60" y="48" textAnchor="middle" style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, letterSpacing: '0.22em', fill: '#a4afba' }}>CHARGE</text>
-      <text x="60" y="68" textAnchor="middle" style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 24, fontWeight: 600, fill: '#e8edf2' }}>{soc}%</text>
-      <text x="60" y="82" textAnchor="middle" style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, letterSpacing: '0.18em', fill: '#e2685f' }}>LIMIT {limit}%</text>
-    </svg>
-  );
-}
-
-// ── Vehicle Card ──────────────────────────────────────────────────────────────
-function VehicleCard({ v, idx, wcPowerW, accent, onCommand }: {
-  v: VehicleData; idx: number; wcPowerW: number; accent: string;
-  onCommand: (cmd: string, params?: Record<string, unknown>) => void;
-}) {
+// ── Data mappers (server VehicleData → design Vehicle + AlertInputs) ─────────
+function toDesignVehicle(v: VehicleData): DesignVehicle {
   const s = v.state;
   const isTesla = v.id === 'tesla';
-  const isLeft = idx === 0;
+  const t = isTesla ? (s as TeslaVehicleState | null) : null;
+  return {
+    id: v.id,
+    charger: v.chargerSide,
+    name: v.name,
+    model: v.model,
+    soc: s ? Math.round(s.chargePercent) : 0,
+    limit: s ? Math.round(s.chargeLimit) : 80,
+    range: s ? Math.round(s.rangeMi) : 0,
+    odo: s ? Math.round(s.odometer) : 0,
+    capacity: isTesla ? 82 : 135,
+    charging: s?.isCharging ?? false,
+    amps: t?.chargerActualCurrentA ?? 0,
+    today: 0,
+    ctrl: isTesla ? 'full' : 'schedule',
+    apiLabel: isTesla ? 'TESLA FLEET API' : 'RIVIAN · UNOFFICIAL API',
+    ac: s?.climateOn ?? false,
+    locked: s?.isLocked ?? true,
+    // Preserve prior null-atHome-means-probably-home behavior so vehicles
+    // with stale GPS don't false-flag as AWAY.
+    location: v.atHome === false ? 'away' : 'home',
+    place: '',
+    speed: 0,
+  };
+}
 
-  const rowDir  = isLeft ? 'row-reverse' : 'row';
-  const nameAlign  = isLeft ? 'flex-end'   : 'flex-start';
-  const badgeAlign = isLeft ? 'flex-start' : 'flex-end';
-  const statsAlign = isLeft ? 'right'      : 'left';
-  const footerDir  = isLeft ? 'row'        : 'row-reverse';
-  const sourceAlign = isLeft ? 'left'      : 'right';
+function buildAlerts(data: DashboardData): AlertInputs {
+  const flags: DashboardFlags = data.flags;
+  const rivVeh = data.vehicles.find(v => v.id === 'rivian');
+  const rivState = rivVeh?.state as RivianVehicleState | null;
 
-  // 2026-06-26 design port: stats columns mirror so RANGE LEFT + TARGET
-  // (the live driving / control numbers) always hug the dial regardless
-  // of which side of the dashboard the card sits on. `grid-auto-flow:dense`
-  // + explicit grid-column on each cell drives the swap.
-  const colInside  = isLeft ? 2 : 1;
-  const colOutside = isLeft ? 1 : 2;
+  // Pick the worst tire corner to surface (critical > low).
+  const tires: Array<[AlertInputs['rivianTireCorner'], string]> = [
+    ['FL', rivState?.tirePressureFL ?? ''],
+    ['FR', rivState?.tirePressureFR ?? ''],
+    ['RL', rivState?.tirePressureRL ?? ''],
+    ['RR', rivState?.tirePressureRR ?? ''],
+  ];
+  let tireStatus: AlertInputs['rivianTire'] = 'ok';
+  let tireCorner: AlertInputs['rivianTireCorner'] = 'FL';
+  for (const [corner, v] of tires) {
+    if (/critical/i.test(v)) { tireStatus = 'critical'; tireCorner = corner; break; }
+    if (/low/i.test(v)) { tireStatus = 'low'; tireCorner = corner; }
+  }
 
-  const soc    = s ? Math.round(s.chargePercent) : 0;
-  const limit  = s ? Math.round(s.chargeLimit)   : 80;
-  const range  = s ? Math.round(s.rangeMi)       : 0;
-  const odoLabel = s ? Math.round(s.odometer).toLocaleString('en-US') : '—';
-  const minutesToFull = s?.minutesToFull ?? 0;
-  const isCharging   = s?.isCharging   ?? false;
-  const isPluggedIn  = s?.isPluggedIn  ?? false;
-  const isThrottled  = s?.isThrottled  ?? false;
-  const derateReason = s?.derateReason ?? '';
-  const isLocked     = s?.isLocked     ?? true;
-  const climateOn    = s?.climateOn    ?? false;
-  const online       = s?.online       ?? false;
-
-  // atHome: true = confirmed home (GPS within radius), false = confirmed away,
-  // null = unknown (no fresh GPS — e.g. Tesla asleep, vehicle_location scope
-  // missing). Only show AWAY on explicit false; null falls through to
-  // ASLEEP / IDLE so a stale-GPS vehicle doesn't get falsely flagged.
-  // chargingHome treats null as "probably home" so a charging car with
-  // stale GPS still pulses the accent badge instead of CHARGING · AWAY.
-  const confirmedAway = v.atHome === false;
-  const chargingHome  = isCharging && !confirmedAway;
-
-  let badgeLabel: string, badgeAccent: boolean, badgePulse: boolean;
-  if      (!v.connected)   { badgeLabel = 'DISCONNECTED';    badgeAccent = false; badgePulse = false; }
-  else if (chargingHome)   { badgeLabel = 'CHARGING';        badgeAccent = true;  badgePulse = true;  }
-  else if (isCharging)     { badgeLabel = 'CHARGING · AWAY'; badgeAccent = true;  badgePulse = true;  }
-  else if (confirmedAway)  { badgeLabel = 'AWAY';            badgeAccent = false; badgePulse = false; }
-  else if (!online)        { badgeLabel = 'ASLEEP';          badgeAccent = false; badgePulse = false; }
-  else                     { badgeLabel = 'IDLE';            badgeAccent = false; badgePulse = false; }
-
-  const badgeColor    = badgeAccent ? accent    : '#a4afba';
-  const badgeBg       = badgeAccent ? ACCENT_SOFT : '#1b232b';
-  const badgeDotColor = badgeAccent ? accent    : '#7d8893';
-  const badgeDotAnim  = badgePulse ? 'evpulse 1.8s ease-in-out infinite' : 'none';
-
-  const rateKw    = wcPowerW / 1000;
-  const rateLabel = chargingHome && rateKw > 0
-    ? rateKw.toFixed(1) + ' kW'
-    : (isCharging ? 'away' : '—');
-  const etaLabel  = chargingHome
-    ? fmtEta(minutesToFull)
-    : isCharging
-      ? 'CHARGING AWAY'
-      : confirmedAway
-        ? 'AWAY'
-        : isPluggedIn
-          ? (soc >= limit ? 'AT TARGET' : 'PLUGGED IN · IDLE')
-          : 'NOT PLUGGED IN';
-  const etaColor  = isCharging ? accent : '#7d8893';
-
-  // canControl: can change limit / drag dial — Tesla + connected, regardless of plug
-  // canStartStop: can fire charge_start/stop — also requires the plug to be in
-  // (otherwise Tesla returns "not_charging" with no progress)
-  const canControl = isTesla && v.connected;
-  const canStartStop = canControl && (isPluggedIn || isCharging);
-  const scheduleOnly = !isTesla && v.connected && s !== null;
-  const apiLabel  = isTesla ? 'TESLA FLEET API' : 'RIVIAN · UNOFFICIAL API';
-  const limitNote = canControl ? 'CHARGE LIMIT' : 'CHARGE LIMIT · VIA SCHEDULE';
-
-  return (
-    <div style={{ background: '#161c22', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 14, boxShadow: '0 18px 44px -30px rgba(0,0,0,.85)' }}>
-      {/* Name / badge row */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexDirection: rowDir as React.CSSProperties['flexDirection'] }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: nameAlign as React.CSSProperties['alignItems'] }}>
-          <span style={{ fontSize: 19, fontWeight: 600 }}>{v.name}</span>
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, color: '#a4afba', letterSpacing: '0.03em' }}>{v.model}</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: badgeAlign as React.CSSProperties['alignItems'], gap: 8, flex: 'none' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: badgeAlign as React.CSSProperties['alignItems'] }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: badgeBg, color: badgeColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: '0.06em', padding: '6px 12px', borderRadius: 999 }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: badgeDotColor, animation: badgeDotAnim, flexShrink: 0 }} />
-              {badgeLabel}
-            </span>
-            {isThrottled && isCharging && (
-              <span title={`Charger derate: ${derateReason}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(224,181,61,0.15)', color: '#e0b53d', fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', padding: '4px 10px', borderRadius: 999 }}>
-                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 12, lineHeight: 1 }}>warning</span>
-                THROTTLED · {derateReason.replace(/_/g, ' ').toUpperCase()}
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={isTesla ? () => onCommand(isLocked ? 'unlock' : 'lock') : undefined}
-              title={isLocked ? 'Locked' : 'Unlocked'}
-              style={{ appearance: 'none', cursor: isTesla ? 'pointer' : 'default', width: 42, height: 42, borderRadius: 12, background: isLocked ? '#1b232b' : 'rgba(226,104,95,0.16)', border: '1px solid rgba(255,255,255,0.06)', color: isLocked ? '#a4afba' : '#e2685f', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 22, lineHeight: 1 }}>{isLocked ? 'lock' : 'lock_open'}</span>
-            </button>
-            <button
-              onClick={isTesla ? () => onCommand(climateOn ? 'climate_stop' : 'climate_start') : undefined}
-              title={climateOn ? 'AC on' : 'AC off'}
-              style={{ appearance: 'none', cursor: isTesla ? 'pointer' : 'default', width: 42, height: 42, borderRadius: 12, background: climateOn ? ACCENT_SOFT : '#1b232b', border: '1px solid rgba(255,255,255,0.06)', color: climateOn ? accent : '#a4afba', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 23, lineHeight: 1, animation: 'acspin 2.4s linear infinite', animationPlayState: climateOn ? 'running' : 'paused' }}>mode_fan</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Dial + stats */}
-      <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir as React.CSSProperties['flexDirection'] }}>
-        <ChargeDial
-          soc={soc} limit={limit} accent={accent}
-          draggable={canControl}
-          onSetLimit={canControl ? l => onCommand('set_charge_limit', { percent: l }) : undefined}
-        />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridAutoFlow: 'dense', gap: '13px 18px', flex: 1, textAlign: statsAlign as React.CSSProperties['textAlign'] }}>
-          {/* RANGE LEFT and TARGET sit in colInside (the column next to the
-              dial); ODOMETER and CHARGE RATE sit in colOutside. The grid
-              flips between the left + right cards via the colInside/colOutside
-              swap above, so range/target always hug the dial. */}
-          {([
-            ['RANGE LEFT',  s ? String(range) : '—', s ? 'mi' : '', colInside],
-            ['ODOMETER',    s ? odoLabel       : '—', s ? 'mi' : '', colOutside],
-            ['TARGET',      `${limit}%`,               '',           colInside],
-            ['CHARGE RATE', rateLabel,                 '',           colOutside],
-          ] as [string, string, string, number][]).map(([label, val, unit, col]) => (
-            <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: col }}>
-              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>{label}</span>
-              <span style={{ fontSize: 17, fontWeight: 600 }}>
-                {val}{unit && <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}> {unit}</span>}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 11, borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir as React.CSSProperties['flexDirection'] }}>
-          {canStartStop && (
-            <button onClick={() => onCommand(isCharging ? 'charge_stop' : 'charge_start')}
-              style={{ appearance: 'none', cursor: 'pointer', flex: 'none', padding: '10px 18px', borderRadius: 11, background: isCharging ? 'transparent' : accent, border: isCharging ? '1px solid rgba(226,104,95,.5)' : '1px solid transparent', color: isCharging ? '#e2685f' : '#08231f', fontFamily: "'Space Grotesk',sans-serif", fontSize: 13, fontWeight: 600 }}>
-              {isCharging ? 'Stop' : 'Start'}
-            </button>
-          )}
-          {scheduleOnly && (
-            <span style={{ flex: 'none', padding: '10px 14px', borderRadius: 11, background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)', color: '#a4afba', fontFamily: "'JetBrains Mono',monospace", fontSize: 10.5, letterSpacing: '0.04em' }}>SCHEDULE ONLY</span>
-          )}
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: "'JetBrains Mono',monospace", fontSize: 11.5, fontWeight: 600, letterSpacing: '0.04em', color: etaColor }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: etaColor, flexShrink: 0 }} />
-            {etaLabel}
-          </span>
-        </div>
-        <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 8.5, letterSpacing: '0.14em', color: '#5e6873', textAlign: sourceAlign as React.CSSProperties['textAlign'] }}>
-          {limitNote}{canControl ? ' · DRAG DIAL' : ''} · SOURCE {apiLabel}
-        </span>
-      </div>
-    </div>
-  );
+  return {
+    teslaReauth: flags.teslaReauthRequired ? 'expired' : 'ok',
+    rivianAuth: flags.rivianReauthRequired ? 'expired' : flags.rivianReauthDueSoon ? 'due-soon' : 'ok',
+    rivianAuthDays: flags.rivianReauthDaysLeft ?? 0,
+    rivianOta: flags.rivianOtaInstalling ? 'installing' : flags.rivianOtaUpdateAvailable ? 'available' : 'none',
+    rivianOtaVersion: rivState?.otaAvailableVersion || rivState?.otaCurrentVersion || '',
+    rivianTire: tireStatus,
+    rivianTireCorner: tireCorner,
+    rivianWiper: flags.rivianWiperFluidLow ? 'low' : 'ok',
+    rivianBrake: flags.rivianBrakeFluidLow ? 'low' : 'ok',
+    rivianThermal: flags.rivianHvThermalEvent ? 'detected' : 'ok',
+    rivianDerate: flags.rivianDerateReason ?? '',
+    // Placeholder — a real "scope missing" detector needs a server-side flag.
+    teslaLocationScope: 'granted',
+  };
 }
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
@@ -467,6 +325,9 @@ export default function Dashboard() {
   const [showCamera, setShowCamera] = useState(false);
   const [time, setTime] = useState(new Date());
   const [commandPending, setCommandPending] = useState(false);
+  // Banner dismissal state. Reauth-critical banners ignore this; only the
+  // "due-soon" banner honors it, and only for the current tab session.
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
@@ -593,6 +454,20 @@ export default function Dashboard() {
 
   const streamUrl = data?.streamUrl ?? '';
 
+  const alerts = useMemo(() => {
+    if (!data) {
+      return {
+        teslaReauth: 'ok', rivianAuth: 'ok', rivianAuthDays: 0,
+        rivianOta: 'none', rivianOtaVersion: '',
+        rivianTire: 'ok', rivianTireCorner: 'FL',
+        rivianWiper: 'ok', rivianBrake: 'ok',
+        rivianThermal: 'ok', rivianDerate: '',
+        teslaLocationScope: 'granted',
+      } as AlertInputs;
+    }
+    return buildAlerts(data);
+  }, [data]);
+
   return (
     <div style={{ position: 'relative', width: 1180, height: 820, overflow: 'hidden', background: 'radial-gradient(1000px 600px at 78% -16%, #1a2530 0%, #0e1216 56%)', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif", padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 11 }}>
 
@@ -652,13 +527,41 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── Auth banner (Tesla / Rivian re-auth) ── */}
+      {data && (
+        <AuthBanner state={buildTopBanner(alerts, {
+          onReauthTesla:  () => { window.location.href = '/admin?tesla_reauth=1'; },
+          onReauthRivian: () => { window.location.href = '/admin?rivian_reauth=1'; },
+          onDismiss:      () => setBannerDismissed(true),
+          bannerDismissed,
+        })} />
+      )}
+
       {/* ── Vehicle Cards ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, flex: 'none' }}>
         {vehicles.map((v, idx) => {
           const wc = wallConnectors.find(w => w.side === v.chargerSide);
+          const dv = toDesignVehicle(v);
           return (
-            <VehicleCard key={v.id} v={v} idx={idx} wcPowerW={wc?.vitals?.powerW ?? 0}
-              accent={ACCENT} onCommand={(cmd, params) => sendCommand(cmd, params)} />
+            <DesignVehicleCard
+              key={v.id}
+              vehicle={dv}
+              side={idx === 0 ? 'left' : 'right'}
+              alerts={alerts}
+              alloc={() => {
+                // Actual amps + kW pulled from the corresponding wall connector,
+                // not from the vehicle's own charge_state (which lies about
+                // "power flowing" when Tesla decides to under-report).
+                const amps = wc?.vitals?.currentA ?? 0;
+                const kw = (wc?.vitals?.powerW ?? 0) / 1000;
+                return { amps, kw };
+              }}
+              etaFor={(veh) => veh.charging ? (v.state?.minutesToFull ?? 0) : 0}
+              onToggleCharging={() => sendCommand(v.state?.isCharging ? 'charge_stop' : 'charge_start')}
+              onToggleLock={() => sendCommand(v.state?.isLocked ? 'unlock' : 'lock')}
+              onToggleAc={() => sendCommand(v.state?.climateOn ? 'climate_stop' : 'climate_start')}
+              onSetLimit={(_veh, pct) => sendCommand('set_charge_limit', { percent: pct })}
+            />
           );
         })}
       </div>
