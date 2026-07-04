@@ -1,5 +1,6 @@
 import { readTokens, writeTokens, TeslaTokens } from './config';
 import { markTeslaReauthRequired, clearTeslaReauthRequired } from './sessionFlags';
+import { loggedFetch } from './apiLog';
 
 const FLEET_BASE = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
 const TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
@@ -68,7 +69,7 @@ async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
   }
 
   try {
-    const res = await fetch(TOKEN_URL, {
+    const res = await loggedFetch('tesla', 'oauth/refresh', TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -104,7 +105,7 @@ async function fleetGet<T>(path: string): Promise<T | null> {
   const token = await getAccessToken();
   if (!token) { console.log(`[tesla] ${path}: no access token`); return null; }
   try {
-    const res = await fetch(`${FLEET_BASE}${path}`, {
+    const res = await loggedFetch('tesla', `GET ${path}`, `${FLEET_BASE}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10000),
     });
@@ -132,7 +133,7 @@ async function fleetPost<T>(path: string, body: unknown): Promise<T | null> {
   const token = await getAccessToken();
   if (!token) return null;
   try {
-    const res = await fetch(`${FLEET_BASE}${path}`, {
+    const res = await loggedFetch('tesla', `POST ${path}`, `${FLEET_BASE}${path}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -296,7 +297,7 @@ export async function fetchWallConnectorList(siteId: string): Promise<Array<{ se
   const token = await getAccessToken();
   if (!token) return [];
   try {
-    const res = await fetch(`${FLEET_BASE}${path}`, {
+    const res = await loggedFetch('tesla', `GET ${path}`, `${FLEET_BASE}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10000),
     });

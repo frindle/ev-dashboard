@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { markRivianReauthRequired, markRivianReauthDueSoon, clearRivianReauthFlags } from './sessionFlags';
+import { loggedFetch } from './apiLog';
 
 const GATEWAY = 'https://rivian.com/api/gql/gateway/graphql';
 
@@ -135,17 +136,25 @@ export function writeRivianTokens(tokens: RivianTokens): void {
 
 // ── GraphQL helper ────────────────────────────────────────────────────────────
 
+function opName(query: string): string {
+  // Extract the GraphQL operation name for logging so /api/admin/api-stats
+  // can bucket by call type (Login, GetVehicleState, etc.) rather than
+  // seeing every Rivian call as one opaque "graphql".
+  const m = query.match(/^\s*(?:query|mutation|subscription)\s+(\w+)/);
+  return m?.[1] ?? 'anonymous';
+}
+
 async function gql<T>(
   query: string,
   variables: Record<string, unknown> = {},
   extraHeaders: Record<string, string> = {},
 ): Promise<T> {
-  const res = await fetch(GATEWAY, {
+  const res = await loggedFetch('rivian', opName(query), GATEWAY, {
     method: 'POST',
     headers: { ...BASE_HEADERS, ...extraHeaders },
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(15000),
-  });
+  }, { backoffActive: inBackoffWindow() });
   const json = await res.json() as { data?: T; errors?: unknown[] };
   if (json.errors?.length) throw new Error(JSON.stringify(json.errors[0]));
   if (!json.data) throw new Error('No data in response');
