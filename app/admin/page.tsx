@@ -770,6 +770,9 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* ── Charge History ── */}
+      <ChargeStatsSection />
+
       {/* Save bar */}
       <div className="save-bar">
         {saved && (
@@ -781,6 +784,144 @@ export default function AdminPage() {
         <button className="btn-primary" onClick={save} disabled={saving}>
           {saving ? 'Saving…' : 'Save Changes'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Charge history stats ────────────────────────────────────────────────
+// Reads the aggregations over charge-history.jsonl. The $/kWh rate is a
+// local preference (localStorage), not part of server config.
+
+interface ChargeStatsMonth { month: string; sessions: number; kwh: number; costUsd?: number }
+interface ChargeStatsVehicle {
+  vehicleName: string; side: string; totalSessions: number; totalKwh: number;
+  totalCostUsd?: number; avgSessionKwh: number; months: ChargeStatsMonth[];
+}
+interface ChargeStatsSession {
+  side: string; vehicleName: string; startedAt: string; endedAt: string;
+  durationMin: number; energyKwh: number; costUsd?: number;
+}
+interface ChargeStats {
+  ok: boolean; months: number; ratePerKwh: number | null;
+  vehicles: ChargeStatsVehicle[]; recentSessions: ChargeStatsSession[];
+}
+
+function ChargeStatsSection() {
+  const [stats, setStats] = useState<ChargeStats | null>(null);
+  const [rate, setRate] = useState(() => {
+    try { return localStorage.getItem('admin_kwh_rate') ?? ''; } catch { return ''; }
+  });
+  const [months, setMonths] = useState(6);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ months: String(months) });
+    if (rate && !isNaN(Number(rate))) params.set('rate', rate);
+    fetch(`/api/admin/charge-stats?${params}`)
+      .then(r => r.json())
+      .then(setStats)
+      .catch(() => setStats(null));
+    try { localStorage.setItem('admin_kwh_rate', rate); } catch { /* private mode */ }
+  }, [rate, months]);
+
+  const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-header">
+        <div className="admin-section-title">
+          <span className="icon" style={{ fontSize: 18 }}>battery_charging_full</span>
+          Charge History
+        </div>
+      </div>
+      <div className="admin-section-body">
+        <div className="form-row-2">
+          <div className="form-row">
+            <label className="form-label">Electricity Rate ($/kWh)</label>
+            <input
+              className="form-input"
+              type="text"
+              inputMode="decimal"
+              value={rate}
+              onChange={e => setRate(e.target.value)}
+              placeholder="0.142 — leave blank to hide cost"
+            />
+          </div>
+          <div className="form-row">
+            <label className="form-label">Window (months)</label>
+            <input
+              className="form-input"
+              type="number"
+              min={1}
+              max={36}
+              value={months}
+              onChange={e => setMonths(Math.max(1, Math.min(36, parseInt(e.target.value, 10) || 6)))}
+            />
+          </div>
+        </div>
+
+        {!stats || stats.vehicles.length === 0 ? (
+          <div className="form-hint">
+            No completed charge sessions recorded yet. Sessions are logged automatically
+            when a wall connector goes active → idle (charge-history.jsonl).
+          </div>
+        ) : (
+          <>
+            {stats.vehicles.map(v => (
+              <div key={`${v.side}-${v.vehicleName}`} style={{ marginBottom: 16 }}>
+                <div className="form-label" style={{ marginBottom: 6 }}>
+                  {v.vehicleName} ({v.side}) — {v.totalSessions} sessions · {v.totalKwh} kWh
+                  {v.totalCostUsd != null ? ` · ~$${v.totalCostUsd.toFixed(2)}` : ''}
+                  {` · avg ${v.avgSessionKwh} kWh/session`}
+                </div>
+                <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', opacity: 0.6 }}>
+                      <th style={{ padding: '2px 8px 2px 0' }}>Month</th>
+                      <th style={{ padding: '2px 8px' }}>Sessions</th>
+                      <th style={{ padding: '2px 8px' }}>kWh</th>
+                      {stats.ratePerKwh != null && <th style={{ padding: '2px 8px' }}>Est. Cost</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {v.months.map(m => (
+                      <tr key={m.month}>
+                        <td style={{ padding: '2px 8px 2px 0' }}>{m.month}</td>
+                        <td style={{ padding: '2px 8px' }}>{m.sessions}</td>
+                        <td style={{ padding: '2px 8px' }}>{m.kwh}</td>
+                        {stats.ratePerKwh != null && <td style={{ padding: '2px 8px' }}>${(m.costUsd ?? 0).toFixed(2)}</td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+
+            <div className="form-label" style={{ marginBottom: 6 }}>Recent sessions</div>
+            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', opacity: 0.6 }}>
+                  <th style={{ padding: '2px 8px 2px 0' }}>Started</th>
+                  <th style={{ padding: '2px 8px' }}>Vehicle</th>
+                  <th style={{ padding: '2px 8px' }}>Duration</th>
+                  <th style={{ padding: '2px 8px' }}>kWh</th>
+                  {stats.ratePerKwh != null && <th style={{ padding: '2px 8px' }}>Est. Cost</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {stats.recentSessions.map((s, i) => (
+                  <tr key={i}>
+                    <td style={{ padding: '2px 8px 2px 0' }}>{fmtDate(s.startedAt)}</td>
+                    <td style={{ padding: '2px 8px' }}>{s.vehicleName}</td>
+                    <td style={{ padding: '2px 8px' }}>{s.durationMin} min</td>
+                    <td style={{ padding: '2px 8px' }}>{s.energyKwh}</td>
+                    {stats.ratePerKwh != null && <td style={{ padding: '2px 8px' }}>${(s.costUsd ?? 0).toFixed(2)}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
       </div>
     </div>
   );

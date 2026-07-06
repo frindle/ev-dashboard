@@ -47,6 +47,12 @@ export interface WallConnectorData {
   todayKwh: number;    // integrated since local midnight
 }
 
+export interface SolarOpportunity {
+  excessSolarW: number;       // solar production beyond current house load (0 when none)
+  chargerDrawW: number;       // combined wall-connector draw
+  suggestion: string | null;  // human-readable hint when excess is meaningful
+}
+
 export interface DashboardFlags {
   teslaReauthRequired: boolean;
   teslaReauthReason: string | null;
@@ -76,6 +82,7 @@ export interface DashboardData {
   teslaConnected: boolean;
   rivianConnected: boolean;
   flags: DashboardFlags;
+  solarOpportunity: SolarOpportunity | null;
 }
 
 export interface WeatherData {
@@ -554,6 +561,29 @@ async function handleGet(req: Request) {
     console.warn('[notify] failed:', String(e).slice(0, 160));
   }
 
+  // Excess-solar opportunity: production beyond what the house is drawing
+  // right now. Charger draw is added back to "load" headroom because that
+  // power is elective — the point is "how much could go into a car for
+  // free". Data only; the dashboard renders it once design ships.
+  let solarOpportunity: SolarOpportunity | null = null;
+  if (siteState) {
+    const chargerDrawW = (wcLeft?.powerW ?? 0) + (wcRight?.powerW ?? 0);
+    const houseLoadW = Math.max(0, siteState.loadPowerW - chargerDrawW);
+    const excessSolarW = Math.max(0, Math.round(siteState.solarPowerW - houseLoadW));
+    const kw = excessSolarW / 1000;
+    solarOpportunity = {
+      excessSolarW,
+      chargerDrawW: Math.round(chargerDrawW),
+      // 1.5 kW ≈ the minimum meaningful AC charge rate; below that the hint is noise.
+      suggestion: excessSolarW >= 1500 && chargerDrawW < 100
+        ? `~${kw.toFixed(1)} kW of excess solar available — a good time to charge`
+        : null,
+    };
+    if (solarOpportunity.suggestion) {
+      console.log(`[solar] ${solarOpportunity.suggestion} (solar=${siteState.solarPowerW}W house=${houseLoadW}W chargers=${chargerDrawW}W)`);
+    }
+  }
+
   const data: DashboardData = {
     vehicles,
     wallConnectors,
@@ -566,6 +596,7 @@ async function handleGet(req: Request) {
     teslaConnected,
     rivianConnected,
     flags,
+    solarOpportunity,
   };
 
   // Persist to disk so the client can show last-known state on restart
