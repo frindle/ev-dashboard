@@ -24,7 +24,7 @@ async function rotateIfNeeded(path: string) {
 
 export interface ApiCallRecord {
   ts: string;
-  provider: 'rivian' | 'tesla' | 'solaredge' | 'weather' | 'other';
+  provider: 'rivian' | 'tesla' | 'solaredge' | 'weather' | 'pushover' | 'other';
   endpoint: string;         // GraphQL op name, or REST path
   status: number;           // HTTP status; 0 for network error
   durationMs: number;

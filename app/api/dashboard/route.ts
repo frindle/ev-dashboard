@@ -14,6 +14,7 @@ import {
 import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/lib/rivian';
 import { getDoorState, hasMyQTokens } from '@/lib/myq';
 import { readFlags } from '@/lib/sessionFlags';
+import { notifyFlagChanges } from '@/lib/notifications';
 
 export const dynamic = 'force-dynamic';
 
@@ -499,6 +500,23 @@ async function handleGet(req: Request) {
     rivianWiperFluidLow: !!rivState && /low/i.test(rivState.wiperFluidState),
     rivianBrakeFluidLow: !!rivState?.brakeFluidLow,
   };
+
+  // Fire-and-forget Pushover notifications for newly raised flags
+  // (deduped per lapse / per OTA version inside the notifier).
+  try {
+    notifyFlagChanges({
+      teslaReauthRequired: flags.teslaReauthRequired,
+      teslaReauthReason: flags.teslaReauthReason,
+      rivianReauthRequired: flags.rivianReauthRequired,
+      rivianReauthReason: flags.rivianReauthReason,
+      rivianReauthDueSoon: flags.rivianReauthDueSoon,
+      rivianReauthDaysLeft: flags.rivianReauthDaysLeft,
+      rivianOtaUpdateAvailable: flags.rivianOtaUpdateAvailable,
+      rivianOtaAvailableVersion: rivState?.otaAvailableVersion ?? '',
+    });
+  } catch (e) {
+    console.warn('[notify] failed:', String(e).slice(0, 160));
+  }
 
   const data: DashboardData = {
     vehicles,

@@ -10,6 +10,7 @@ export interface SessionFlags {
   rivian_reauth_due_soon?: { at: number; daysLeft: number };
   rivian_reauth_required?: { at: number; reason: string };
   rivian_reauth_pushover_at?: number;
+  rivian_due_soon_pushover_at?: number;
 
   // Rivian OTA push-dedupe: last version we notified about.
   rivian_ota_notified_version?: string;
@@ -86,6 +87,7 @@ export function clearRivianReauthFlags(): void {
     delete f.rivian_reauth_required;
     delete f.rivian_reauth_due_soon;
     delete f.rivian_reauth_pushover_at;
+    delete f.rivian_due_soon_pushover_at;
     console.log('[flags] rivian_reauth flags cleared');
   });
 }
@@ -97,6 +99,15 @@ export function shouldPushOncePerLapse(key: 'tesla' | 'rivian'): boolean {
   const stampKey = key === 'tesla' ? 'tesla_reauth_pushover_at' : 'rivian_reauth_pushover_at';
   if (f[stampKey]) return false;
   mutate(g => { g[stampKey] = Date.now(); });
+  return true;
+}
+
+// One push per lapse for the day-83 "session expiring soon" warning.
+// Cleared alongside the other Rivian flags on successful re-login.
+export function shouldPushDueSoonOnce(): boolean {
+  const f = readFlags();
+  if (f.rivian_due_soon_pushover_at) return false;
+  mutate(g => { g.rivian_due_soon_pushover_at = Date.now(); });
   return true;
 }
 
