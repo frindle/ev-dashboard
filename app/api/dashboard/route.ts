@@ -325,22 +325,59 @@ async function updateSessionKwh(
   return { left, right };
 }
 
-// Persist Rivian's last-known GPS so an offline vehicle keeps its
-// home/away status (mirrors the Tesla preservation in smartFetchTesla).
-async function fetchRivianWithGpsCache(): Promise<RivianVehicleState | null> {
+// Rivian smart-poll. Same idea as smartFetchTesla: the client hits
+// /api/dashboard every 30s, but Rivian's opaque throttling means we should
+// not forward every one of those to their GraphQL gateway. Serve the cached
+// state between real polls:
+//   - Charging: 60s (progress worth showing, still half the client rate)
+//   - Otherwise: 5 min (parked/asleep state barely changes)
+// The cache also preserves last-known GPS so an offline vehicle keeps its
+// home/away status.
+const RIVIAN_INTERVAL_CHARGING_MS = 60_000;
+const RIVIAN_INTERVAL_IDLE_MS = 5 * 60_000;
+
+interface RivianCache {
+  state?: RivianVehicleState;
+  fetchedAt?: number;
+  // legacy shape (pre full-state cache) — file held bare coords
+  lat?: number | null;
+  lon?: number | null;
+}
+
+async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, 'rivian-state.json');
 
-  let cachedGps: { lat: number | null; lon: number | null } = { lat: null, lon: null };
+  let cache: RivianCache = {};
   if (existsSync(path)) {
-    try {
-      const cache = JSON.parse(await readFile(path, 'utf-8')) as { lat: number | null; lon: number | null };
-      cachedGps = { lat: cache.lat ?? null, lon: cache.lon ?? null };
-    } catch { /* fall through */ }
+    try { cache = JSON.parse(await readFile(path, 'utf-8')) as RivianCache; }
+    catch { /* fall through */ }
+  }
+  const cachedGps = {
+    lat: cache.state?.lat ?? cache.lat ?? null,
+    lon: cache.state?.lon ?? cache.lon ?? null,
+  };
+
+  // Fresh-enough cache → don't touch the Rivian API at all this cycle.
+  if (!force && cache.state && cache.fetchedAt) {
+    const ageMs = Date.now() - cache.fetchedAt;
+    const interval = cache.state.isCharging ? RIVIAN_INTERVAL_CHARGING_MS : RIVIAN_INTERVAL_IDLE_MS;
+    if (ageMs < interval) {
+      (cache.state as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = false;
+      return cache.state;
+    }
   }
 
   const fresh = await fetchRivianVehicleState();
-  if (!fresh) return null;
+  if (!fresh) {
+    // Backoff window or fetch failure — serve last-known so the card
+    // doesn't blank out. atHome stays neutral (_gpsFresh=false).
+    if (cache.state) {
+      (cache.state as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = false;
+      return cache.state;
+    }
+    return null;
+  }
 
   // Trust GNSS only when it's < 15 min old and horizontal error is reasonable.
   // Older readings (last known before sleep) may lie about the current position.
@@ -353,10 +390,9 @@ async function fetchRivianWithGpsCache(): Promise<RivianVehicleState | null> {
   if ((fresh.lat === null || !gnssTrustworthy) && cachedGps.lat !== null) fresh.lat = cachedGps.lat;
   if ((fresh.lon === null || !gnssTrustworthy) && cachedGps.lon !== null) fresh.lon = cachedGps.lon;
 
-  if (freshGpsFromPoll) {
-    try { await writeFile(path, JSON.stringify({ lat: fresh.lat, lon: fresh.lon })); }
-    catch { /* non-fatal */ }
-  }
+  try {
+    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now() } satisfies RivianCache));
+  } catch { /* non-fatal */ }
   (fresh as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
   return fresh;
 }
@@ -388,7 +424,7 @@ async function handleGet(req: Request) {
   // and moved per-connector fields into the same live_status response).
   const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
-    rivianConnected ? fetchRivianWithGpsCache() : Promise.resolve(null),
+    rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
     teslaConnected && leftSerial  ? fetchWallConnectorVitals(cfg.energySite.id, leftSerial)  : Promise.resolve(null),
     teslaConnected && rightSerial ? fetchWallConnectorVitals(cfg.energySite.id, rightSerial) : Promise.resolve(null),
