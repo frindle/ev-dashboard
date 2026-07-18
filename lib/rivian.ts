@@ -100,6 +100,7 @@ export interface RivianVehicleState {
   gnssErrorM: number | null;
   hvThermalEvent: string;     // batteryHvThermalEvent raw
   hvThermalPropagation: string; // batteryHvThermalEventPropagation raw
+  hvThermalActive: boolean;   // true only for a genuine excursion, not the idle "off"/"nominal" values
   wiperFluidState: string;    // '' | 'normal' | 'low'
   brakeFluidLow: boolean;
   tirePressureFL: string;     // 'normal' | 'low' | 'critical' | ''
@@ -482,6 +483,14 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       derateLower !== 'inactive' &&
       derateLower !== 'normal';
 
+    // HV thermal event/propagation: same shape as derate above — Rivian
+    // returns a non-empty idle string ("off" / "nominal", confirmed from
+    // container logs 2026-07-18) even with no active excursion, so "not
+    // empty" alone false-positives on every poll. Only flag genuine values.
+    const HV_IDLE = new Set(['', 'off', 'none', 'no_event', 'inactive', 'normal', 'nominal']);
+    const hvThermalActive =
+      !HV_IDLE.has(hvThermalRaw.toLowerCase()) || !HV_IDLE.has(hvThermalPropRaw.toLowerCase());
+
     // Only show climate as on for explicitly active states; 'system_idle', 'not_available', etc. → off
     const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
     const climateVal = (vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
@@ -520,6 +529,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       gnssErrorM: vs.gnssError?.positionHorizontal ?? null,
       hvThermalEvent: hvThermalRaw,
       hvThermalPropagation: hvThermalPropRaw,
+      hvThermalActive,
       wiperFluidState: wiperFluidRaw,
       brakeFluidLow: brakeLowBool,
       tirePressureFL: tpFL,

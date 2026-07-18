@@ -538,7 +538,7 @@ async function handleGet(req: Request) {
     rivianOtaInstalling: !!rivState?.otaInstalling,
     rivianDerateActive: !!rivState?.isThrottled,
     rivianDerateReason: rivState?.isThrottled ? rivState.derateReason : null,
-    rivianHvThermalEvent: !!rivState && (rivState.hvThermalEvent !== '' || rivState.hvThermalPropagation !== ''),
+    rivianHvThermalEvent: !!rivState?.hvThermalActive,
     rivianTirePressureLow: tirePressureLow,
     rivianWiperFluidLow: !!rivState && /low/i.test(rivState.wiperFluidState),
     rivianBrakeFluidLow: !!rivState?.brakeFluidLow,
