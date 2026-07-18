@@ -1,6 +1,9 @@
 services:
   ev-dashboard:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_SHA: "${BUILD_SHA:-unknown}"
     ports:
       - "3030:3000"
       - "50051:50051"

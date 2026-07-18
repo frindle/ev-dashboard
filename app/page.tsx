@@ -332,6 +332,15 @@ export default function Dashboard() {
   // Banner dismissal state. Reauth-critical banners ignore this; only the
   // "due-soon" banner honors it, and only for the current tab session.
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
+
+  // Checked once per load — this is a kiosk tab that stays open for days,
+  // and /api/version caches the GitHub call for 5 min server-side anyway.
+  useEffect(() => {
+    fetch('/api/version').then(r => r.json()).then((d: { outdated?: boolean }) => {
+      setAppUpdateAvailable(!!d.outdated);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     setTime(new Date());
@@ -517,9 +526,12 @@ export default function Dashboard() {
                 <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>videocam</span>
               </button>
             )}
-            <a href="/admin" title="Settings"
-              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#7d8893', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, textDecoration: 'none' }}>
+            <a href="/admin" title={appUpdateAvailable ? 'Settings — update available' : 'Settings'}
+              style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#7d8893', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, textDecoration: 'none' }}>
               <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>settings</span>
+              {appUpdateAvailable && (
+                <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: ACCENT, border: '2px solid #0e1216' }} />
+              )}
             </a>
           </div>
           {/* Stat chips */}

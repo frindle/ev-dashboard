@@ -25,6 +25,8 @@ git reset --hard origin/main
 echo "=== last commit ==="
 git --no-pager log -1 --pretty='%h %s'
 
+export BUILD_SHA="$(git rev-parse --short HEAD)"
+
 echo "=== building${EXTRA_BUILD_ARGS:+ (no cache)} ==="
 docker-compose build $EXTRA_BUILD_ARGS
 

@@ -20,6 +20,10 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
+# /api/version falls back to comparing this against the latest main commit
+# date when BUILD_SHA wasn't passed (e.g. a plain `docker-compose build`
+# without a script setting it).
+RUN date -u +"%Y-%m-%dT%H:%M:%SZ" > .build-time
 
 # Produce a slim node_modules with only the deps the telemetry server needs.
 # Next.js's standalone output bundles everything Next-side itself, but our
@@ -35,9 +39,16 @@ ENV NODE_ENV=production
 RUN apk add --no-cache openssl curl jq
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 
+# Bake the git commit SHA into the image so /api/version can compare it
+# against GitHub main to flag the dashboard as out-of-date.
+# Pass via: BUILD_SHA=$(git rev-parse --short HEAD) docker-compose build
+ARG BUILD_SHA=unknown
+ENV BUILD_SHA=$BUILD_SHA
+
 # Next.js standalone bundle (includes its own node_modules)
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/.build-time ./
 
 # Telemetry sidecar files + their deps under server/node_modules so they
 # don't conflict with Next.js's bundled modules.
