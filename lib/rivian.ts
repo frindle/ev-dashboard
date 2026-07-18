@@ -501,6 +501,10 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const otaStatusLower = otaStatusRaw.toLowerCase();
     const otaInstalling = /install|download|apply|updating/.test(otaStatusLower);
     const otaUpdateAvailable = otaAvailable !== '' && otaAvailable !== otaCurrent;
+    console.log(
+      `[rivian-ota] current="${otaCurrent}" available="${otaAvailable}" ` +
+      `status="${otaStatusRaw}" updateAvailable=${otaUpdateAvailable}`
+    );
 
     const brakeLowBool = brakeFluidRaw === true || brakeFluidRaw === 'low' || brakeFluidRaw === 'true';
 
