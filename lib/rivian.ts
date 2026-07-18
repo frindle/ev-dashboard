@@ -495,12 +495,17 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
     const climateVal = (vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
 
-    const otaCurrent = vs.otaCurrentVersionNumber?.value ?? '';
-    const otaAvailable = vs.otaAvailableVersionNumber?.value ?? '';
+    // Rivian sends these as raw JSON numbers despite the GraphQL schema
+    // typing them as strings — confirmed from a real poll (otaCurrent=1,
+    // otaAvailable=0). String(...) normalizes both sides so the comparison
+    // below can't false-positive on a `0 !== ''` type mismatch, and "0" is
+    // treated as "no update queued" the same as an empty value.
+    const otaCurrent = String(vs.otaCurrentVersionNumber?.value ?? '');
+    const otaAvailable = String(vs.otaAvailableVersionNumber?.value ?? '');
     const otaStatusRaw = (vs.otaStatus?.value ?? vs.otaCurrentStatus?.value ?? '').toString();
     const otaStatusLower = otaStatusRaw.toLowerCase();
     const otaInstalling = /install|download|apply|updating/.test(otaStatusLower);
-    const otaUpdateAvailable = otaAvailable !== '' && otaAvailable !== otaCurrent;
+    const otaUpdateAvailable = otaAvailable !== '' && otaAvailable !== '0' && otaAvailable !== otaCurrent;
     console.log(
       `[rivian-ota] current="${otaCurrent}" available="${otaAvailable}" ` +
       `status="${otaStatusRaw}" updateAvailable=${otaUpdateAvailable}`
