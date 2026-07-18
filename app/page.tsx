@@ -323,13 +323,18 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [feedState, setFeedState] = useState<'live' | 'stale' | 'error'>('stale');
   const [showCamera, setShowCamera] = useState(false);
-  const [time, setTime] = useState(new Date());
+  // null until mount — SSR renders the same placeholder as the initial
+  // client render, so the clock never causes a hydration text mismatch
+  // (server time vs. client time would otherwise differ by the network
+  // round-trip, tripping React error #418).
+  const [time, setTime] = useState<Date | null>(null);
   const [commandPending, setCommandPending] = useState(false);
   // Banner dismissal state. Reauth-critical banners ignore this; only the
   // "due-soon" banner honors it, and only for the current tab session.
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
   useEffect(() => {
+    setTime(new Date());
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -412,10 +417,10 @@ export default function Dashboard() {
 
   // Header values
   const weather = data?.weather;
-  const dateStr = time.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  const timeStr = time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const dateStr = time ? time.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : '';
+  const timeStr = time ? time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : '--:--';
 
-  const ageSec = data ? Math.max(0, Math.floor((time.getTime() - new Date(data.lastUpdated).getTime()) / 1000)) : 0;
+  const ageSec = data && time ? Math.max(0, Math.floor((time.getTime() - new Date(data.lastUpdated).getTime()) / 1000)) : 0;
 
   let feedLabel: string, feedColor: string, feedBg: string, feedPulse: boolean;
   if (feedState === 'error') {
