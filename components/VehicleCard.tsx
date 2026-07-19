@@ -44,6 +44,7 @@ export type Vehicle = {
   odo: number;
   capacity: number;
   charging: boolean;
+  pluggedIn: boolean;
   amps: number;
   today: number;
   ctrl: 'full' | 'schedule';
@@ -305,10 +306,13 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
     :                           (v.soc >= v.limit ? 'AT TARGET' : 'IDLE · NOT PLUGGED IN');
   const etaColor = v.charging ? ACCENT : '#7d8893';
 
+  // Start only makes sense plugged in; Stop stays available regardless (in
+  // case charging is somehow still active without a fresh plug reading).
+  const btnDisabled = !v.charging && !v.pluggedIn;
   const btnLabel  = v.charging ? 'Stop' : 'Start';
-  const btnBg     = v.charging ? 'transparent' : ACCENT;
+  const btnBg     = v.charging ? 'transparent' : (btnDisabled ? '#2a333c' : ACCENT);
   const btnBorder = v.charging ? '1px solid rgba(226,104,95,.5)' : '1px solid transparent';
-  const btnColor  = v.charging ? '#e2685f' : '#08231f';
+  const btnColor  = v.charging ? '#e2685f' : (btnDisabled ? '#7d8893' : '#08231f');
 
   const dragging = React.useRef(false);
   const onDialDown = (e: React.PointerEvent<SVGSVGElement>) => {
@@ -449,12 +453,14 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir }}>
           {v.ctrl === 'full' && (
-            <button onClick={() => onToggleCharging(v)} style={{
-              appearance: 'none', cursor: 'pointer', flex: 'none',
-              padding: '10px 18px', borderRadius: 11,
-              background: btnBg, border: btnBorder, color: btnColor,
-              fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600,
-            }}>{btnLabel}</button>
+            <button onClick={() => onToggleCharging(v)} disabled={btnDisabled}
+              title={btnDisabled ? 'Not plugged in' : undefined}
+              style={{
+                appearance: 'none', cursor: btnDisabled ? 'default' : 'pointer', flex: 'none',
+                padding: '10px 18px', borderRadius: 11,
+                background: btnBg, border: btnBorder, color: btnColor,
+                fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600,
+              }}>{btnLabel}</button>
           )}
           {v.ctrl === 'schedule' && (
             <span style={{

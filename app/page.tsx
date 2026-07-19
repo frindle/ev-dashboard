@@ -74,6 +74,7 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
     odo: s ? Math.round(s.odometer) : 0,
     capacity: isTesla ? 82 : 135,
     charging: s?.isCharging ?? false,
+    pluggedIn: s?.isPluggedIn ?? false,
     amps: t?.chargerActualCurrentA ?? 0,
     today: 0,
     ctrl: isTesla ? 'full' : 'schedule',
