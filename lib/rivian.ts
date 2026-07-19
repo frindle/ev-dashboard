@@ -280,12 +280,21 @@ async function resolveTokensAndVehicle(partial: Omit<RivianTokens, 'vehicleId' |
   let vehicleId = '';
   try {
     const userData = await gql<{
-      currentUser: { vehicles: Array<{ id: string; name: string; vin: string }> };
+      currentUser: { vehicles: Array<{ id: string; name: string; vin: string; vehicle?: { id: string } }> };
     }>(GET_USER_VEHICLES, {}, authHeaders);
 
-    vehicleId = userData.currentUser.vehicles[0]?.id ?? '';
-  } catch {
-    // Non-fatal — user can provide vehicle ID manually
+    const v0 = userData.currentUser.vehicles[0];
+    // Rivian's schema has both an enrollment-level id and a nested
+    // vehicle.id — confirmed from a real login (2026-07-18) that the
+    // top-level one can come back empty while the query itself succeeds
+    // (200 OK), silently leaving every later state poll dead with no
+    // network call and no error at all. Try both, log if neither works.
+    vehicleId = v0?.id || v0?.vehicle?.id || '';
+    if (!vehicleId) {
+      console.error('[rivian] resolveTokensAndVehicle: no usable vehicle ID in response:', JSON.stringify(userData));
+    }
+  } catch (e) {
+    console.error('[rivian] resolveTokensAndVehicle: GetCurrentUser failed:', e);
   }
 
   return { ...partial, vehicleId, savedAt: Date.now() };
@@ -374,7 +383,13 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
   if (!tokens) return null;
 
   const vid = vehicleId ?? tokens.vehicleId;
-  if (!vid) return null;
+  if (!vid) {
+    // Was a totally silent dead-end before — every poll returned null with
+    // zero trace anywhere (no log line, no backoff, no error), so a bad
+    // token save could go unnoticed indefinitely. Loud now on purpose.
+    console.error('[rivian] fetchRivianVehicleState: no vehicleId on tokens — reconnect Rivian in /admin');
+    return null;
+  }
 
   // Rivian throttling is opaque — respect our own backoff clock.
   if (inBackoffWindow()) {
