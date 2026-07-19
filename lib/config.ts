@@ -60,6 +60,13 @@ export interface AppConfig {
     unitId: number;       // Modbus device ID; default 1 for single inverter
     pollIntervalSec: number; // how often to read live registers
   };
+  nvr: {
+    enabled: boolean; // master switch — off until the NVR is actually recording (see api-docs/Reolink)
+    host: string;     // NVR/camera LAN IP or hostname
+    username: string;
+    password: string;
+    channel: number;  // camera channel on the NVR, 0 for a single IP camera
+  };
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -116,6 +123,13 @@ const DEFAULT_CONFIG: AppConfig = {
     port: 1502,
     unitId: 1,
     pollIntervalSec: 10,
+  },
+  nvr: {
+    enabled: false,
+    host: '',
+    username: '',
+    password: '',
+    channel: 0,
   },
 };
 

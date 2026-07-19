@@ -16,6 +16,7 @@ export async function GET() {
     ...cfg,
     vehicles: { ...cfg.vehicles, rivian: { ...cfg.vehicles.rivian, password: '' } },
     garage: { ...cfg.garage, password: '' },
+    nvr: { ...cfg.nvr, password: '' },
   };
   return Response.json({
     config: redacted,
@@ -24,6 +25,7 @@ export async function GET() {
     myqConnected: hasMyQTokens(),
     hasStoredRivianPassword: cfg.vehicles.rivian.password !== '',
     hasStoredMyqPassword: cfg.garage.password !== '',
+    hasStoredNvrPassword: cfg.nvr.password !== '',
   });
 }
 
@@ -35,6 +37,7 @@ export async function POST(req: NextRequest) {
     const existing = readConfig();
     if (!body.vehicles.rivian.password) body.vehicles.rivian.password = existing.vehicles.rivian.password;
     if (!body.garage.password) body.garage.password = existing.garage.password;
+    if (!body.nvr.password) body.nvr.password = existing.nvr.password;
     writeConfig(body);
     return Response.json({ ok: true });
   } catch (e) {

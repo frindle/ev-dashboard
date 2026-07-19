@@ -56,6 +56,7 @@ export default function AdminPage() {
   const [rivianResolveMsg, setRivianResolveMsg] = useState('');
   const [rivianHasSavedPassword, setRivianHasSavedPassword] = useState(false);
   const [rivianPendingSave, setRivianPendingSave] = useState(false);
+  const [hasStoredNvrPassword, setHasStoredNvrPassword] = useState(false);
 
   // globals.css sets overflow:hidden + height:100% on html/body for the dashboard
   // clear both so the admin page can scroll normally
@@ -75,12 +76,13 @@ export default function AdminPage() {
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
-      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean; hasStoredRivianPassword: boolean }) => {
+      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean; hasStoredRivianPassword: boolean; hasStoredNvrPassword: boolean }) => {
         setConfig(d.config);
         setTeslaConnected(d.teslaConnected);
         setRivianConnected(d.rivianConnected);
         setRivianEmail(d.config.vehicles.rivian.email);
         setRivianHasSavedPassword(d.hasStoredRivianPassword);
+        setHasStoredNvrPassword(d.hasStoredNvrPassword);
         if (d.teslaConnected) fetchWallConnectors();
       });
     fetch('/api/rivian/auth')
@@ -848,6 +850,82 @@ export default function AdminPage() {
             SolarEdge uses port 1502 (not the Modbus standard 502). Device ID 1 is correct for a single inverter.
             Only one Modbus/TCP client may connect at a time — disable Home Assistant&apos;s SolarEdge integration if you have one.
             After enabling Modbus on the inverter, the first poll must arrive within ~2 minutes or the port closes.
+          </div>
+        </div>
+      </div>
+
+      {/* ── NVR / Recorded Clips ──
+          Off by default — no recording pipeline set up yet. Backend (lib/reolink.ts,
+          /api/nvr/clips) is built and ready; flip this on once the NVR is actually
+          capturing, then wire a clip-history UI into CameraModal. */}
+      <div className="admin-section">
+        <div className="admin-section-header">
+          <div className="admin-section-title">
+            <div className={`status-dot ${config.nvr.enabled && config.nvr.host ? 'connected' : 'disconnected'}`} />
+            NVR / Recorded Clips
+          </div>
+        </div>
+        <div className="admin-section-body">
+          <div className="form-row">
+            <label className="form-label">
+              <input
+                type="checkbox"
+                checked={config.nvr.enabled}
+                onChange={e => update('nvr', { enabled: e.target.checked })}
+                style={{ marginRight: 8 }}
+              />
+              Enable NVR clip history
+            </label>
+            <div className="form-hint">
+              Off by default. Requires a Reolink camera/NVR actually recording — nothing to browse until then.
+            </div>
+          </div>
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">NVR / Camera IP</label>
+              <input
+                className="form-input"
+                type="text"
+                value={config.nvr.host}
+                onChange={e => update('nvr', { host: e.target.value.trim() })}
+                placeholder="10.0.6.180"
+              />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Channel</label>
+              <input
+                className="form-input"
+                type="number"
+                min="0"
+                value={config.nvr.channel}
+                onChange={e => update('nvr', { channel: e.target.value ? parseInt(e.target.value, 10) : 0 })}
+              />
+            </div>
+          </div>
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">Username</label>
+              <input
+                className="form-input"
+                type="text"
+                value={config.nvr.username}
+                onChange={e => update('nvr', { username: e.target.value })}
+                placeholder="admin"
+              />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Password</label>
+              <input
+                className="form-input"
+                type="password"
+                value={config.nvr.password}
+                onChange={e => update('nvr', { password: e.target.value })}
+                placeholder={hasStoredNvrPassword ? '•••••••• (saved — leave blank to keep)' : '••••••••'}
+              />
+            </div>
+          </div>
+          <div className="form-hint">
+            Channel is 0 for a single IP camera, or the NVR channel number for a multi-camera NVR.
           </div>
         </div>
       </div>
