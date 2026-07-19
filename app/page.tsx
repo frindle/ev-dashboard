@@ -126,12 +126,23 @@ function buildAlerts(data: DashboardData): AlertInputs {
 }
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
-function CircuitPanel({ wallConnectors, solarPowerW }: {
+function CircuitPanel({ wallConnectors, solarPowerW, vehicles }: {
   wallConnectors: WallConnectorData[];
   solarPowerW: number;
+  vehicles: VehicleData[];
 }) {
   const left  = wallConnectors.find(w => w.side === 'LEFT');
   const right = wallConnectors.find(w => w.side === 'RIGHT');
+
+  // The Wall Connector's own pilot-signal reading (vitals.vehicleConnected)
+  // can false-negative for a vehicle using a J1772 adapter (Rivian doesn't
+  // have a native Tesla connector) — confirmed 2026-07-19: Rivian's own API,
+  // its app, and Home Assistant all agreed it was plugged in while the Wall
+  // Connector alone said disconnected. Trust either signal: only show
+  // "disconnected" when the Wall Connector AND the assigned vehicle's own
+  // reported plug state both agree nothing's connected.
+  const leftVehiclePluggedIn  = vehicles.find(v => v.chargerSide === 'LEFT')?.state?.isPluggedIn  ?? false;
+  const rightVehiclePluggedIn = vehicles.find(v => v.chargerSide === 'RIGHT')?.state?.isPluggedIn ?? false;
 
   const leftAmps  = left?.vitals?.currentA  ?? 0;
   const rightAmps = right?.vitals?.currentA ?? 0;
@@ -164,8 +175,8 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
   const LEFT_COLOR  = '#9aa5b1';
   const RIGHT_COLOR = '#5b8def';
   const sides = [
-    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh,  today: leftTodayKwh,  color: LEFT_COLOR  },
-    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh, today: rightTodayKwh, color: RIGHT_COLOR },
+    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh,  today: leftTodayKwh,  color: LEFT_COLOR,  vehicleConnected: (left?.vitals?.vehicleConnected ?? false)  || leftVehiclePluggedIn  },
+    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh, today: rightTodayKwh, color: RIGHT_COLOR, vehicleConnected: (right?.vitals?.vehicleConnected ?? false) || rightVehiclePluggedIn },
   ];
 
   return (
@@ -212,7 +223,7 @@ function CircuitPanel({ wallConnectors, solarPowerW }: {
           const dotAnim = side.inUse ? 'evpulse 1.8s ease-in-out infinite' : 'none';
           const connectedLabel = side.inUse
             ? (side.wc?.vehicleName ?? side.name) + ' charging'
-            : vitals?.vehicleConnected ? 'Vehicle connected · not charging' : 'No vehicle connected';
+            : side.vehicleConnected ? 'Vehicle connected · not charging' : 'No vehicle connected';
           return (
             <div key={side.name} style={{ display: 'flex', flexDirection: 'column', gap: 10, background: '#161c22', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: '13px 16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
@@ -615,7 +626,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── Circuit Panel ── */}
-      <CircuitPanel wallConnectors={wallConnectors} solarPowerW={solarPowerW} />
+      <CircuitPanel wallConnectors={wallConnectors} solarPowerW={solarPowerW} vehicles={vehicles} />
 
       {/* ── Camera Modal ── */}
       {showCamera && (
