@@ -353,6 +353,7 @@ query GetVehicleState($vehicleID: String!) {
     chargerStatus { timeStamp value }
     chargerDerateStatus { timeStamp value }
     powerState { timeStamp value }
+    gearStatus { timeStamp value }
     vehicleMileage { timeStamp value }
     doorFrontLeftLocked { timeStamp value }
     doorFrontRightLocked { timeStamp value }
@@ -387,6 +388,7 @@ interface RawVehicleState {
   chargerStatus: { value: string; timeStamp?: string } | null;
   chargerDerateStatus: { value: string; timeStamp?: string } | null;
   powerState: { value: string; timeStamp?: string } | null;
+  gearStatus: { value: string; timeStamp?: string } | null;
   vehicleMileage: { value: number } | null;
   doorFrontLeftLocked: { value: string } | null;
   cabinPreconditioningStatus: { value: string } | null;
@@ -455,6 +457,11 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const chargePortTs = vs.chargePortState?.timeStamp;
     const powerStateRaw = vs.powerState?.value ?? '';
     const powerStateTs = vs.powerState?.timeStamp;
+    // Log-only for now — observing real values to confirm the "driving" vs
+    // "parked" strings before building the garage-light-on-arrival automation
+    // off of it. Not read anywhere else yet.
+    const gearStatusRaw = vs.gearStatus?.value ?? '';
+    const gearStatusTs = vs.gearStatus?.timeStamp;
 
     const derateRawEarly = vs.chargerDerateStatus?.value ?? '';
     const hvThermalRaw = vs.batteryHvThermalEvent?.value ?? '';
@@ -471,6 +478,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       `chargerStatus="${chargerStatusRaw}"@${chargerStatusTs ?? '?'} ` +
       `chargePortState="${chargePortRaw}"@${chargePortTs ?? '?'} ` +
       `powerState="${powerStateRaw}"@${powerStateTs ?? '?'} ` +
+      `gearStatus="${gearStatusRaw}"@${gearStatusTs ?? '?'} ` +
       `derate="${derateRawEarly}" hvThermal="${hvThermalRaw}" hvProp="${hvThermalPropRaw}" ` +
       `tires=FL:${tpFL}/FR:${tpFR}/RL:${tpRL}/RR:${tpRR} ` +
       `wiper="${wiperFluidRaw}" brakeLow=${brakeFluidRaw} ` +
