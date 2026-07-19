@@ -5,8 +5,29 @@ import { readConfig } from '@/lib/config';
 // this was built against. NVR feature is disabled (config.nvr.enabled) until
 // there's actually an NVR recording to browse.
 
-// Devices serve a self-signed cert on LAN; scope the bypass to just these calls.
-const insecureAgent = new https.Agent({ rejectUnauthorized: false });
+// Devices serve a self-signed cert on LAN. Node's global fetch (undici) doesn't
+// honor a classic https.Agent for that, and undici isn't a project dependency
+// here to use its dispatcher API — so these calls go through node:https directly,
+// scoping the rejectUnauthorized bypass to just this file.
+function postJson(url: string, body: unknown): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = https.request(url, {
+      method: 'POST',
+      rejectUnauthorized: false,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
 
 interface TokenCache {
   token: string;
@@ -19,21 +40,15 @@ async function login(): Promise<string> {
   const { host, username, password } = readConfig().nvr;
   if (!host) throw new Error('NVR host not configured');
 
-  const res = await fetch(`https://${host}/api.cgi?cmd=Login`, {
-    method: 'POST',
-    body: JSON.stringify([{
-      cmd: 'Login',
-      param: { User: { Version: '0', userName: username, password } },
-    }]),
-    // @ts-expect-error - Node fetch accepts an agent, the DOM lib types don't know that
-    agent: insecureAgent,
-  });
-  const data = await res.json();
+  const data = await postJson(`https://${host}/api.cgi?cmd=Login`, [{
+    cmd: 'Login',
+    param: { User: { Version: '0', userName: username, password } },
+  }]) as Array<{ code: number; value?: { Token: { name: string; leaseTime: number } } }>;
   const result = data?.[0];
   if (result?.code !== 0) throw new Error(`Reolink login failed: ${JSON.stringify(result)}`);
 
-  const token = result.value.Token.name as string;
-  const leaseTimeSec = result.value.Token.leaseTime as number;
+  const token = result.value!.Token.name;
+  const leaseTimeSec = result.value!.Token.leaseTime;
   cache = { token, expiresAt: Date.now() + (leaseTimeSec - 60) * 1000 };
   return token;
 }
@@ -67,30 +82,35 @@ function fromApiTime(t: { year: number; mon: number; day: number; hour: number; 
   return new Date(t.year, t.mon - 1, t.day, t.hour, t.min, t.sec).toISOString();
 }
 
-async function search(start: Date, end: Date, onlyStatus: 0 | 1) {
+interface SearchFile {
+  name: string; size: number;
+  StartTime: Parameters<typeof fromApiTime>[0];
+  EndTime: Parameters<typeof fromApiTime>[0];
+}
+
+interface SearchResult {
+  Status?: DayStatus[];
+  File?: SearchFile[];
+}
+
+async function search(start: Date, end: Date, onlyStatus: 0 | 1): Promise<SearchResult> {
   const { host } = readConfig().nvr;
   const channel = readConfig().nvr.channel;
   const token = await getToken();
 
-  const res = await fetch(`https://${host}/api.cgi?cmd=Search&token=${token}`, {
-    method: 'POST',
-    body: JSON.stringify([{
-      cmd: 'Search',
-      action: 0,
-      param: {
-        Search: {
-          channel, onlyStatus, streamType: 'main',
-          StartTime: toApiTime(start), EndTime: toApiTime(end),
-        },
+  const data = await postJson(`https://${host}/api.cgi?cmd=Search&token=${token}`, [{
+    cmd: 'Search',
+    action: 0,
+    param: {
+      Search: {
+        channel, onlyStatus, streamType: 'main',
+        StartTime: toApiTime(start), EndTime: toApiTime(end),
       },
-    }]),
-    // @ts-expect-error - see login()
-    agent: insecureAgent,
-  });
-  const data = await res.json();
+    },
+  }]) as Array<{ code: number; value?: { SearchResult: SearchResult } }>;
   const result = data?.[0];
   if (result?.code !== 0) throw new Error(`Reolink search failed: ${JSON.stringify(result)}`);
-  return result.value.SearchResult;
+  return result.value!.SearchResult;
 }
 
 /** Cheap per-month calendar: which days have any recordings. */
@@ -106,7 +126,7 @@ export async function getDayClips(year: number, month: number, day: number): Pro
   const start = new Date(year, month - 1, day, 0, 0, 0);
   const end = new Date(year, month - 1, day, 23, 59, 59);
   const result = await search(start, end, 0);
-  return (result.File ?? []).map((f: { name: string; size: number; StartTime: Parameters<typeof fromApiTime>[0]; EndTime: Parameters<typeof fromApiTime>[0] }) => ({
+  return (result.File ?? []).map(f => ({
     name: f.name,
     size: f.size,
     start: fromApiTime(f.StartTime),
