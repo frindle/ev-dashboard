@@ -379,6 +379,12 @@ async function updateSessionKwh(
 const RIVIAN_INTERVAL_CHARGING_MS = 60_000;
 const RIVIAN_INTERVAL_DRIVING_MS = 20_000;
 const RIVIAN_INTERVAL_IDLE_MS = 5 * 60_000;
+// Trust GNSS only when it's < 15 min old — older readings (last known
+// before sleep) may lie about the current position. Shared by both the
+// real-poll and served-from-cache paths so atHome doesn't flicker to
+// "unknown" just because a poll cycle skipped the network (see
+// fetchRivianWithGpsCache) while the last real GPS fix is still recent.
+const GPS_STALE_MS = 15 * 60 * 1000;
 
 interface RivianCache {
   state?: RivianVehicleState;
@@ -409,7 +415,15 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
       : cache.state.isCharging ? RIVIAN_INTERVAL_CHARGING_MS
       : RIVIAN_INTERVAL_IDLE_MS;
     if (ageMs < interval) {
-      (cache.state as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = false;
+      // Skipping the network this cycle doesn't mean the GPS data itself is
+      // stale — the cached state carries its own gnssTimeStamp from whenever
+      // it was actually fetched. Judge freshness by that, the same 15-min
+      // threshold a real poll uses, instead of unconditionally going neutral
+      // for the whole idle interval (was causing "VEHICLES home" to flicker
+      // to 0 every idle cycle even though the vehicle hadn't moved).
+      const cachedGnssMs = cache.state.gnssTimeStamp ? new Date(cache.state.gnssTimeStamp).getTime() : 0;
+      const cachedGnssFresh = cachedGnssMs > 0 && Date.now() - cachedGnssMs < GPS_STALE_MS;
+      (cache.state as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = cachedGnssFresh;
       return cache.state;
     }
   }
@@ -427,7 +441,6 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
 
   // Trust GNSS only when it's < 15 min old and horizontal error is reasonable.
   // Older readings (last known before sleep) may lie about the current position.
-  const GPS_STALE_MS = 15 * 60 * 1000;
   const gnssMs = fresh.gnssTimeStamp ? new Date(fresh.gnssTimeStamp).getTime() : 0;
   const gnssFresh = gnssMs > 0 && Date.now() - gnssMs < GPS_STALE_MS;
   const gnssTrustworthy = gnssFresh && (fresh.gnssErrorM == null || fresh.gnssErrorM < 100);

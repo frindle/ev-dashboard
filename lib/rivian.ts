@@ -84,7 +84,18 @@ export interface RivianVehicleState {
   isThrottled: boolean;       // chargerDerateStatus indicates active throttling
   derateReason: string;       // raw chargerDerateStatus value
   chargingState: string;      // chargerState.value raw string
-  isLocked: boolean;
+  isLocked: boolean;           // true only when all 4 doors report locked
+  doorFrontLeftOpen: boolean;
+  doorFrontLeftLocked: boolean;
+  doorFrontRightOpen: boolean;
+  doorFrontRightLocked: boolean;
+  doorRearLeftOpen: boolean;
+  doorRearLeftLocked: boolean;
+  doorRearRightOpen: boolean;
+  doorRearRightLocked: boolean;
+  anyDoorOpen: boolean;
+  anyDoorUnlocked: boolean;
+  twelveVoltBatteryHealth: string; // raw value, semantics unconfirmed — log-only until we see a real reading
   climateOn: boolean;
   rangeMi: number;            // distanceToEmpty.value (miles)
   odometer: number;           // vehicleMileage.value (miles)
@@ -357,7 +368,14 @@ query GetVehicleState($vehicleID: String!) {
     gearStatus { timeStamp value }
     vehicleMileage { timeStamp value }
     doorFrontLeftLocked { timeStamp value }
+    doorFrontLeftClosed { timeStamp value }
     doorFrontRightLocked { timeStamp value }
+    doorFrontRightClosed { timeStamp value }
+    doorRearLeftLocked { timeStamp value }
+    doorRearLeftClosed { timeStamp value }
+    doorRearRightLocked { timeStamp value }
+    doorRearRightClosed { timeStamp value }
+    twelveVoltBatteryHealth { timeStamp value }
     cabinPreconditioningStatus { timeStamp value }
     chargePortState { timeStamp value }
     gnssLocation { timeStamp latitude longitude }
@@ -392,6 +410,14 @@ interface RawVehicleState {
   gearStatus: { value: string; timeStamp?: string } | null;
   vehicleMileage: { value: number } | null;
   doorFrontLeftLocked: { value: string } | null;
+  doorFrontLeftClosed: { value: string } | null;
+  doorFrontRightLocked: { value: string } | null;
+  doorFrontRightClosed: { value: string } | null;
+  doorRearLeftLocked: { value: string } | null;
+  doorRearLeftClosed: { value: string } | null;
+  doorRearRightLocked: { value: string } | null;
+  doorRearRightClosed: { value: string } | null;
+  twelveVoltBatteryHealth: { value: string; timeStamp?: string } | null;
   cabinPreconditioningStatus: { value: string } | null;
   chargePortState: { value: string; timeStamp?: string } | null;
   gnssLocation: { latitude: number; longitude: number; timeStamp?: string } | null;
@@ -498,13 +524,12 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     // approach in Home Assistant's Rivian integration (bretterer/home-assistant-rivian,
     // coordinator.py): `chargerStatus.value != "chrgr_sts_not_connected"`.
     //
-    // chargePortState is NOT a plug signal despite the name — it's the
-    // physical charge port DOOR (open/closed). Rivian's door closes over
-    // the connector after plugging in, so "close" is normal mid-charge,
-    // not an unplugged indicator. Earlier logic here treated door-closed
-    // as unplugged and overrode a correctly-connected chargerStatus,
-    // which is why the dashboard could show "not plugged in" while the
-    // car was actually charging.
+    // chargePortState is NOT a plug signal despite the name — HA's own
+    // integration maps it to a separate DOOR-class sensor (open/closed
+    // charge port door), unrelated to whether a cable is connected.
+    // Earlier logic here treated door-closed as unplugged and overrode a
+    // correctly-connected chargerStatus, which is why the dashboard could
+    // show "not plugged in" while the car was actually charging.
     const isPluggedIn = chargerStatusRaw !== '' && chargerStatusRaw !== 'chrgr_sts_not_connected';
 
     // Only treat as charging when the contactor is actually closed and power is flowing
@@ -552,6 +577,26 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
 
     const brakeLowBool = brakeFluidRaw === true || brakeFluidRaw === 'low' || brakeFluidRaw === 'true';
 
+    // Door open/locked value semantics confirmed against Home Assistant's
+    // Rivian integration (bretterer/home-assistant-rivian, const.py):
+    // *Closed field value "open" means open; *Locked field value "unlocked" means unlocked.
+    const doorFrontLeftOpen = vs.doorFrontLeftClosed?.value === 'open';
+    const doorFrontLeftLockedBool = vs.doorFrontLeftLocked?.value === 'locked';
+    const doorFrontRightOpen = vs.doorFrontRightClosed?.value === 'open';
+    const doorFrontRightLockedBool = vs.doorFrontRightLocked?.value === 'locked';
+    const doorRearLeftOpen = vs.doorRearLeftClosed?.value === 'open';
+    const doorRearLeftLockedBool = vs.doorRearLeftLocked?.value === 'locked';
+    const doorRearRightOpen = vs.doorRearRightClosed?.value === 'open';
+    const doorRearRightLockedBool = vs.doorRearRightLocked?.value === 'locked';
+    const anyDoorOpen = doorFrontLeftOpen || doorFrontRightOpen || doorRearLeftOpen || doorRearRightOpen;
+    const anyDoorUnlocked = !doorFrontLeftLockedBool || !doorFrontRightLockedBool || !doorRearLeftLockedBool || !doorRearRightLockedBool;
+
+    // 12V battery health — HA exposes this as a plain diagnostic sensor with
+    // no documented enum. Logging the raw value until we see real readings
+    // to know what "unhealthy" looks like, same pattern used for gearStatus.
+    const twelveVoltRaw = vs.twelveVoltBatteryHealth?.value ?? '';
+    if (twelveVoltRaw !== '') console.log(`[rivian] twelveVoltBatteryHealth="${twelveVoltRaw}"`);
+
     return {
       chargePercent: vs.batteryLevel?.value ?? 0,
       chargeLimit: vs.batteryLimit?.value ?? 80,
@@ -560,7 +605,18 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       isThrottled,
       derateReason: derateRaw,
       chargingState: chargingStateRaw,
-      isLocked: vs.doorFrontLeftLocked?.value === 'locked',
+      isLocked: doorFrontLeftLockedBool && doorFrontRightLockedBool && doorRearLeftLockedBool && doorRearRightLockedBool,
+      doorFrontLeftOpen,
+      doorFrontLeftLocked: doorFrontLeftLockedBool,
+      doorFrontRightOpen,
+      doorFrontRightLocked: doorFrontRightLockedBool,
+      doorRearLeftOpen,
+      doorRearLeftLocked: doorRearLeftLockedBool,
+      doorRearRightOpen,
+      doorRearRightLocked: doorRearRightLockedBool,
+      anyDoorOpen,
+      anyDoorUnlocked,
+      twelveVoltBatteryHealth: twelveVoltRaw,
       climateOn: CLIMATE_ACTIVE.has(climateVal),
       rangeMi: vs.distanceToEmpty?.value ?? 0,
       // vehicleMileage is returned in meters; convert to miles
