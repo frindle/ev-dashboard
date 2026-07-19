@@ -55,11 +55,14 @@ export interface AppConfig {
     arrivalWebhookUrl: string; // fired once when Rivian enters the radius while still driving — e.g. Home Assistant webhook for garage lights
   };
   solar: {
-    enabled: boolean;     // master switch — UI hides until true AND host is set
-    host: string;         // inverter LAN IP, e.g. "10.0.5.50"
+    enabled: boolean;     // master switch — UI hides until true AND (host OR siteId) is set
+    host: string;         // inverter LAN IP, e.g. "10.0.5.50" — preferred, real-time
     port: number;         // Modbus/TCP port, SolarEdge default is 1502 (not 502)
     unitId: number;       // Modbus device ID; default 1 for single inverter
     pollIntervalSec: number; // how often to read live registers
+    siteId: string;       // monitoring.solaredge.com site ID — fallback when Modbus isn't set up
+    username: string;     // monitoring.solaredge.com portal login
+    password: string;
   };
   nvr: {
     enabled: boolean; // master switch — off until the NVR is actually recording (see api-docs/Reolink)
@@ -125,6 +128,9 @@ const DEFAULT_CONFIG: AppConfig = {
     port: 1502,
     unitId: 1,
     pollIntervalSec: 10,
+    siteId: '',
+    username: '',
+    password: '',
   },
   nvr: {
     enabled: false,

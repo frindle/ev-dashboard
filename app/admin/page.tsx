@@ -57,6 +57,7 @@ export default function AdminPage() {
   const [rivianHasSavedPassword, setRivianHasSavedPassword] = useState(false);
   const [rivianPendingSave, setRivianPendingSave] = useState(false);
   const [hasStoredNvrPassword, setHasStoredNvrPassword] = useState(false);
+  const [hasStoredSolarPassword, setHasStoredSolarPassword] = useState(false);
 
   // globals.css sets overflow:hidden + height:100% on html/body for the dashboard
   // clear both so the admin page can scroll normally
@@ -76,13 +77,14 @@ export default function AdminPage() {
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
-      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean; hasStoredRivianPassword: boolean; hasStoredNvrPassword: boolean }) => {
+      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean; hasStoredRivianPassword: boolean; hasStoredNvrPassword: boolean; hasStoredSolarPassword: boolean }) => {
         setConfig(d.config);
         setTeslaConnected(d.teslaConnected);
         setRivianConnected(d.rivianConnected);
         setRivianEmail(d.config.vehicles.rivian.email);
         setRivianHasSavedPassword(d.hasStoredRivianPassword);
         setHasStoredNvrPassword(d.hasStoredNvrPassword);
+        setHasStoredSolarPassword(d.hasStoredSolarPassword);
         if (d.teslaConnected) fetchWallConnectors();
       });
     fetch('/api/rivian/auth')
@@ -864,6 +866,43 @@ export default function AdminPage() {
             SolarEdge uses port 1502 (not the Modbus standard 502). Device ID 1 is correct for a single inverter.
             Only one Modbus/TCP client may connect at a time — disable Home Assistant&apos;s SolarEdge integration if you have one.
             After enabling Modbus on the inverter, the first poll must arrive within ~2 minutes or the port closes.
+          </div>
+          <div className="form-hint" style={{ marginTop: 12 }}>
+            <strong>No Modbus access?</strong> Leave Inverter IP blank and fill these in instead — logs into
+            monitoring.solaredge.com with your portal password (no API key needed, since you don&apos;t have one).
+            Data is ~15min-delayed and approximate, not live, since that&apos;s all the portal login exposes.
+          </div>
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">Portal Site ID</label>
+              <input
+                className="form-input"
+                type="text"
+                value={config.solar.siteId}
+                onChange={e => update('solar', { siteId: e.target.value.trim() })}
+                placeholder="1234567"
+              />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Portal Username</label>
+              <input
+                className="form-input"
+                type="text"
+                value={config.solar.username}
+                onChange={e => update('solar', { username: e.target.value.trim() })}
+                placeholder="you@example.com"
+              />
+            </div>
+          </div>
+          <div className="form-row">
+            <label className="form-label">Portal Password</label>
+            <input
+              className="form-input"
+              type="password"
+              value={config.solar.password}
+              onChange={e => update('solar', { password: e.target.value })}
+              placeholder={hasStoredSolarPassword ? '•••••••• (saved — leave blank to keep)' : '••••••••'}
+            />
           </div>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { readConfig } from './config';
+import { readSolarWebLive } from './solaredge-web';
 
 // Minimal Modbus/TCP client + SunSpec model 103 (single-phase inverter)
 // parser for SolarEdge HD-Wave inverters. We poll only what we need to
@@ -29,6 +30,7 @@ export interface SolarLive {
   statusCode: number;     // vendor-specific status
   fetchedAt: string;      // ISO timestamp
   errorMessage?: string;
+  approximate?: boolean;  // true when sourced from the web-login fallback (~15min-delayed avg, not live)
 }
 
 const FC_READ_HOLDING = 0x03;
@@ -47,10 +49,32 @@ export async function readSolarLive(): Promise<SolarLive> {
     acPowerW: 0, dcPowerW: 0, dailyKwh: 0, lifetimeKwh: 0,
     operatingState: 0, statusCode: 0, fetchedAt: new Date().toISOString(),
   };
-  if (!cfg.enabled || !cfg.host) return disabled;
+  const useModbus = cfg.enabled && !!cfg.host;
+  const useWeb = cfg.enabled && !cfg.host && !!cfg.siteId && !!cfg.username && !!cfg.password;
+  if (!useModbus && !useWeb) return disabled;
 
   const ttlMs = Math.max(1, cfg.pollIntervalSec) * 1000;
   if (cached && Date.now() - cached.at < ttlMs) return cached.value;
+
+  if (useWeb) {
+    try {
+      const web = await readSolarWebLive();
+      const live: SolarLive = {
+        enabled: true, reachable: true,
+        acPowerW: web.acPowerW, dcPowerW: 0, dailyKwh: web.dailyKwh, lifetimeKwh: 0,
+        operatingState: 4, statusCode: 0, fetchedAt: web.fetchedAt, approximate: true,
+      };
+      cached = { value: live, at: Date.now() };
+      return live;
+    } catch (e) {
+      const errored: SolarLive = {
+        ...disabled, enabled: true,
+        errorMessage: e instanceof Error ? e.message : String(e),
+      };
+      cached = { value: errored, at: Date.now() };
+      return errored;
+    }
+  }
 
   try {
     const registers = await readRegisters(cfg.host, cfg.port, cfg.unitId, SUNSPEC_BASE - 1, BLOCK_LEN);
