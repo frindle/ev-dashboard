@@ -494,46 +494,22 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       ? (Date.now() - new Date(chargerStateTs).getTime()) > STALE_MS
       : false;
 
-    // Resolve plug status. Rivian uses several fields and they often
-    // disagree because the car sleeps mid-state. From production:
-    //   chargerStatus="chrgr_sts_not_connected"  ← authoritative
-    //   chargePortState="close"                  ← Rivian uses singular "close"
-    //   chargerState="charging_ready"            ← stale, lies about plug
+    // Resolve plug status from chargerStatus alone — matches the proven
+    // approach in Home Assistant's Rivian integration (bretterer/home-assistant-rivian,
+    // coordinator.py): `chargerStatus.value != "chrgr_sts_not_connected"`.
     //
-    // Rule: any explicit "not connected" / "close[d]" / "empty" /
-    // "disconnected" is trusted regardless of staleness. The car was
-    // last seen unplugged and we have no fresher signal otherwise.
-    // Only treat as plugged in when we have a FRESH signal saying so.
-    const UNPLUGGED_RE = /\b(not[_ ]?connected|^close[d]?$|disconnected|empty|unplugged)\b/i;
-    const anyExplicitUnplugged =
-      UNPLUGGED_RE.test(chargerStatusRaw) ||
-      UNPLUGGED_RE.test(chargePortRaw) ||
-      chargingStateRaw.toLowerCase() === 'disconnected';
-
-    const portFresh = chargePortTs
-      ? (Date.now() - new Date(chargePortTs).getTime()) < STALE_MS
-      : false;
-    const portSaysPluggedIn = chargePortRaw !== '' && !UNPLUGGED_RE.test(chargePortRaw);
+    // chargePortState is NOT a plug signal despite the name — it's the
+    // physical charge port DOOR (open/closed). Rivian's door closes over
+    // the connector after plugging in, so "close" is normal mid-charge,
+    // not an unplugged indicator. Earlier logic here treated door-closed
+    // as unplugged and overrode a correctly-connected chargerStatus,
+    // which is why the dashboard could show "not plugged in" while the
+    // car was actually charging.
+    const isPluggedIn = chargerStatusRaw !== '' && chargerStatusRaw !== 'chrgr_sts_not_connected';
 
     // Only treat as charging when the contactor is actually closed and power is flowing
     const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active', 'charging_ac_1ph', 'charging_ac_3ph']);
     const isCharging = !chargerStateStale && CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase());
-
-    // Plug resolution order:
-    //   1. Any explicit "not connected" anywhere → false (trusted even stale)
-    //   2. Fresh chargePortState says plugged → true
-    //   3. Fresh chargerState says plugged → true
-    //   4. Default false
-    let isPluggedIn: boolean;
-    if (anyExplicitUnplugged) {
-      isPluggedIn = false;
-    } else if (portFresh && portSaysPluggedIn) {
-      isPluggedIn = true;
-    } else if (!chargerStateStale && chargingStateRaw.toLowerCase() !== 'disconnected' && chargingStateRaw !== '') {
-      isPluggedIn = true;
-    } else {
-      isPluggedIn = false;
-    }
 
     // Rivian charger derate (throttling). Treat anything that's not empty
     // / "no_derate" / "none" / "inactive" as throttled. Specific reason
