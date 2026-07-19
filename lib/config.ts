@@ -52,6 +52,7 @@ export interface AppConfig {
     lat: number | null;
     lon: number | null;
     radiusMeters: number; // how close counts as "home"
+    arrivalWebhookUrl: string; // fired once when Rivian enters the radius while still driving — e.g. Home Assistant webhook for garage lights
   };
   solar: {
     enabled: boolean;     // master switch — UI hides until true AND host is set
@@ -116,6 +117,7 @@ const DEFAULT_CONFIG: AppConfig = {
     lat: null,
     lon: null,
     radiusMeters: 150,
+    arrivalWebhookUrl: '',
   },
   solar: {
     enabled: false,

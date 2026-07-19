@@ -112,6 +112,7 @@ export interface RivianVehicleState {
   otaStatus: string;          // otaStatus / otaCurrentStatus
   otaUpdateAvailable: boolean;
   otaInstalling: boolean;
+  gearStatus: string;          // raw gearStatus.value — 'park' | 'drive' | ... (confirmed via logs 2026-07-19)
 }
 
 // ── Token storage ─────────────────────────────────────────────────────────────
@@ -612,6 +613,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       otaStatus: otaStatusRaw,
       otaUpdateAvailable,
       otaInstalling,
+      gearStatus: gearStatusRaw,
     };
   } catch (e) {
     const msg = String(e);
@@ -621,7 +623,16 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       try { markRivianReauthRequired('401 from vehicleState: ' + msg.slice(0, 200)); } catch {}
     }
     recordBackoffError();
-    console.warn('[rivian] fetchRivianVehicleState failed:', msg.slice(0, 240));
+    // Rivian's throttling is opaque — there's no documented status code or
+    // error shape for it. Flag anything that looks rate-limit-shaped with a
+    // distinct tag so it's visible at a glance in the logs, separate from
+    // generic network/API failures. Added when the driving poll interval
+    // dropped to 20s specifically to make this easy to spot if it happens.
+    if (/429|rate[_ ]?limit|too many requests|throttl/i.test(msg)) {
+      console.error('[rivian] THROTTLED:', msg.slice(0, 240));
+    } else {
+      console.warn('[rivian] fetchRivianVehicleState failed:', msg.slice(0, 240));
+    }
     return null;
   }
 }

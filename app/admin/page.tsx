@@ -778,6 +778,20 @@ export default function AdminPage() {
             Used to detect whether a vehicle is home. A vehicle within the radius counts as &quot;home&quot;.
             150m covers most driveways/garages. If unset, the dashboard falls back to using each vehicle&apos;s online status.
           </div>
+          <div className="form-row">
+            <label className="form-label">Arrival webhook URL (Rivian only)</label>
+            <input
+              className="form-input"
+              type="text"
+              value={config.home.arrivalWebhookUrl}
+              onChange={e => update('home', { arrivalWebhookUrl: e.target.value.trim() })}
+              placeholder="http://homeassistant.local:8123/api/webhook/..."
+            />
+            <div className="form-hint">
+              Fired once when the Rivian enters the home radius while still driving (not waiting for
+              &quot;parked&quot;, to avoid lagging behind actual arrival). Leave blank to disable.
+            </div>
+          </div>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-import { writeFile, readFile } from 'fs/promises';
+import { writeFile, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { readConfig, readTokens } from '@/lib/config';
@@ -26,6 +26,36 @@ export interface VehicleData {
   state: TeslaVehicleState | RivianVehicleState | null;
   connected: boolean;
   atHome: boolean | null; // true/false when GPS known, null when unknown
+}
+
+// Fires once per arrival: when Rivian enters the home radius while gearStatus
+// is still "drive" (not waiting for "park" — Rivian's smart-poll can lag up
+// to a minute even at the active interval, and waiting for "parked" would add
+// the time it takes to actually park+walk in on top of that). A persisted
+// flag prevents re-firing every poll while parked at home; resets once the
+// vehicle leaves (atHome false) so the next arrival fires again.
+const ARRIVAL_FLAG_FILE = 'rivian-arrival-notified.json';
+
+async function checkRivianArrival(webhookUrl: string, gearStatus: string, atHome: boolean | null): Promise<void> {
+  if (!webhookUrl) return;
+
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, ARRIVAL_FLAG_FILE);
+  const wasNotified = existsSync(path);
+
+  if (atHome !== true) {
+    if (wasNotified) await unlink(path).catch(() => null);
+    return;
+  }
+  if (gearStatus !== 'drive' || wasNotified) return;
+
+  try {
+    await fetch(webhookUrl, { method: 'POST' });
+    await writeFile(path, String(Date.now()));
+    console.log('[rivian] arrival webhook fired');
+  } catch (e) {
+    console.error('[rivian] arrival webhook failed', e);
+  }
 }
 
 // Haversine distance in meters
@@ -336,11 +366,18 @@ async function updateSessionKwh(
 // /api/dashboard every 30s, but Rivian's opaque throttling means we should
 // not forward every one of those to their GraphQL gateway. Serve the cached
 // state between real polls:
-//   - Charging: 60s (progress worth showing, still half the client rate)
+//   - Charging: 60s (progress worth showing, still well under the client rate)
+//   - Driving: 20s — faster than the client's own 30s poll, so this is
+//     effectively a fresh call every client poll during a drive. Deliberate:
+//     the garage-light-on-arrival webhook needs to fire close to actual
+//     arrival, not minutes late. Bounded to drive duration only, not
+//     sustained, so the throttling risk is low despite the rate (Rivian's
+//     limits are undocumented — this is a judgment call, not a guarantee).
 //   - Otherwise: 5 min (parked/asleep state barely changes)
 // The cache also preserves last-known GPS so an offline vehicle keeps its
 // home/away status.
 const RIVIAN_INTERVAL_CHARGING_MS = 60_000;
+const RIVIAN_INTERVAL_DRIVING_MS = 20_000;
 const RIVIAN_INTERVAL_IDLE_MS = 5 * 60_000;
 
 interface RivianCache {
@@ -368,7 +405,9 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   // Fresh-enough cache → don't touch the Rivian API at all this cycle.
   if (!force && cache.state && cache.fetchedAt) {
     const ageMs = Date.now() - cache.fetchedAt;
-    const interval = cache.state.isCharging ? RIVIAN_INTERVAL_CHARGING_MS : RIVIAN_INTERVAL_IDLE_MS;
+    const interval = cache.state.gearStatus === 'drive' ? RIVIAN_INTERVAL_DRIVING_MS
+      : cache.state.isCharging ? RIVIAN_INTERVAL_CHARGING_MS
+      : RIVIAN_INTERVAL_IDLE_MS;
     if (ageMs < interval) {
       (cache.state as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = false;
       return cache.state;
@@ -470,6 +509,9 @@ async function handleGet(req: Request) {
     return atHome;
   }
 
+  const rivianAtHome = computeAtHome('rivian', rivianState?.lat, rivianState?.lon, !!(rivianState && (rivianState as { _gpsFresh?: boolean })._gpsFresh));
+  if (rivianState) await checkRivianArrival(cfg.home.arrivalWebhookUrl, rivianState.gearStatus, rivianAtHome);
+
   const vehicles: VehicleData[] = [
     {
       id: 'rivian',
@@ -478,7 +520,7 @@ async function handleGet(req: Request) {
       chargerSide: cfg.vehicles.rivian.chargerSide,
       state: rivianState,
       connected: rivianConnected,
-      atHome: computeAtHome('rivian', rivianState?.lat, rivianState?.lon, !!(rivianState && (rivianState as { _gpsFresh?: boolean })._gpsFresh)),
+      atHome: rivianAtHome,
     },
     {
       id: 'tesla',
