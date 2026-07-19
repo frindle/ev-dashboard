@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { writeTokens, TeslaTokens } from '@/lib/config';
+import { clearTeslaReauthRequired } from '@/lib/sessionFlags';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +34,11 @@ export async function GET(req: NextRequest) {
   }
 
   writeTokens(data);
+  // Previously only cleared on the next successful poll cycle in
+  // lib/tesla.ts — left a real window where fresh tokens were saved but
+  // the dashboard still showed "reauth required" until that poll ran.
+  // A completed callback IS the proof of a successful reauth; clear now.
+  clearTeslaReauthRequired();
 
   return new Response('✓ Tesla auth complete. Tokens saved. You can close this tab.', {
     headers: { 'Content-Type': 'text/plain' },
