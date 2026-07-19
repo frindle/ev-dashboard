@@ -121,6 +121,21 @@ function tokensPath(): string {
   return join(dir, 'rivian-tokens.json');
 }
 
+function loginDebugPath(): string {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  return join(dir, 'rivian-login-debug.json');
+}
+
+// Rivian's mobile API is unofficial/reverse-engineered and known to change
+// without notice. Persist the full raw GetCurrentUser response (success or
+// failure, every login attempt — overwritten each time) so there's always a
+// real reference to diff against instead of relying on scrollback logs.
+function writeLoginDebug(entry: Record<string, unknown>): void {
+  try {
+    writeFileSync(loginDebugPath(), JSON.stringify({ ts: new Date().toISOString(), ...entry }, null, 2));
+  } catch { /* non-fatal */ }
+}
+
 export function readRivianTokens(): RivianTokens | null {
   const p = tokensPath();
   if (!existsSync(p)) return null;
@@ -270,6 +285,10 @@ query GetCurrentUser {
   }
 }`;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function resolveTokensAndVehicle(partial: Omit<RivianTokens, 'vehicleId' | 'savedAt'>): Promise<RivianTokens> {
   const authHeaders = {
     'Csrf-Token': partial.csrfToken,
@@ -278,26 +297,46 @@ async function resolveTokensAndVehicle(partial: Omit<RivianTokens, 'vehicleId' |
   };
 
   let vehicleId = '';
-  try {
-    const userData = await gql<{
-      currentUser: { vehicles: Array<{ id: string; name: string; vin: string; vehicle?: { id: string } }> };
-    }>(GET_USER_VEHICLES, {}, authHeaders);
+  // Confirmed from a real login (2026-07-18): GetCurrentUser succeeds
+  // (200 OK) immediately after auth but returns currentUser.vehicles: []
+  // — the query shape matches Rivian's documented schema exactly, so this
+  // isn't a wrong-field bug, it's the account's vehicle list not yet
+  // propagated to the brand-new session. Retry a few times with a short
+  // delay before giving up.
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const userData = await gql<{
+        currentUser: { vehicles: Array<{ id: string; name: string; vin: string; vehicle?: { id: string } }> };
+      }>(GET_USER_VEHICLES, {}, authHeaders);
 
-    const v0 = userData.currentUser.vehicles[0];
-    // Rivian's schema has both an enrollment-level id and a nested
-    // vehicle.id — confirmed from a real login (2026-07-18) that the
-    // top-level one can come back empty while the query itself succeeds
-    // (200 OK), silently leaving every later state poll dead with no
-    // network call and no error at all. Try both, log if neither works.
-    vehicleId = v0?.id || v0?.vehicle?.id || '';
-    if (!vehicleId) {
-      console.error('[rivian] resolveTokensAndVehicle: no usable vehicle ID in response:', JSON.stringify(userData));
+      const v0 = userData.currentUser.vehicles[0];
+      vehicleId = v0?.id || v0?.vehicle?.id || '';
+      writeLoginDebug({ attempt, ok: true, vehicleId, response: userData });
+      if (vehicleId) break;
+
+      console.warn(`[rivian] resolveTokensAndVehicle: attempt ${attempt}/4 got no vehicles yet:`, JSON.stringify(userData));
+    } catch (e) {
+      writeLoginDebug({ attempt, ok: false, error: String(e) });
+      console.error(`[rivian] resolveTokensAndVehicle: attempt ${attempt}/4 GetCurrentUser failed:`, e);
     }
-  } catch (e) {
-    console.error('[rivian] resolveTokensAndVehicle: GetCurrentUser failed:', e);
+    if (attempt < 4) await sleep(3000);
+  }
+  if (!vehicleId) {
+    console.error('[rivian] resolveTokensAndVehicle: giving up after 4 attempts, no vehicle ID resolved');
   }
 
   return { ...partial, vehicleId, savedAt: Date.now() };
+}
+
+// Retry vehicle-ID resolution using the already-saved session tokens — no
+// re-login/OTP needed. Recovery path if the propagation delay above (up to
+// ~12s) still wasn't enough; the tokens themselves are already valid.
+export async function reresolveVehicleId(): Promise<{ ok: boolean; vehicleId: string }> {
+  const tokens = readRivianTokens();
+  if (!tokens) return { ok: false, vehicleId: '' };
+  const updated = await resolveTokensAndVehicle(tokens);
+  writeRivianTokens(updated);
+  return { ok: updated.vehicleId !== '', vehicleId: updated.vehicleId };
 }
 
 // ── Vehicle state ─────────────────────────────────────────────────────────────

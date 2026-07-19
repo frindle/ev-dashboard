@@ -51,6 +51,11 @@ export default function AdminPage() {
   const [rivianError, setRivianError] = useState('');
   const rivianOtpRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (rivianStep === 'otp_required') rivianOtpRef.current?.focus(); }, [rivianStep]);
+  const [rivianVehicleId, setRivianVehicleId] = useState<string | null>(null);
+  const [rivianResolving, setRivianResolving] = useState(false);
+  const [rivianResolveMsg, setRivianResolveMsg] = useState('');
+  const [rivianHasSavedPassword, setRivianHasSavedPassword] = useState(false);
+  const [rivianPendingSave, setRivianPendingSave] = useState(false);
 
   // globals.css sets overflow:hidden + height:100% on html/body for the dashboard
   // clear both so the admin page can scroll normally
@@ -70,14 +75,39 @@ export default function AdminPage() {
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
-      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean }) => {
+      .then((d: { config: AppConfig; teslaConnected: boolean; rivianConnected: boolean; hasStoredRivianPassword: boolean }) => {
         setConfig(d.config);
         setTeslaConnected(d.teslaConnected);
         setRivianConnected(d.rivianConnected);
         setRivianEmail(d.config.vehicles.rivian.email);
+        setRivianHasSavedPassword(d.hasStoredRivianPassword);
         if (d.teslaConnected) fetchWallConnectors();
       });
+    fetch('/api/rivian/auth')
+      .then(r => r.json())
+      .then((d: { vehicleId: string | null }) => setRivianVehicleId(d.vehicleId));
   }, []);
+
+  async function retryVehicleLookup() {
+    setRivianResolving(true);
+    setRivianResolveMsg('');
+    try {
+      const res = await fetch('/api/rivian/resolve-vehicle', { method: 'POST' });
+      const data = await res.json() as { ok: boolean; vehicleId: string; error?: string };
+      if (!res.ok || data.error) {
+        setRivianResolveMsg(data.error ?? 'Lookup failed');
+      } else if (data.ok) {
+        setRivianVehicleId(data.vehicleId);
+        setRivianResolveMsg('✓ Vehicle ID resolved');
+      } else {
+        setRivianResolveMsg('Still no vehicle found — check the container logs, or reconnect.');
+      }
+    } catch (e) {
+      setRivianResolveMsg(String(e));
+    } finally {
+      setRivianResolving(false);
+    }
+  }
 
   function update<K extends keyof AppConfig>(section: K, patch: Partial<AppConfig[K]>) {
     setConfig(prev => {
@@ -122,15 +152,27 @@ export default function AdminPage() {
 
   async function connectRivian() {
     if (!rivianEmail || !rivianPassword) return;
+    setRivianPendingSave(true);
+    await doRivianLogin(fetch('/api/rivian/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: rivianEmail, password: rivianPassword }),
+    }));
+  }
+
+  // One-click reconnect using the email/password saved from a prior login —
+  // still requires the OTP code (can't be automated, it's time-limited).
+  async function reconnectSaved() {
+    setRivianPendingSave(false);
+    await doRivianLogin(fetch('/api/rivian/auth/reconnect', { method: 'POST' }));
+  }
+
+  async function doRivianLogin(reqPromise: Promise<Response>) {
     setRivianStep('idle');
     setRivianLoading(true);
     setRivianError('');
     try {
-      const res = await fetch('/api/rivian/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: rivianEmail, password: rivianPassword }),
-      });
+      const res = await reqPromise;
       const data = await res.json() as {
         type?: string;
         otpToken?: string;
@@ -153,8 +195,9 @@ export default function AdminPage() {
       } else {
         setRivianStep('done');
         setRivianConnected(true);
-        setRivianPassword('');
-        update('vehicles', { rivian: { ...config!.vehicles.rivian, email: rivianEmail } });
+        if (rivianPendingSave) await saveRivianCredentials(rivianEmail, rivianPassword);
+        setRivianHasSavedPassword(true);
+        fetch('/api/rivian/auth').then(r => r.json()).then((d: { vehicleId: string | null }) => setRivianVehicleId(d.vehicleId));
       }
     } catch (e) {
       setRivianStep('error');
@@ -162,6 +205,25 @@ export default function AdminPage() {
     } finally {
       setRivianLoading(false);
     }
+  }
+
+  // Persists email+password immediately on a successful login, rather than
+  // waiting on the user to hit the page's general Save button — otherwise
+  // "store credentials for reconnect" silently doesn't happen if they never
+  // save afterward. Fetches the current config fresh instead of trusting
+  // React state, since GET /api/config redacts passwords to '' and we don't
+  // want to round-trip that blank back over a stale `config` closure.
+  async function saveRivianCredentials(email: string, password: string) {
+    const current = await fetch('/api/config').then(r => r.json()) as { config: AppConfig };
+    const next: AppConfig = {
+      ...current.config,
+      vehicles: { ...current.config.vehicles, rivian: { ...current.config.vehicles.rivian, email, password } },
+    };
+    await fetch('/api/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
+    });
+    setRivianPassword('');
+    update('vehicles', { rivian: { ...config!.vehicles.rivian, email } });
   }
 
   async function submitOtp() {
@@ -186,9 +248,11 @@ export default function AdminPage() {
       }
       setRivianStep('done');
       setRivianConnected(true);
-      setRivianPassword('');
       setRivianOtpCode('');
-      update('vehicles', { rivian: { ...config!.vehicles.rivian, email: rivianEmail } });
+      if (rivianPendingSave) await saveRivianCredentials(rivianEmail, rivianPassword);
+      else setRivianPassword('');
+      setRivianHasSavedPassword(true);
+      fetch('/api/rivian/auth').then(r => r.json()).then((d: { vehicleId: string | null }) => setRivianVehicleId(d.vehicleId));
     } catch (e) {
       setRivianStep('error');
       setRivianError(String(e));
@@ -464,6 +528,12 @@ export default function AdminPage() {
                   </span>
                   {rivianLoading ? 'Connecting…' : rivianConnected ? 'Re-connect Rivian' : 'Connect Rivian'}
                 </button>
+                {rivianHasSavedPassword && (
+                  <button className="btn-secondary" onClick={reconnectSaved} disabled={rivianLoading}>
+                    <span className="icon" style={{ fontSize: 16 }}>bolt</span>
+                    Reconnect (saved credentials)
+                  </button>
+                )}
                 {rivianError && (
                   <span style={{ fontSize: 12, color: '#e05555' }}>{rivianError}</span>
                 )}
@@ -471,6 +541,18 @@ export default function AdminPage() {
                   <span style={{ fontSize: 12, color: '#34e07a' }}>✓ Connected successfully</span>
                 )}
               </div>
+
+              {rivianConnected && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                  <span style={{ fontSize: 12, color: rivianVehicleId ? '#7d8893' : '#e0a555' }}>
+                    Vehicle ID: {rivianVehicleId || 'not resolved — polling will not work'}
+                  </span>
+                  <button className="btn-secondary" onClick={retryVehicleLookup} disabled={rivianResolving}>
+                    {rivianResolving ? 'Checking…' : 'Retry vehicle lookup'}
+                  </button>
+                  {rivianResolveMsg && <span style={{ fontSize: 12, color: '#a4afba' }}>{rivianResolveMsg}</span>}
+                </div>
+              )}
             </>
           ) : (
             <>

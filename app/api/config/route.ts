@@ -8,17 +8,33 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const cfg = readConfig();
+  // Never send stored passwords back to the browser — write-only fields.
+  // hasStoredXPassword tells the client whether one is saved without
+  // exposing the value, so a reconnect button can offer "use saved
+  // password" without the plaintext ever round-tripping over the wire.
+  const redacted: AppConfig = {
+    ...cfg,
+    vehicles: { ...cfg.vehicles, rivian: { ...cfg.vehicles.rivian, password: '' } },
+    garage: { ...cfg.garage, password: '' },
+  };
   return Response.json({
-    config: cfg,
+    config: redacted,
     teslaConnected: hasTokens(),
     rivianConnected: hasRivianTokens(),
     myqConnected: hasMyQTokens(),
+    hasStoredRivianPassword: cfg.vehicles.rivian.password !== '',
+    hasStoredMyqPassword: cfg.garage.password !== '',
   });
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as AppConfig;
+    // GET redacts passwords to '', so a blank incoming value means "unchanged"
+    // — never let a normal settings save silently blank out a stored password.
+    const existing = readConfig();
+    if (!body.vehicles.rivian.password) body.vehicles.rivian.password = existing.vehicles.rivian.password;
+    if (!body.garage.password) body.garage.password = existing.garage.password;
     writeConfig(body);
     return Response.json({ ok: true });
   } catch (e) {
