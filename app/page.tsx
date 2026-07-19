@@ -261,6 +261,22 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
   streamUrl: string; garageConnected: boolean; garageDoorOpen: boolean | null;
   onClose: () => void; onToggleGarage: () => void;
 }) {
+  // No error handling existed before — a failed <img> load (wrong URL, CORS,
+  // auth, host unreachable from outside the LAN) just rendered nothing,
+  // which against this dark background reads as "black" rather than an
+  // obvious broken state. Now logs to the server (visible via /api/errors,
+  // same pipeline as window.onerror) and shows a real failure message.
+  const [imgError, setImgError] = useState(false);
+  useEffect(() => { setImgError(false); }, [streamUrl]);
+  function reportCameraError() {
+    setImgError(true);
+    fetch('/api/errors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'camera.img', message: `Failed to load camera stream: ${streamUrl}` }),
+    }).catch(() => null);
+  }
+
   const key = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
   const dm = {
     open:    { label: 'OPEN',    icon: 'garage_door', color: '#e0b53d', bg: 'rgba(224,181,61,0.15)', action: 'Close Garage' },
@@ -283,8 +299,22 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
         </div>
         {/* Video area */}
         <div style={{ position: 'relative', aspectRatio: '16/9', background: 'radial-gradient(120% 90% at 50% 30%, #1c252e 0%, #0c1014 100%)', overflow: 'hidden' }}>
-          {streamUrl ? (
-            <img src={streamUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Camera" />
+          {streamUrl && !imgError ? (
+            <img
+              src={streamUrl}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              alt="Camera"
+              onError={reportCameraError}
+              onLoad={() => setImgError(false)}
+            />
+          ) : streamUrl && imgError ? (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#e2685f' }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 44 }}>videocam_off</span>
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: '0.06em', textAlign: 'center', lineHeight: 1.6, maxWidth: 320 }}>
+                CAMERA STREAM FAILED TO LOAD<br />
+                <span style={{ color: '#7d8893' }}>check the Stream URL in Settings, and whether it&apos;s reachable from wherever you&apos;re viewing this from</span>
+              </span>
+            </div>
           ) : (
             <>
               <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.035) 1px,transparent 1px)', backgroundSize: '34px 34px' }} />
