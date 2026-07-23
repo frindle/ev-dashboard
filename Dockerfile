@@ -36,7 +36,7 @@ RUN npm ci --omit=dev --no-audit --no-fund
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apk add --no-cache openssl curl jq
+RUN apk add --no-cache openssl curl jq ffmpeg
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 
 # Bake the git commit SHA into the image so /api/version can compare it

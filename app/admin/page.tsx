@@ -675,7 +675,7 @@ export default function AdminPage() {
               >
                 <option value="mjpeg">MJPEG (HTTP)</option>
                 <option value="hls">HLS (m3u8)</option>
-                <option value="rtsp">RTSP (requires proxy)</option>
+                <option value="rtsp">RTSP (direct, transcoded server-side)</option>
               </select>
             </div>
             <div className="form-row">
@@ -684,15 +684,18 @@ export default function AdminPage() {
                 className="form-input"
                 value={config.camera.streamUrl}
                 onChange={e => update('camera', { streamUrl: e.target.value })}
-                placeholder="http://192.168.1.x/stream"
+                placeholder="rtsp://user:pass@192.168.1.x:554/h264Preview_01_main"
               />
             </div>
           </div>
           <div className="form-hint">
-            For RTSP streams, use a proxy like go2rtc or frigate to convert to MJPEG/HLS for browser playback.
-            If you're running Scrypted, paste its MJPEG Rebroadcast plugin&apos;s HTTP endpoint for this camera
-            here (Scrypted device → Stream → rebroadcast URL) — the dashboard fetches it server-side and proxies
-            it to the browser, so it works from outside the LAN too and can recover automatically if the stream stalls.
+            RTSP: paste the camera&apos;s own RTSP URL directly (e.g. a Reolink main-stream URL) — ffmpeg
+            transcodes it to MJPEG server-side, no external proxy (go2rtc/frigate/Scrypted) needed. This
+            usually looks sharper than going through Scrypted&apos;s MJPEG Rebroadcast, which re-compresses
+            the feed. If you&apos;re running Scrypted instead, switch Stream Type to MJPEG and paste its
+            rebroadcast plugin&apos;s HTTP endpoint (Scrypted device → Stream → rebroadcast URL). Either way
+            the dashboard fetches it server-side and proxies it to the browser, so it works from outside the
+            LAN too and can recover automatically if the stream stalls.
           </div>
         </div>
       </div>
