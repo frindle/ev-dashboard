@@ -35,23 +35,34 @@ fi
 # Build the telemetry config payload. The fields below mirror what
 # server/telemetry-server.js knows how to decode — add more as needed.
 # interval_seconds: 30 means "send updates at most every 30s when changing"
-# `ca` here is the CA bundle Tesla uses to validate OUR server's TLS cert during
-# the data push. Since we go through Cloudflare which presents its own cert (not
-# our self-signed CA), passing our CA would cause Tesla to fail validation at
-# runtime. Pass an empty string so Tesla uses its default public CA trust bundle.
+# `ca` is the CA chain Tesla uses to validate OUR server's TLS cert during the
+# data push. We go through Cloudflare Tunnel, which presents a publicly-issued
+# cert (not our self-signed CA) — an empty string here used to be accepted as
+# "fall back to Tesla's default public trust store", but Tesla's API now
+# rejects "" with "ca is not a valid PEM". Fetch the actual chain Cloudflare
+# presents for $HOST and pass the intermediate+root (everything but the leaf)
+# as the CA bundle instead.
+CA_CHAIN=$(echo | openssl s_client -connect "$HOST:443" -servername "$HOST" -showcerts 2>/dev/null \
+  | awk '/-----BEGIN CERTIFICATE-----/{n++} n>1' )
+if [ -z "$CA_CHAIN" ]; then
+  echo "Could not fetch TLS chain for $HOST:443 — check the tunnel is up and reachable from this container"
+  exit 1
+fi
+
 # `client_cert` is the cert Tesla would PRESENT to us for mTLS — without
 # Cloudflare Access mTLS in Plan A we don't validate it, but the field is
 # required by the API so we still send it.
 PAYLOAD=$(jq -n \
   --arg vin "$VIN" \
   --arg host "$HOST" \
+  --arg ca "$CA_CHAIN" \
   --rawfile client_cert "$CLIENT_CRT" \
   '{
     vins: [$vin],
     config: {
       hostname: $host,
       port: 443,
-      ca: "",
+      ca: $ca,
       client_cert: $client_cert,
       fields: {
         Soc:                 { interval_seconds: 60 },
