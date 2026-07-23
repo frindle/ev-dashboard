@@ -112,20 +112,25 @@ async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
   }
 }
 
-// Circuit breaker: repeated 401/403 responses used to just get retried on
+// Circuit breaker: repeated failure responses used to just get retried on
 // every next poll cycle with no backoff at all (each cycle re-fired live_status
-// + vehicle_data + N wall-connector calls, all 401/403, forever) — this is what
-// turned a bad token into 6+ minutes of continuous hammering. After a run of
-// consecutive auth failures, stop calling Fleet API entirely for a cooldown
-// window and let the scheduled poll cadence pick back up after that.
+// + vehicle_data + N wall-connector calls, all failing, forever) — this is what
+// turned a bad token into 6+ minutes of continuous hammering, and plausibly
+// what burned through a month's API billing limit in 2 days. After a run of
+// consecutive 401/403/5xx failures, stop calling Fleet API entirely for a
+// cooldown window. A 429 is Tesla explicitly saying "back off now" — trip
+// immediately on the first one rather than waiting for a run, honoring
+// Retry-After if Tesla sends it. 408 ("vehicle asleep") doesn't count toward
+// either — it's a normal, expected response, not a failure.
 const CIRCUIT_BREAKER_THRESHOLD = 3;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60_000;
-let consecutiveAuthFailures = 0;
+const RATE_LIMIT_COOLDOWN_MS = 15 * 60_000;
+let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 
 async function fleetGet<T>(path: string): Promise<T | null> {
   if (Date.now() < circuitOpenUntil) {
-    console.log(`[tesla] ${path}: circuit breaker open (repeated auth failures) — skipping until cooldown ends`);
+    console.log(`[tesla] ${path}: circuit breaker open — skipping until cooldown ends`);
     return null;
   }
   const token = await getAccessToken();
@@ -139,22 +144,27 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       // Log the status + short body so the user can see why polling isn't
       // returning data. 408 typically means "vehicle is asleep" on
       // /vehicle_data and is normal; 401 means token expired; 403 means
-      // missing scope; 5xx means Tesla side.
+      // missing scope; 429 means rate-limited; 5xx means Tesla side.
       const body = await res.text().catch(() => '');
       console.log(`[tesla] ${path}: HTTP ${res.status} ${body.slice(0, 160).replace(/\s+/g, ' ')}`);
       if (res.status === 401) {
         markTeslaReauthRequired(`401 from ${path}`);
       }
-      if (res.status === 401 || res.status === 403) {
-        consecutiveAuthFailures++;
-        if (consecutiveAuthFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+      if (res.status === 429) {
+        const retryAfterSec = Number(res.headers.get('retry-after'));
+        const cooldownMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec * 1000 : RATE_LIMIT_COOLDOWN_MS;
+        circuitOpenUntil = Date.now() + cooldownMs;
+        console.warn(`[tesla] 429 rate-limited on ${path} — opening circuit breaker for ${cooldownMs / 1000}s`);
+      } else if (res.status === 401 || res.status === 403 || res.status >= 500) {
+        consecutiveFailures++;
+        if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
           circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
-          console.warn(`[tesla] ${consecutiveAuthFailures} consecutive auth failures — opening circuit breaker for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`);
+          console.warn(`[tesla] ${consecutiveFailures} consecutive failures — opening circuit breaker for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`);
         }
       }
       return null;
     }
-    consecutiveAuthFailures = 0;
+    consecutiveFailures = 0;
     const json = await res.json() as { response: T };
     return json.response ?? null;
   } catch (e) {
