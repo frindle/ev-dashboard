@@ -45,6 +45,16 @@ export interface WallConnectorVitals {
   online: boolean;
 }
 
+// route.ts's Promise.all fans out to 4+ Tesla call sites (vehicle_data,
+// live_status, one per wall connector) in the same tick. Each used to
+// independently call getAccessToken(), and on an expired token each fired
+// its own refreshAccessToken() concurrently — Tesla's OAuth server accepts
+// the first refresh and 409s the rest (they're using a refresh_token the
+// first call just rotated out), and repeated simultaneous hits can trip
+// Tesla's own rate limit on the auth endpoint. Single-flight the refresh
+// so concurrent callers share one in-flight request instead of racing.
+let refreshInFlight: Promise<string | null> | null = null;
+
 async function getAccessToken(): Promise<string | null> {
   const tokens = readTokens();
   if (!tokens) return null;
@@ -56,8 +66,9 @@ async function getAccessToken(): Promise<string | null> {
     return tokens.access_token;
   }
 
-  // Refresh
-  return refreshAccessToken(tokens);
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = refreshAccessToken(tokens).finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
 }
 
 async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
@@ -101,7 +112,22 @@ async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
   }
 }
 
+// Circuit breaker: repeated 401/403 responses used to just get retried on
+// every next poll cycle with no backoff at all (each cycle re-fired live_status
+// + vehicle_data + N wall-connector calls, all 401/403, forever) — this is what
+// turned a bad token into 6+ minutes of continuous hammering. After a run of
+// consecutive auth failures, stop calling Fleet API entirely for a cooldown
+// window and let the scheduled poll cadence pick back up after that.
+const CIRCUIT_BREAKER_THRESHOLD = 3;
+const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60_000;
+let consecutiveAuthFailures = 0;
+let circuitOpenUntil = 0;
+
 async function fleetGet<T>(path: string): Promise<T | null> {
+  if (Date.now() < circuitOpenUntil) {
+    console.log(`[tesla] ${path}: circuit breaker open (repeated auth failures) — skipping until cooldown ends`);
+    return null;
+  }
   const token = await getAccessToken();
   if (!token) { console.log(`[tesla] ${path}: no access token`); return null; }
   try {
@@ -119,8 +145,16 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       if (res.status === 401) {
         markTeslaReauthRequired(`401 from ${path}`);
       }
+      if (res.status === 401 || res.status === 403) {
+        consecutiveAuthFailures++;
+        if (consecutiveAuthFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+          circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
+          console.warn(`[tesla] ${consecutiveAuthFailures} consecutive auth failures — opening circuit breaker for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`);
+        }
+      }
       return null;
     }
+    consecutiveAuthFailures = 0;
     const json = await res.json() as { response: T };
     return json.response ?? null;
   } catch (e) {
@@ -230,20 +264,42 @@ interface LiveStatus {
 // each make a separate API call on the same poll cycle. Cached for 5 seconds.
 let liveStatusCache: { siteId: string; data: LiveStatus; at: number } | null = null;
 
+// route.ts calls fetchSiteLiveStatus + fetchWallConnectorVitals(left) +
+// fetchWallConnectorVitals(right) all inside one Promise.all. The 5s cache
+// above only helps *after* the first call has resolved — three concurrent
+// callers all see a stale/empty cache at entry and each fired its own
+// live_status fetch, i.e. exactly the "2-4 near-simultaneous calls to the
+// same endpoint" pattern in the incident logs. Track the in-flight promise
+// so concurrent callers within the same tick share one upstream fetch.
+let liveStatusInFlight: { siteId: string; promise: Promise<LiveStatus | null> } | null = null;
+
 async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
   // Serve a fresh-enough cached response without hitting the API at all.
   if (liveStatusCache && liveStatusCache.siteId === energySiteId && Date.now() - liveStatusCache.at < 5000) {
     return liveStatusCache.data;
   }
-  const data = await fleetGet<LiveStatus>(`/api/1/energy_sites/${energySiteId}/live_status`);
-  if (!data) {
-    // Fresh fetch failed (Tesla hiccup, timeout, etc.). Prefer last-known
-    // over null so the dashboard doesn't blink to 0 kW. The smart-poll's
-    // 30s tick will retry; intermittent failures shouldn't be user-visible.
-    return liveStatusCache?.siteId === energySiteId ? liveStatusCache.data : null;
+  if (liveStatusInFlight && liveStatusInFlight.siteId === energySiteId) {
+    return liveStatusInFlight.promise;
   }
-  liveStatusCache = { siteId: energySiteId, data, at: Date.now() };
-  return data;
+
+  const promise = (async (): Promise<LiveStatus | null> => {
+    const data = await fleetGet<LiveStatus>(`/api/1/energy_sites/${energySiteId}/live_status`);
+    if (!data) {
+      // Fresh fetch failed (Tesla hiccup, timeout, etc.). Prefer last-known
+      // over null so the dashboard doesn't blink to 0 kW. The smart-poll's
+      // 30s tick will retry; intermittent failures shouldn't be user-visible.
+      return liveStatusCache?.siteId === energySiteId ? liveStatusCache.data : null;
+    }
+    liveStatusCache = { siteId: energySiteId, data, at: Date.now() };
+    return data;
+  })();
+
+  liveStatusInFlight = { siteId: energySiteId, promise };
+  try {
+    return await promise;
+  } finally {
+    if (liveStatusInFlight?.promise === promise) liveStatusInFlight = null;
+  }
 }
 
 export async function fetchSiteLiveStatus(energySiteId: string): Promise<TeslaSiteState | null> {
