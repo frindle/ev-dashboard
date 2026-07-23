@@ -69,6 +69,7 @@ export type AlertInputs = {
   rivianBrake:      'ok' | 'low';
   rivianThermal:    'ok' | 'detected';
   rivianDerate:     string;
+  rivianChargeSlowedLastSession: boolean;
 
   teslaLocationScope: 'granted' | 'missing';
 };
@@ -101,6 +102,9 @@ export function buildChipsFor(veh: Vehicle, a: AlertInputs): Chip[] {
     } else if (a.rivianDerate?.trim()) {
       chips.push(mkChip('warning', 'device_thermostat',
         'CHARGING SLOWED — ' + a.rivianDerate.trim().toUpperCase()));
+    } else if (a.rivianChargeSlowedLastSession) {
+      chips.push(mkChip('info', 'history',
+        'LAST CHARGE WAS SLOWED — MAY NOT HAVE REACHED GOAL'));
     }
 
     if (a.rivianOta === 'available') {

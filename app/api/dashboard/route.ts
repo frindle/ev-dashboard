@@ -98,6 +98,7 @@ export interface DashboardFlags {
   rivianTirePressureLow: boolean;
   rivianWiperFluidLow: boolean;
   rivianBrakeFluidLow: boolean;
+  rivianChargeSlowedLastSession: boolean; // derate was seen at some point during the most recently completed charge
 }
 
 export interface DashboardData {
@@ -281,6 +282,8 @@ interface SessionRecord {
   lastInUse: boolean;
   lastUpdate: number;
   sessionStartedAt: number; // ms epoch — 0 when no session in progress
+  wasThrottled: boolean;    // true if derate was seen at any point during the CURRENT session
+  endedThrottled: boolean;  // sticky: session ended while wasThrottled — cleared on next session start
 }
 interface SessionFile { left: SessionRecord; right: SessionRecord; }
 interface ChargeHistoryRow {
@@ -293,7 +296,7 @@ interface ChargeHistoryRow {
 }
 
 function emptySession(): SessionRecord {
-  return { sessionKwh: 0, todayKwh: 0, todayDate: localDateStr(), lastInUse: false, lastUpdate: 0, sessionStartedAt: 0 };
+  return { sessionKwh: 0, todayKwh: 0, todayDate: localDateStr(), lastInUse: false, lastUpdate: 0, sessionStartedAt: 0, wasThrottled: false, endedThrottled: false };
 }
 function localDateStr(): string {
   return new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
@@ -310,6 +313,7 @@ async function updateSessionKwh(
   leftPowerW: number, leftInUse: boolean,
   rightPowerW: number, rightInUse: boolean,
   leftVehicleName: string, rightVehicleName: string,
+  leftThrottled: boolean, rightThrottled: boolean,
 ): Promise<{ left: SessionRecord; right: SessionRecord }> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, 'charge-sessions.json');
@@ -323,12 +327,15 @@ async function updateSessionKwh(
   const today = localDateStr();
   const endedSessions: Array<{ side: 'LEFT' | 'RIGHT'; row: ChargeHistoryRow }> = [];
 
-  function step(rec: SessionRecord, side: 'LEFT' | 'RIGHT', vehicleName: string, powerW: number, inUse: boolean): SessionRecord {
+  function step(rec: SessionRecord, side: 'LEFT' | 'RIGHT', vehicleName: string, powerW: number, inUse: boolean, isThrottledNow: boolean): SessionRecord {
     // Roll over today bucket at local midnight
     if (rec.todayDate !== today) { rec = { ...rec, todayKwh: 0, todayDate: today }; }
-    // Idle → active: start new session
-    if (inUse && !rec.lastInUse) { rec = { ...rec, sessionKwh: 0, sessionStartedAt: now }; }
-    // Active → idle: log the completed session if it had any energy
+    // Idle → active: start new session, clearing any "was slowed" alert from
+    // the previous one — a fresh session gets a fresh read on throttling.
+    if (inUse && !rec.lastInUse) { rec = { ...rec, sessionKwh: 0, sessionStartedAt: now, wasThrottled: false, endedThrottled: false }; }
+    // Active → idle: log the completed session if it had any energy, and
+    // stick the "was slowed" flag if derate was seen at any point during it
+    // — surfaced as a banner so a short-of-goal charge isn't a mystery.
     if (!inUse && rec.lastInUse && rec.sessionKwh > 0.01 && rec.sessionStartedAt > 0) {
       endedSessions.push({
         side,
@@ -340,6 +347,7 @@ async function updateSessionKwh(
           energyKwh: Math.round(rec.sessionKwh * 100) / 100,
         },
       });
+      if (rec.wasThrottled) rec = { ...rec, endedThrottled: true };
     }
     // Integrate while in use. Skip on first cycle since restart, or if the
     // gap is implausibly large (container was down >10 min).
@@ -348,11 +356,12 @@ async function updateSessionKwh(
       const kwh = (powerW / 1000) * elapsedHours;
       rec = { ...rec, sessionKwh: rec.sessionKwh + kwh, todayKwh: rec.todayKwh + kwh };
     }
+    if (inUse && isThrottledNow) rec = { ...rec, wasThrottled: true };
     return { ...rec, lastInUse: inUse, lastUpdate: now };
   }
 
-  const left  = step(file.left,  'LEFT',  leftVehicleName,  leftPowerW,  leftInUse);
-  const right = step(file.right, 'RIGHT', rightVehicleName, rightPowerW, rightInUse);
+  const left  = step(file.left,  'LEFT',  leftVehicleName,  leftPowerW,  leftInUse,  leftThrottled);
+  const right = step(file.right, 'RIGHT', rightVehicleName, rightPowerW, rightInUse, rightThrottled);
 
   try { await writeFile(path, JSON.stringify({ left, right } satisfies SessionFile)); }
   catch { /* non-fatal */ }
@@ -550,13 +559,19 @@ async function handleGet(req: Request) {
   // log when a session ends (transition from active → idle).
   const leftVehicleName  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.vehicleName  ?? 'Rivian';
   const rightVehicleName = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.vehicleName ?? 'Tesla';
+  // Only Rivian ever reports isThrottled today (Tesla's API doesn't expose
+  // it — always false there), matched to whichever side it's actually
+  // wired to rather than assumed.
+  const leftThrottled  = cfg.vehicles.rivian.chargerSide === 'LEFT'  ? !!rivianState?.isThrottled : !!teslaState?.isThrottled;
+  const rightThrottled = cfg.vehicles.rivian.chargerSide === 'RIGHT' ? !!rivianState?.isThrottled : !!teslaState?.isThrottled;
   const sessions = teslaConnected
     ? await updateSessionKwh(
         wcLeft?.powerW ?? 0,  wcLeft?.vehicleCharging ?? false,
         wcRight?.powerW ?? 0, wcRight?.vehicleCharging ?? false,
         leftVehicleName, rightVehicleName,
+        leftThrottled, rightThrottled,
       )
-    : { left: { sessionKwh: 0, todayKwh: 0 }, right: { sessionKwh: 0, todayKwh: 0 } };
+    : { left: { sessionKwh: 0, todayKwh: 0, endedThrottled: false }, right: { sessionKwh: 0, todayKwh: 0, endedThrottled: false } };
 
   const wallConnectors: WallConnectorData[] = [
     {
@@ -597,6 +612,7 @@ async function handleGet(req: Request) {
     rivianTirePressureLow: tirePressureLow,
     rivianWiperFluidLow: !!rivState && /low/i.test(rivState.wiperFluidState),
     rivianBrakeFluidLow: !!rivState?.brakeFluidLow,
+    rivianChargeSlowedLastSession: cfg.vehicles.rivian.chargerSide === 'LEFT' ? sessions.left.endedThrottled : sessions.right.endedThrottled,
   };
 
   // Fire-and-forget Pushover notifications for newly raised flags

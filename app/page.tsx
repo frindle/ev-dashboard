@@ -120,6 +120,7 @@ function buildAlerts(data: DashboardData): AlertInputs {
     rivianBrake: flags.rivianBrakeFluidLow ? 'low' : 'ok',
     rivianThermal: flags.rivianHvThermalEvent ? 'detected' : 'ok',
     rivianDerate: flags.rivianDerateReason ?? '',
+    rivianChargeSlowedLastSession: flags.rivianChargeSlowedLastSession,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',
   };
@@ -518,6 +519,7 @@ export default function Dashboard() {
         rivianTire: 'ok', rivianTireCorner: 'FL',
         rivianWiper: 'ok', rivianBrake: 'ok',
         rivianThermal: 'ok', rivianDerate: '',
+        rivianChargeSlowedLastSession: false,
         teslaLocationScope: 'granted',
       } as AlertInputs;
     }
