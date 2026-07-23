@@ -1,11 +1,45 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { InputHTMLAttributes } from 'react';
 import type { AppConfig } from '@/lib/config';
 
 const TESLA_CLIENT_ID = 'b4a07679-8597-452d-a7c0-8a6a6b632c42';
 const TESLA_AUTH_BASE = 'https://auth.tesla.com/oauth2/v3/authorize';
 const TESLA_SCOPES = 'openid vehicle_device_data vehicle_location vehicle_cmds energy_device_data offline_access';
+
+// Controlled <input type="number"> bound directly to a parsed numeric value
+// re-parses/coerces on every keystroke, and Firefox (unlike Chrome) resets the
+// input's rendered value/caret from that coerced number on each render — so a
+// second keystroke can land on the wrong side of the first digit or get
+// dropped entirely (typing "5" then "0" ends up "0", not "50"). Fix: keep the
+// field's own string draft while typing, only parse to a number on blur.
+function NumberField({
+  value, onCommit, fallback = 0, allowNull = false, ...rest
+}: {
+  value: number | null;
+  onCommit: (n: number | null) => void;
+  fallback?: number;
+  allowNull?: boolean;
+} & Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur' | 'type'>) {
+  const [draft, setDraft] = useState(value === null ? '' : String(value));
+  useEffect(() => { setDraft(value === null ? '' : String(value)); }, [value]);
+  function commit() {
+    if (draft.trim() === '') { onCommit(allowNull ? null : fallback); return; }
+    const n = parseFloat(draft);
+    onCommit(Number.isNaN(n) ? (allowNull ? null : fallback) : n);
+  }
+  return (
+    <input
+      {...rest}
+      type="number"
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+    />
+  );
+}
 
 function teslaAuthUrl(redirectUri: string): string {
   const params = new URLSearchParams({
@@ -656,6 +690,9 @@ export default function AdminPage() {
           </div>
           <div className="form-hint">
             For RTSP streams, use a proxy like go2rtc or frigate to convert to MJPEG/HLS for browser playback.
+            If you're running Scrypted, paste its MJPEG Rebroadcast plugin&apos;s HTTP endpoint for this camera
+            here (Scrypted device → Stream → rebroadcast URL) — the dashboard fetches it server-side and proxies
+            it to the browser, so it works from outside the LAN too and can recover automatically if the stream stalls.
           </div>
         </div>
       </div>
@@ -691,20 +728,20 @@ export default function AdminPage() {
             <div className="form-row">
               <label className="form-label">Coordinates (optional)</label>
               <div style={{ display: 'flex', gap: 6 }}>
-                <input
+                <NumberField
                   className="form-input"
-                  type="number"
                   step="0.0001"
-                  value={config.weather.lat ?? ''}
-                  onChange={e => update('weather', { lat: e.target.value ? parseFloat(e.target.value) : null })}
+                  value={config.weather.lat}
+                  allowNull
+                  onCommit={lat => update('weather', { lat })}
                   placeholder="lat"
                 />
-                <input
+                <NumberField
                   className="form-input"
-                  type="number"
                   step="0.0001"
-                  value={config.weather.lon ?? ''}
-                  onChange={e => update('weather', { lon: e.target.value ? parseFloat(e.target.value) : null })}
+                  value={config.weather.lon}
+                  allowNull
+                  onCommit={lon => update('weather', { lon })}
                   placeholder="lon"
                 />
               </div>
@@ -725,23 +762,23 @@ export default function AdminPage() {
           <div className="form-row-2">
             <div className="form-row">
               <label className="form-label">Latitude</label>
-              <input
+              <NumberField
                 className="form-input"
-                type="number"
                 step="0.000001"
-                value={config.home.lat ?? ''}
-                onChange={e => update('home', { lat: e.target.value ? parseFloat(e.target.value) : null })}
+                value={config.home.lat}
+                allowNull
+                onCommit={lat => update('home', { lat })}
                 placeholder="e.g. 33.123456"
               />
             </div>
             <div className="form-row">
               <label className="form-label">Longitude</label>
-              <input
+              <NumberField
                 className="form-input"
-                type="number"
                 step="0.000001"
-                value={config.home.lon ?? ''}
-                onChange={e => update('home', { lon: e.target.value ? parseFloat(e.target.value) : null })}
+                value={config.home.lon}
+                allowNull
+                onCommit={lon => update('home', { lon })}
                 placeholder="e.g. -84.123456"
               />
             </div>
@@ -749,13 +786,13 @@ export default function AdminPage() {
           <div className="form-row-2">
             <div className="form-row">
               <label className="form-label">Home Radius (meters)</label>
-              <input
+              <NumberField
                 className="form-input"
-                type="number"
                 step="10"
                 min="25"
                 value={config.home.radiusMeters}
-                onChange={e => update('home', { radiusMeters: e.target.value ? parseInt(e.target.value, 10) : 150 })}
+                fallback={150}
+                onCommit={n => update('home', { radiusMeters: Math.round(n ?? 150) })}
               />
             </div>
             <div className="form-row" style={{ justifyContent: 'flex-end' }}>
@@ -833,32 +870,32 @@ export default function AdminPage() {
             </div>
             <div className="form-row">
               <label className="form-label">Modbus Port</label>
-              <input
+              <NumberField
                 className="form-input"
-                type="number"
                 value={config.solar.port}
-                onChange={e => update('solar', { port: e.target.value ? parseInt(e.target.value, 10) : 1502 })}
+                fallback={1502}
+                onCommit={n => update('solar', { port: Math.round(n ?? 1502) })}
               />
             </div>
           </div>
           <div className="form-row-2">
             <div className="form-row">
               <label className="form-label">Device ID</label>
-              <input
+              <NumberField
                 className="form-input"
-                type="number"
                 value={config.solar.unitId}
-                onChange={e => update('solar', { unitId: e.target.value ? parseInt(e.target.value, 10) : 1 })}
+                fallback={1}
+                onCommit={n => update('solar', { unitId: Math.round(n ?? 1) })}
               />
             </div>
             <div className="form-row">
               <label className="form-label">Poll Interval (sec)</label>
-              <input
+              <NumberField
                 className="form-input"
-                type="number"
                 min="5"
                 value={config.solar.pollIntervalSec}
-                onChange={e => update('solar', { pollIntervalSec: e.target.value ? parseInt(e.target.value, 10) : 10 })}
+                fallback={10}
+                onCommit={n => update('solar', { pollIntervalSec: Math.round(n ?? 10) })}
               />
             </div>
           </div>
@@ -946,12 +983,12 @@ export default function AdminPage() {
             </div>
             <div className="form-row">
               <label className="form-label">Channel</label>
-              <input
+              <NumberField
                 className="form-input"
-                type="number"
                 min="0"
                 value={config.nvr.channel}
-                onChange={e => update('nvr', { channel: e.target.value ? parseInt(e.target.value, 10) : 0 })}
+                fallback={0}
+                onCommit={n => update('nvr', { channel: Math.round(n ?? 0) })}
               />
             </div>
           </div>
@@ -1062,13 +1099,13 @@ function ChargeStatsSection() {
           </div>
           <div className="form-row">
             <label className="form-label">Window (months)</label>
-            <input
+            <NumberField
               className="form-input"
-              type="number"
               min={1}
               max={36}
               value={months}
-              onChange={e => setMonths(Math.max(1, Math.min(36, parseInt(e.target.value, 10) || 6)))}
+              fallback={6}
+              onCommit={n => setMonths(Math.max(1, Math.min(36, Math.round(n ?? 6))))}
             />
           </div>
         </div>

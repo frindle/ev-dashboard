@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
 import {
   AuthBanner,
@@ -278,8 +278,32 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
   // which against this dark background reads as "black" rather than an
   // obvious broken state. Now logs to the server (visible via /api/errors,
   // same pipeline as window.onerror) and shows a real failure message.
+  //
+  // The <img> now points at /api/camera/stream (server-side proxy to
+  // camera.streamUrl) instead of the raw LAN URL — the container can reach
+  // the camera/Scrypted address even when the browser viewing the page
+  // can't (Cloudflare Tunnel, a different VLAN, etc.), which is why the
+  // stream "worked on-LAN" but rendered frozen from anywhere else.
+  //
+  // MJPEG multipart streams can also stall mid-connection (frames just stop
+  // arriving) without the browser ever firing onError — that reads as a
+  // frozen frame forever. lastFrameAt + the watchdog below catch that: no
+  // new frame (onLoad fires once per replaced part) in 10s counts as dead,
+  // and reloadKey forces a fresh proxy connection every 15s while dead.
   const [imgError, setImgError] = useState(false);
-  useEffect(() => { setImgError(false); }, [streamUrl]);
+  const [reloadKey, setReloadKey] = useState(0);
+  const lastFrameAt = useRef(Date.now());
+  useEffect(() => { setImgError(false); lastFrameAt.current = Date.now(); setReloadKey(k => k + 1); }, [streamUrl]);
+  useEffect(() => {
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastFrameAt.current > 10_000) {
+        setImgError(true);
+        setReloadKey(k => k + 1);
+        lastFrameAt.current = Date.now();
+      }
+    }, 3_000);
+    return () => clearInterval(watchdog);
+  }, []);
   function reportCameraError() {
     setImgError(true);
     fetch('/api/errors', {
@@ -287,6 +311,10 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source: 'camera.img', message: `Failed to load camera stream: ${streamUrl}` }),
     }).catch(() => null);
+  }
+  function onFrame() {
+    lastFrameAt.current = Date.now();
+    setImgError(false);
   }
 
   const key = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
@@ -313,11 +341,11 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
         <div style={{ position: 'relative', aspectRatio: '16/9', background: 'radial-gradient(120% 90% at 50% 30%, #1c252e 0%, #0c1014 100%)', overflow: 'hidden' }}>
           {streamUrl && !imgError ? (
             <img
-              src={streamUrl}
+              src={`/api/camera/stream?k=${reloadKey}`}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               alt="Camera"
               onError={reportCameraError}
-              onLoad={() => setImgError(false)}
+              onLoad={onFrame}
             />
           ) : streamUrl && imgError ? (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#e2685f' }}>
