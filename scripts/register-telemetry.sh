@@ -72,7 +72,15 @@ PAYLOAD=$(jq -n \
         RatedRange:          { interval_seconds: 300 },
         Odometer:            { interval_seconds: 600 },
         Locked:              { interval_seconds: 60 },
-        Gear:                { interval_seconds: 30 }
+        Gear:                { interval_seconds: 30 },
+        // Added to cut REST polling further -- these were previously only
+        // available via fetchVehicleState's poll path even with telemetry
+        // otherwise running. See telemetry-server.js's field handler.
+        Location:            { interval_seconds: 60 },
+        HvacACEnabled:       { interval_seconds: 300 },
+        ChargeAmps:          { interval_seconds: 30 },
+        ChargeRateMilePerHour: { interval_seconds: 30 },
+        ChargerVoltage:      { interval_seconds: 300 }
       }
     }
   }')

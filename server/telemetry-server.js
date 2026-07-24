@@ -154,10 +154,15 @@ function applyDatum(state, key, value) {
     case 'Odometer':
       state.odometer = Number(v) || 0; break;
 
-    // Charging state — ChargeStateCharging = 4, DetailedChargeStateCharging = 4
+    // Charging state — enum values shared by both ChargeState and
+    // DetailedChargeState (protos/vehicle_data.proto): 0 Unknown,
+    // 1 Disconnected, 2 NoPower, 3 Starting, 4 Charging, 5 Complete,
+    // 6 Stopped. Plugged in is anything except Unknown/Disconnected --
+    // NoPower/Stopped/Complete all still mean a cable is connected.
     case 'ChargeState':
     case 'DetailedChargeState':
       state.isCharging = (v === 4);
+      state.isPluggedIn = (v !== 0 && v !== 1);
       state.chargingState = String(v); break;
 
     // Charging power / progress
