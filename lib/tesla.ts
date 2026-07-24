@@ -28,14 +28,6 @@ export interface TeslaVehicleState {
   lon: number | null;
 }
 
-export interface TeslaSiteState {
-  solarPowerW: number;
-  gridPowerW: number;
-  batteryPowerW: number;
-  loadPowerW: number;
-  wallChargerPowerW: number;
-}
-
 export interface WallConnectorVitals {
   vehicleConnected: boolean;
   vehicleCharging: boolean;
@@ -274,35 +266,27 @@ interface LiveStatus {
   wall_connectors?: LiveStatusWC[];
 }
 
-// Module-level cache so fetchSiteLiveStatus and fetchWallConnectorVitals don't
-// each make a separate API call on the same poll cycle. TTL adapts to whether
-// a wall connector was last seen actively drawing power: 30s while charging,
-// 5min otherwise -- TOU rates mean charging only really happens midnight-8am,
-// so most of the day this cuts live_status calls by ~10x.
-const LIVE_STATUS_ACTIVE_MS = 30_000;
-// Widened from 5min 2026-07-25 — still hitting the monthly Fleet API quota
-// (80% used with days left in the cycle) even after the sustained-charging
-// backoff below. This is background home-energy-flow data (solar/grid/
-// battery power) when nothing's actively charging — 20min is plenty.
+// Module-level cache so fetchWallConnectorVitals calls for the same site
+// don't each make a separate API call on the same poll cycle.
+//
+// Flat schedule (2026-07-25) -- previously this varied 30s/5min/etc. based on
+// charging state, but Tesla's own charging rate/state now comes for free via
+// telemetry (see chargerPowerKw/isCharging in TeslaVehicleState), so Tesla's
+// side doesn't call this endpoint at all anymore (route.ts synthesizes its
+// Wall Connector data straight from telemetry). This endpoint is now only
+// called for whichever side Rivian is on -- no telemetry equivalent there,
+// so it still wants a real Wall-Connector-measured reading (the midnight-
+// boundary bump below exists for that, not for detecting Tesla charging).
+// solar/grid/battery/home-load fields were dropped entirely (2026-07-25) --
+// this home has no Tesla Powerwall or Tesla-monitored solar, so those
+// fields were never meaningful (real solar comes from a separate SolarEdge
+// inverter, see api-docs/homelab).
 const LIVE_STATUS_IDLE_MS = 20 * 60_000;
-// Once a charge session has been steadily active a while, 30s is overkill —
-// kW draw doesn't need sub-minute freshness mid-session, only at the start.
-// A full overnight TOU charge at 30s the whole time is what pushed the
-// Fleet API's monthly quota to 80% usage (email alert, 2026-07-24) — this
-// keeps fast detection at the start of a session without paying that cost
-// for every hour after. Widened further from 5min same day as the IDLE
-// bump above, same reason.
-const LIVE_STATUS_SUSTAINED_ACTIVE_MS = 10 * 60_000;
-const SUSTAINED_ACTIVE_THRESHOLD_MS = 15 * 60_000;
-let liveStatusCache: { siteId: string; data: LiveStatus; at: number; activeSince?: number } | null = null;
-
-function anyConnectorActive(data: LiveStatus): boolean {
-  return (data.wall_connectors ?? []).some(wc => wc.wall_connector_state === 1 || (wc.wall_connector_power ?? 0) > 100);
-}
+const LIVE_STATUS_ACTIVE_MS = 30_000;
 
 // TOU charging kicks in at midnight -- briefly poll at the active cadence
-// right at that boundary so charging start is picked up within ~30s instead
-// of waiting out a stale idle-window TTL (up to 5min lag otherwise).
+// right at that boundary so a Rivian session-start is picked up within ~30s
+// instead of waiting out the flat 20min TTL.
 function nearMidnightBoundary(): boolean {
   const now = new Date();
   const h = now.getHours();
@@ -310,29 +294,24 @@ function nearMidnightBoundary(): boolean {
   return (h === 23 && m === 59) || (h === 0 && m <= 2);
 }
 
-// route.ts calls fetchSiteLiveStatus + fetchWallConnectorVitals(left) +
-// fetchWallConnectorVitals(right) all inside one Promise.all. The 5s cache
-// above only helps *after* the first call has resolved — three concurrent
-// callers all see a stale/empty cache at entry and each fired its own
-// live_status fetch, i.e. exactly the "2-4 near-simultaneous calls to the
+// Kept from when route.ts called this for both sides concurrently — now
+// only one caller (Rivian's side) exists, but the in-flight dedup is still
+// harmless cheap insurance against overlapping polls. The cache above only
+// helps *after* the first call has resolved — concurrent callers within the
+// same tick all see a stale/empty cache at entry and would each fire their
+// own live_status fetch, i.e. the "2-4 near-simultaneous calls to the
 // same endpoint" pattern in the incident logs. Track the in-flight promise
 // so concurrent callers within the same tick share one upstream fetch.
+let liveStatusCache: { siteId: string; data: LiveStatus; at: number } | null = null;
 let liveStatusInFlight: { siteId: string; promise: Promise<LiveStatus | null> } | null = null;
 
-async function getLiveStatus(energySiteId: string, telemetryConfirmedCharging = false): Promise<LiveStatus | null> {
+async function getLiveStatus(energySiteId: string, forceFastPoll = false): Promise<LiveStatus | null> {
   // Serve a fresh-enough cached response without hitting the API at all.
   if (liveStatusCache && liveStatusCache.siteId === energySiteId) {
-    const active = anyConnectorActive(liveStatusCache.data);
-    // Telemetry already told us (in real time) whether the vehicle is
-    // charging — no need to spend 15 minutes of 30s live_status polling to
-    // rediscover that ourselves. Skip straight to the relaxed cadence,
-    // except right at the midnight TOU boundary, which still gets the fast
-    // tier to catch the actual start of a session promptly.
-    const sustained = telemetryConfirmedCharging || (active && liveStatusCache.activeSince != null
-      && (Date.now() - liveStatusCache.activeSince) > SUSTAINED_ACTIVE_THRESHOLD_MS);
-    const ttl = sustained && !nearMidnightBoundary() ? LIVE_STATUS_SUSTAINED_ACTIVE_MS
-      : (active || nearMidnightBoundary()) ? LIVE_STATUS_ACTIVE_MS
-      : LIVE_STATUS_IDLE_MS;
+    // forceFastPoll: Rivian's own poll just observed a charging-start
+    // transition (see route.ts's peekRivianJustStartedCharging) -- an
+    // event-driven replacement for a blind "poll fast near midnight" guess.
+    const ttl = (nearMidnightBoundary() || forceFastPoll) ? LIVE_STATUS_ACTIVE_MS : LIVE_STATUS_IDLE_MS;
     if (Date.now() - liveStatusCache.at < ttl) return liveStatusCache.data;
   }
   if (liveStatusInFlight && liveStatusInFlight.siteId === energySiteId) {
@@ -344,14 +323,10 @@ async function getLiveStatus(energySiteId: string, telemetryConfirmedCharging = 
     if (!data) {
       // Fresh fetch failed (Tesla hiccup, timeout, etc.). Prefer last-known
       // over null so the dashboard doesn't blink to 0 kW. The smart-poll's
-      // 30s tick will retry; intermittent failures shouldn't be user-visible.
+      // next tick will retry; intermittent failures shouldn't be user-visible.
       return liveStatusCache?.siteId === energySiteId ? liveStatusCache.data : null;
     }
-    const nowActive = anyConnectorActive(data);
-    const prevActiveSince = liveStatusCache?.siteId === energySiteId ? liveStatusCache.activeSince : undefined;
-    const wasActive = liveStatusCache?.siteId === energySiteId ? anyConnectorActive(liveStatusCache.data) : false;
-    const activeSince = !nowActive ? undefined : (wasActive && prevActiveSince != null ? prevActiveSince : Date.now());
-    liveStatusCache = { siteId: energySiteId, data, at: Date.now(), activeSince };
+    liveStatusCache = { siteId: energySiteId, data, at: Date.now() };
     return data;
   })();
 
@@ -361,18 +336,6 @@ async function getLiveStatus(energySiteId: string, telemetryConfirmedCharging = 
   } finally {
     if (liveStatusInFlight?.promise === promise) liveStatusInFlight = null;
   }
-}
-
-export async function fetchSiteLiveStatus(energySiteId: string, telemetryConfirmedCharging = false): Promise<TeslaSiteState | null> {
-  const data = await getLiveStatus(energySiteId, telemetryConfirmedCharging);
-  if (!data) return null;
-  return {
-    solarPowerW: data.solar_power ?? 0,
-    gridPowerW: data.grid_power ?? 0,
-    batteryPowerW: data.battery_power ?? 0,
-    loadPowerW: data.load_power ?? 0,
-    wallChargerPowerW: data.wall_charger_power ?? 0,
-  };
 }
 
 // Gen 3 Wall Connectors expose an unauthenticated local HTTP API
@@ -423,7 +386,7 @@ async function fetchWallConnectorVitalsLocal(ip: string): Promise<WallConnectorV
 // Now takes (siteId, serial) since per-connector data comes from live_status
 // matched by DIN suffix. Session energy is no longer exposed in this response —
 // we report 0 for sessionEnergyWh. Current is derived from power / voltage.
-export async function fetchWallConnectorVitals(siteId: string, serial: string, telemetryConfirmedCharging = false, localIp = ''): Promise<WallConnectorVitals | null> {
+export async function fetchWallConnectorVitals(siteId: string, serial: string, forceFastPoll = false, localIp = ''): Promise<WallConnectorVitals | null> {
   if (localIp) {
     const local = await fetchWallConnectorVitalsLocal(localIp);
     if (local) return local;
@@ -431,7 +394,7 @@ export async function fetchWallConnectorVitals(siteId: string, serial: string, t
     // to the cloud path rather than going blank for this poll cycle.
   }
   if (!serial) return null;
-  const data = await getLiveStatus(siteId, telemetryConfirmedCharging);
+  const data = await getLiveStatus(siteId, forceFastPoll);
   const wc = data?.wall_connectors?.find(w => w.din?.endsWith(`--${serial}`));
   if (!wc) return null;
 

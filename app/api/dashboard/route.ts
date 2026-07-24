@@ -5,10 +5,8 @@ import { readConfig, readTokens } from '@/lib/config';
 import { logError } from '@/lib/logger';
 import {
   fetchVehicleState,
-  fetchSiteLiveStatus,
   fetchWallConnectorVitals,
   TeslaVehicleState,
-  TeslaSiteState,
   WallConnectorVitals,
 } from '@/lib/tesla';
 import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/lib/rivian';
@@ -82,12 +80,6 @@ export interface WallConnectorData {
   todayKwh: number;    // integrated since local midnight
 }
 
-export interface SolarOpportunity {
-  excessSolarW: number;       // solar production beyond current house load (0 when none)
-  chargerDrawW: number;       // combined wall-connector draw
-  suggestion: string | null;  // human-readable hint when excess is meaningful
-}
-
 export interface DashboardFlags {
   teslaReauthRequired: boolean;
   teslaReauthReason: string | null;
@@ -109,7 +101,6 @@ export interface DashboardFlags {
 export interface DashboardData {
   vehicles: VehicleData[];
   wallConnectors: WallConnectorData[];
-  site: TeslaSiteState | null;
   weather: WeatherData | null;
   garageConnected: boolean;
   garageDoorOpen: boolean | null;
@@ -118,7 +109,6 @@ export interface DashboardData {
   teslaConnected: boolean;
   rivianConnected: boolean;
   flags: DashboardFlags;
-  solarOpportunity: SolarOpportunity | null;
 }
 
 export interface WeatherData {
@@ -204,23 +194,6 @@ function warnNoHomeOnce(): true {
     console.log('[home] no home coords configured in admin — atHome detection disabled until set');
   }
   return true;
-}
-
-// Peek at the telemetry/poll cache's last-known charging state without
-// triggering a fetch — telemetry already pushes DetailedChargeState in real
-// time, so if it says we're charging, live_status polling doesn't need its
-// own slow ramp-up to (re-)discover that fact, only the midnight-boundary
-// window still matters for catching the very start of a session.
-async function peekTeslaCharging(): Promise<boolean> {
-  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
-  const path = join(dir, TESLA_CACHE_FILE);
-  if (!existsSync(path)) return false;
-  try {
-    const cache = JSON.parse(await readFile(path, 'utf-8')) as TeslaCache;
-    return !!cache.state?.isCharging || cache.state?.chargingState === 'Charging';
-  } catch {
-    return false;
-  }
 }
 
 async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicleState | null> {
@@ -441,9 +414,31 @@ interface RivianCache {
   state?: RivianVehicleState;
   fetchedAt?: number;
   parkedAt?: number; // when gearStatus last transitioned away from 'drive'
+  chargeStartedAt?: number; // when isCharging last transitioned false -> true
   // legacy shape (pre full-state cache) — file held bare coords
   lat?: number | null;
   lon?: number | null;
+}
+
+const RIVIAN_CHARGE_START_GRACE_MS = 180_000;
+
+// Peek at whether Rivian's own poll recently observed a charging-start
+// transition, without triggering a fetch. Replaces a blind "poll Tesla's
+// live_status fast near midnight" guess with a precise, event-driven signal
+// tied to Rivian's actual charging state (Rivian has no telemetry push of
+// its own, unlike Tesla, so its Wall-Connector-side session tracking still
+// needs a real live_status/local-API reading, but at least the *timing* of
+// when to burst-poll for it doesn't have to be a guess).
+async function peekRivianJustStartedCharging(): Promise<boolean> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, 'rivian-state.json');
+  if (!existsSync(path)) return false;
+  try {
+    const cache = JSON.parse(await readFile(path, 'utf-8')) as RivianCache;
+    return cache.chargeStartedAt != null && (Date.now() - cache.chargeStartedAt) < RIVIAN_CHARGE_START_GRACE_MS;
+  } catch {
+    return false;
+  }
 }
 
 async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleState | null> {
@@ -509,8 +504,18 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   const parkedAt = justStoppedDriving ? Date.now()
     : fresh.gearStatus === 'drive' ? undefined
     : cache.parkedAt;
+  // Precise, event-driven replacement for a blind "poll fast near midnight"
+  // guess -- fires whenever Rivian's own poll actually observes a
+  // false->true charging transition, at any time of day, not just the TOU
+  // boundary. Used to briefly burst-poll Tesla's live_status so Rivian's
+  // Wall-Connector-side session-kWh tracking catches the actual start
+  // promptly (Rivian has no telemetry push of its own, unlike Tesla).
+  const justStartedCharging = !cache.state?.isCharging && fresh.isCharging;
+  const chargeStartedAt = justStartedCharging ? Date.now()
+    : !fresh.isCharging ? undefined
+    : cache.chargeStartedAt;
   try {
-    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt } satisfies RivianCache));
+    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt, chargeStartedAt } satisfies RivianCache));
   } catch { /* non-fatal */ }
   (fresh as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
   return fresh;
@@ -542,18 +547,41 @@ async function handleGet(req: Request) {
 
   // Fetch all data in parallel. Site live_status and per-connector vitals now
   // share one underlying API call (Tesla deprecated /wall_connectors/{id}/vitals
-  // and moved per-connector fields into the same live_status response).
-  const telemetryConfirmedCharging = teslaConnected ? await peekTeslaCharging() : false;
+  // Tesla's own charging state/rate/power now comes entirely from telemetry
+  // (see chargerPowerKw/isCharging/isPluggedIn on TeslaVehicleState) --
+  // there's no remaining reason to also ask the Wall Connector's own API to
+  // confirm what the car already told us for free. live_status/local-API is
+  // now only needed for whichever side Rivian is on (no telemetry
+  // equivalent for Rivian), added 2026-07-25.
+  const rivianSide = cfg.vehicles.rivian.chargerSide;
+  const rivianSerial  = rivianSide === 'LEFT' ? leftSerial  : rightSerial;
+  const rivianLocalIp = rivianSide === 'LEFT' ? leftLocalIp : rightLocalIp;
+  const rivianJustStartedCharging = rivianConnected ? await peekRivianJustStartedCharging() : false;
 
-  const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
+  const [teslaState, rivianState, rivianWcVitals, weather, doorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
-    teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id, telemetryConfirmedCharging) : Promise.resolve(null),
-    leftLocalIp || (teslaConnected && leftSerial)  ? fetchWallConnectorVitals(cfg.energySite.id, leftSerial, telemetryConfirmedCharging, leftLocalIp)  : Promise.resolve(null),
-    rightLocalIp || (teslaConnected && rightSerial) ? fetchWallConnectorVitals(cfg.energySite.id, rightSerial, telemetryConfirmedCharging, rightLocalIp) : Promise.resolve(null),
+    rivianLocalIp || (rivianConnected && rivianSerial)
+      ? fetchWallConnectorVitals(cfg.energySite.id, rivianSerial, rivianJustStartedCharging, rivianLocalIp)
+      : Promise.resolve(null),
     fetchWeather(cfg),
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
+
+  // Tesla's side is synthesized directly from its (telemetry-sourced) vehicle
+  // state -- zero additional API/network calls, cloud or local.
+  const teslaWcVitals: WallConnectorVitals | null = teslaState ? {
+    vehicleConnected: teslaState.isPluggedIn,
+    vehicleCharging: teslaState.isCharging,
+    currentA: teslaState.chargerActualCurrentA,
+    voltageV: teslaState.chargerVoltage,
+    sessionEnergyWh: 0, // not tracked from telemetry; session kWh below integrates chargerPowerKw over time instead
+    powerW: teslaState.chargerPowerKw * 1000,
+    online: teslaState.online,
+  } : null;
+  const teslaSide = rivianSide === 'LEFT' ? 'RIGHT' : 'LEFT';
+  const wcLeft  = teslaSide === 'LEFT'  ? teslaWcVitals : rivianWcVitals;
+  const wcRight = teslaSide === 'RIGHT' ? teslaWcVitals : rivianWcVitals;
 
   // Resolve "home" coordinates. If the admin hasn't filled out the home
   // section, fall back to the weather location — for most setups that's
@@ -690,33 +718,9 @@ async function handleGet(req: Request) {
     console.warn('[notify] failed:', String(e).slice(0, 160));
   }
 
-  // Excess-solar opportunity: production beyond what the house is drawing
-  // right now. Charger draw is added back to "load" headroom because that
-  // power is elective — the point is "how much could go into a car for
-  // free". Data only; the dashboard renders it once design ships.
-  let solarOpportunity: SolarOpportunity | null = null;
-  if (siteState) {
-    const chargerDrawW = (wcLeft?.powerW ?? 0) + (wcRight?.powerW ?? 0);
-    const houseLoadW = Math.max(0, siteState.loadPowerW - chargerDrawW);
-    const excessSolarW = Math.max(0, Math.round(siteState.solarPowerW - houseLoadW));
-    const kw = excessSolarW / 1000;
-    solarOpportunity = {
-      excessSolarW,
-      chargerDrawW: Math.round(chargerDrawW),
-      // 1.5 kW ≈ the minimum meaningful AC charge rate; below that the hint is noise.
-      suggestion: excessSolarW >= 1500 && chargerDrawW < 100
-        ? `~${kw.toFixed(1)} kW of excess solar available — a good time to charge`
-        : null,
-    };
-    if (solarOpportunity.suggestion) {
-      console.log(`[solar] ${solarOpportunity.suggestion} (solar=${siteState.solarPowerW}W house=${houseLoadW}W chargers=${chargerDrawW}W)`);
-    }
-  }
-
   const data: DashboardData = {
     vehicles,
     wallConnectors,
-    site: siteState,
     weather,
     garageConnected: myqConnected,
     garageDoorOpen: doorState === 'open' ? true : doorState === 'closed' ? false : null,
@@ -725,7 +729,6 @@ async function handleGet(req: Request) {
     teslaConnected,
     rivianConnected,
     flags,
-    solarOpportunity,
   };
 
   // Persist to disk so the client can show last-known state on restart

@@ -127,9 +127,8 @@ function buildAlerts(data: DashboardData): AlertInputs {
 }
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
-function CircuitPanel({ wallConnectors, solarPowerW, vehicles }: {
+function CircuitPanel({ wallConnectors, vehicles }: {
   wallConnectors: WallConnectorData[];
-  solarPowerW: number;
   vehicles: VehicleData[];
 }) {
   const left  = wallConnectors.find(w => w.side === 'LEFT');
@@ -255,15 +254,6 @@ function CircuitPanel({ wallConnectors, solarPowerW, vehicles }: {
           );
         })}
       </div>
-
-      {/* Solar row (if generating) */}
-      {solarPowerW > 0 && (
-        <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'rgba(52,224,196,0.06)', border: '1px solid rgba(52,224,196,0.14)', borderRadius: 12 }}>
-          <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: ACCENT }}>solar_power</span>
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: '0.08em', color: '#a4afba' }}>SOLAR</span>
-          <span style={{ fontSize: 16, fontWeight: 600 }}>{(solarPowerW / 1000).toFixed(1)}<span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}> kW</span></span>
-        </div>
-      )}
     </div>
   );
 }
@@ -515,9 +505,6 @@ export default function Dashboard() {
   const rightWC = wallConnectors.find(w => w.side === 'RIGHT');
   const totalAmps = (leftWC?.vitals?.currentA ?? 0) + (rightWC?.vitals?.currentA ?? 0);
   const totalKw = kwFor(totalAmps).toFixed(1);
-  const solarPowerW = data?.site?.solarPowerW ?? 0;
-  const solarKw = (solarPowerW / 1000).toFixed(1);
-  const solarOn = solarPowerW > 100; // only show if meaningfully generating
   const inUseCount = (leftWC?.vitals?.vehicleCharging ? 1 : 0) + (rightWC?.vitals?.vehicleCharging ? 1 : 0);
   // Strict: only count vehicles with explicit positive home GPS. The earlier
   // "null + online → home" heuristic over-counted any vehicle that lost its
@@ -609,7 +596,6 @@ export default function Dashboard() {
           {/* Stat chips */}
           <div style={{ display: 'flex', gap: 11 }}>
             <StatChip label="DRAWING" value={totalKw} unit="kW" />
-            {solarOn && <StatChip label="SOLAR" value={solarKw} unit="kW" icon="solar_power" />}
             <StatChip label="CHARGERS" value={String(inUseCount)} unit="/ 2 in use" />
             <StatChip label="VEHICLES" value={String(vehiclesHome)} unit="home" />
           </div>
@@ -656,7 +642,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── Circuit Panel ── */}
-      <CircuitPanel wallConnectors={wallConnectors} solarPowerW={solarPowerW} vehicles={vehicles} />
+      <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} />
 
       {/* ── Camera Modal ── */}
       {showCamera && (
