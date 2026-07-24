@@ -277,7 +277,15 @@ interface LiveStatus {
 // so most of the day this cuts live_status calls by ~10x.
 const LIVE_STATUS_ACTIVE_MS = 30_000;
 const LIVE_STATUS_IDLE_MS = 5 * 60_000;
-let liveStatusCache: { siteId: string; data: LiveStatus; at: number } | null = null;
+// Once a charge session has been steadily active a while, 30s is overkill —
+// kW draw doesn't need sub-minute freshness mid-session, only at the start.
+// A full overnight TOU charge at 30s the whole time is what pushed the
+// Fleet API's monthly quota to 80% usage (email alert, 2026-07-24) — this
+// keeps fast detection at the start of a session without paying that cost
+// for every hour after.
+const LIVE_STATUS_SUSTAINED_ACTIVE_MS = 2 * 60_000;
+const SUSTAINED_ACTIVE_THRESHOLD_MS = 15 * 60_000;
+let liveStatusCache: { siteId: string; data: LiveStatus; at: number; activeSince?: number } | null = null;
 
 function anyConnectorActive(data: LiveStatus): boolean {
   return (data.wall_connectors ?? []).some(wc => wc.wall_connector_state === 1 || (wc.wall_connector_power ?? 0) > 100);
@@ -305,7 +313,12 @@ let liveStatusInFlight: { siteId: string; promise: Promise<LiveStatus | null> } 
 async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
   // Serve a fresh-enough cached response without hitting the API at all.
   if (liveStatusCache && liveStatusCache.siteId === energySiteId) {
-    const ttl = anyConnectorActive(liveStatusCache.data) || nearMidnightBoundary() ? LIVE_STATUS_ACTIVE_MS : LIVE_STATUS_IDLE_MS;
+    const active = anyConnectorActive(liveStatusCache.data);
+    const sustained = active && liveStatusCache.activeSince != null
+      && (Date.now() - liveStatusCache.activeSince) > SUSTAINED_ACTIVE_THRESHOLD_MS;
+    const ttl = sustained ? LIVE_STATUS_SUSTAINED_ACTIVE_MS
+      : (active || nearMidnightBoundary()) ? LIVE_STATUS_ACTIVE_MS
+      : LIVE_STATUS_IDLE_MS;
     if (Date.now() - liveStatusCache.at < ttl) return liveStatusCache.data;
   }
   if (liveStatusInFlight && liveStatusInFlight.siteId === energySiteId) {
@@ -320,7 +333,11 @@ async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
       // 30s tick will retry; intermittent failures shouldn't be user-visible.
       return liveStatusCache?.siteId === energySiteId ? liveStatusCache.data : null;
     }
-    liveStatusCache = { siteId: energySiteId, data, at: Date.now() };
+    const nowActive = anyConnectorActive(data);
+    const prevActiveSince = liveStatusCache?.siteId === energySiteId ? liveStatusCache.activeSince : undefined;
+    const wasActive = liveStatusCache?.siteId === energySiteId ? anyConnectorActive(liveStatusCache.data) : false;
+    const activeSince = !nowActive ? undefined : (wasActive && prevActiveSince != null ? prevActiveSince : Date.now());
+    liveStatusCache = { siteId: energySiteId, data, at: Date.now(), activeSince };
     return data;
   })();
 
