@@ -35,6 +35,13 @@ function streamViaFfmpeg(rtspUrl: string): Response {
   const ff = spawn('ffmpeg', [
     '-rtsp_transport', 'tcp',
     '-i', rtspUrl,
+    // Source is 2560x1920 -- decoding+JPEG-encoding every full-res frame was
+    // pegging the CPU (~50%+ for one stream) and causing the output to fall
+    // progressively behind live, since nothing here is bandwidth-limited on
+    // a LAN. The dashboard's camera modal never renders anywhere near source
+    // res, so scale down before the JPEG encode instead of shipping pixels
+    // nobody sees. -2 keeps height even (required for some encoders).
+    '-vf', 'scale=1280:-2',
     '-f', 'mpjpeg',
     '-boundary_tag', 'ffmpeg',
     '-q:v', '5',
