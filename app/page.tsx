@@ -151,8 +151,11 @@ function CircuitPanel({ wallConnectors, vehicles }: {
   const leftAmps  = left?.vitals?.currentA  ?? 0;
   const rightAmps = right?.vitals?.currentA ?? 0;
   const usedAmps  = Math.round(leftAmps + rightAmps);
-  const leftInUse  = left?.vitals?.vehicleCharging  ?? false;
-  const rightInUse = right?.vitals?.vehicleCharging ?? false;
+  // Plugged in counts as "in use" even when not actively drawing current
+  // right now (reached the charge limit, waiting on a schedule, etc.) — the
+  // connector is still physically occupied either way.
+  const leftInUse  = (left?.vitals?.vehicleCharging  ?? false) || (left?.vitals?.vehicleConnected  ?? false) || leftVehiclePluggedIn;
+  const rightInUse = (right?.vitals?.vehicleCharging ?? false) || (right?.vitals?.vehicleConnected ?? false) || rightVehiclePluggedIn;
   const activeCount = (leftInUse ? 1 : 0) + (rightInUse ? 1 : 0);
 
   const usedKw   = kwFor(usedAmps);
@@ -509,7 +512,12 @@ export default function Dashboard() {
   const rightWC = wallConnectors.find(w => w.side === 'RIGHT');
   const totalAmps = (leftWC?.vitals?.currentA ?? 0) + (rightWC?.vitals?.currentA ?? 0);
   const totalKw = kwFor(totalAmps).toFixed(1);
-  const inUseCount = (leftWC?.vitals?.vehicleCharging ? 1 : 0) + (rightWC?.vitals?.vehicleCharging ? 1 : 0);
+  // Plugged in counts as "in use" even when not actively drawing current
+  // right now — mirrors the same logic as CircuitPanel's leftInUse/rightInUse.
+  const leftVehiclePluggedIn2  = vehicles.find(v => v.chargerSide === 'LEFT')?.state?.isPluggedIn  ?? false;
+  const rightVehiclePluggedIn2 = vehicles.find(v => v.chargerSide === 'RIGHT')?.state?.isPluggedIn ?? false;
+  const inUseCount = ((leftWC?.vitals?.vehicleCharging || leftWC?.vitals?.vehicleConnected || leftVehiclePluggedIn2) ? 1 : 0)
+    + ((rightWC?.vitals?.vehicleCharging || rightWC?.vitals?.vehicleConnected || rightVehiclePluggedIn2) ? 1 : 0);
   // Strict: only count vehicles with explicit positive home GPS. The earlier
   // "null + online → home" heuristic over-counted any vehicle that lost its
   // GPS reading mid-day (Tesla without vehicle_location scope is a common
