@@ -307,7 +307,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
     : !atHome                 ? (v.speed > 0
                                   ? 'DRIVING ' + v.speed + ' mph · ' + v.place
                                   : 'PARKED · ' + v.place)
-    :                           (v.soc >= v.limit ? 'AT TARGET' : 'IDLE · NOT PLUGGED IN');
+    :                           (v.soc >= v.limit ? 'AT TARGET' : v.pluggedIn ? 'IDLE · PLUGGED IN' : 'IDLE · NOT PLUGGED IN');
   const etaColor = v.charging ? ACCENT : '#7d8893';
 
   // Start only makes sense plugged in; Stop stays available regardless (in
