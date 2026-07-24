@@ -441,6 +441,36 @@ async function peekRivianJustStartedCharging(): Promise<boolean> {
   }
 }
 
+// Skip Tesla's live_status/local Wall Connector call entirely when Rivian is
+// confirmed away from home -- there's nothing for it to report if the
+// vehicle isn't even here. Uses the cached (not fresh) GPS reading, so this
+// doesn't cost a network call of its own. Conservative by design: any
+// uncertainty (no home coords configured, stale/missing GPS) defaults to
+// "probably home" and polls anyway, since missing a real charging window
+// is worse than a handful of wasted calls while genuinely away.
+async function peekRivianProbablyHome(): Promise<boolean> {
+  const cfg = readConfig();
+  const homeLat = cfg.home.lat ?? cfg.weather.lat ?? null;
+  const homeLon = cfg.home.lon ?? cfg.weather.lon ?? null;
+  if (homeLat === null || homeLon === null) return true;
+
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, 'rivian-state.json');
+  if (!existsSync(path)) return true;
+  try {
+    const cache = JSON.parse(await readFile(path, 'utf-8')) as RivianCache;
+    const lat = cache.state?.lat, lon = cache.state?.lon;
+    if (lat == null || lon == null) return true;
+    const gnssMs = cache.state?.gnssTimeStamp ? new Date(cache.state.gnssTimeStamp).getTime() : 0;
+    const fresh = gnssMs > 0 && Date.now() - gnssMs < GPS_STALE_MS;
+    if (!fresh) return true;
+    const radius = cfg.home.radiusMeters > 0 ? cfg.home.radiusMeters : 150;
+    return distanceMeters(lat, lon, homeLat, homeLon) <= radius;
+  } catch {
+    return true;
+  }
+}
+
 async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, 'rivian-state.json');
@@ -557,11 +587,14 @@ async function handleGet(req: Request) {
   const rivianSerial  = rivianSide === 'LEFT' ? leftSerial  : rightSerial;
   const rivianLocalIp = rivianSide === 'LEFT' ? leftLocalIp : rightLocalIp;
   const rivianJustStartedCharging = rivianConnected ? await peekRivianJustStartedCharging() : false;
+  // Only gates the cloud path -- the local Wall Connector API is free, no
+  // reason to skip it just because Rivian might be away.
+  const rivianProbablyHome = rivianLocalIp || !rivianConnected ? true : await peekRivianProbablyHome();
 
   const [teslaState, rivianState, rivianWcVitals, weather, doorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
-    rivianLocalIp || (rivianConnected && rivianSerial)
+    rivianLocalIp || (rivianConnected && rivianSerial && rivianProbablyHome)
       ? fetchWallConnectorVitals(cfg.energySite.id, rivianSerial, rivianJustStartedCharging, rivianLocalIp)
       : Promise.resolve(null),
     fetchWeather(cfg),
