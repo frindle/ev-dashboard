@@ -1,4 +1,4 @@
-import { readTokens, writeTokens, TeslaTokens } from './config';
+import { readTokens, writeTokens, TeslaTokens, readConfig, writeConfig } from './config';
 import { markTeslaReauthRequired, clearTeslaReauthRequired } from './sessionFlags';
 import { loggedFetch } from './apiLog';
 
@@ -453,6 +453,35 @@ export async function fetchWallConnectorList(siteId: string): Promise<Array<{ se
   }
 }
 
+
+// Confirmed 2026-07-25: the configured energySite.id can silently drift
+// from reality (found hardcoded to a wrong/stale ID that made every
+// live_status call fail with "not_found" -- masked because a failed fetch
+// just serves stale cache instead of surfacing an error). /api/1/products
+// lists the account's real energy site(s); call this after every
+// successful re-auth to catch drift immediately instead of relying on
+// someone noticing a data staleness problem later.
+export async function verifyEnergySiteId(): Promise<void> {
+  interface Product { energy_site_id?: number | null; resource_type?: string; site_name?: string; }
+  const products = await fleetGet<Product[]>('/api/1/products');
+  if (!products) {
+    console.log('[tesla] verifyEnergySiteId: could not fetch /api/1/products, skipping check');
+    return;
+  }
+  const site = products.find(p => p.energy_site_id != null);
+  if (!site?.energy_site_id) {
+    console.log('[tesla] verifyEnergySiteId: no energy site found in /api/1/products');
+    return;
+  }
+  const realId = String(site.energy_site_id);
+  const cfg = readConfig();
+  if (cfg.energySite.id === realId) {
+    console.log(`[tesla] verifyEnergySiteId: OK, configured energySite.id (${realId}) matches Tesla's account`);
+    return;
+  }
+  console.warn(`[tesla] verifyEnergySiteId: MISMATCH — configured energySite.id was "${cfg.energySite.id}", Tesla's account reports "${realId}" (site "${site.site_name ?? 'unknown'}"). Auto-correcting.`);
+  writeConfig({ ...cfg, energySite: { ...cfg.energySite, id: realId } });
+}
 
 export async function wakeVehicle(vin: string): Promise<boolean> {
   const res = await fleetPost<{ result?: boolean }>(`/api/1/vehicles/${vin}/wake_up`, {});

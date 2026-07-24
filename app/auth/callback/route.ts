@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { writeTokens, TeslaTokens } from '@/lib/config';
 import { clearTeslaReauthRequired } from '@/lib/sessionFlags';
+import { verifyEnergySiteId } from '@/lib/tesla';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +40,13 @@ export async function GET(req: NextRequest) {
   // the dashboard still showed "reauth required" until that poll ran.
   // A completed callback IS the proof of a successful reauth; clear now.
   clearTeslaReauthRequired();
+
+  // Confirmed 2026-07-25: the configured energy site ID can silently drift
+  // from what Tesla's account actually reports, and a wrong ID fails
+  // live_status calls in a way that just serves stale cache instead of
+  // surfacing an error. Catch it here, right after a fresh token exists,
+  // rather than relying on someone noticing stale data later.
+  await verifyEnergySiteId().catch(e => console.warn('[auth/callback] verifyEnergySiteId failed:', e));
 
   return new Response('✓ Tesla auth complete. Tokens saved. You can close this tab.', {
     headers: { 'Content-Type': 'text/plain' },
