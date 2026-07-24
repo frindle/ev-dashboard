@@ -28,33 +28,38 @@ export interface VehicleData {
   atHome: boolean | null; // true/false when GPS known, null when unknown
 }
 
-// Fires once per arrival: when Rivian enters the home radius while gearStatus
-// is still "drive" (not waiting for "park" — Rivian's smart-poll can lag up
-// to a minute even at the active interval, and waiting for "parked" would add
-// the time it takes to actually park+walk in on top of that). A persisted
-// flag prevents re-firing every poll while parked at home; resets once the
-// vehicle leaves (atHome false) so the next arrival fires again.
-const ARRIVAL_FLAG_FILE = 'rivian-arrival-notified.json';
+// Fires once per arrival: when a vehicle enters the home radius. For Rivian,
+// fires while gearStatus is still "drive" (not waiting for "park" — Rivian's
+// smart-poll can lag up to a minute even at the active interval, and waiting
+// for "parked" would add the time it takes to actually park+walk in on top
+// of that). Tesla's fetched state has no gear/shift-state field, so its call
+// just fires on the atHome transition itself (isDriving=true unconditionally)
+// — a small simplification, not a functional gap: atHome already requires
+// fresh GPS, so this still fires as soon as the vehicle is detected in range.
+// A persisted flag prevents re-firing every poll while parked at home;
+// resets once the vehicle leaves (atHome false) so the next arrival fires again.
+const RIVIAN_ARRIVAL_FLAG_FILE = 'rivian-arrival-notified.json';
+const TESLA_ARRIVAL_FLAG_FILE = 'tesla-arrival-notified.json';
 
-async function checkRivianArrival(webhookUrl: string, gearStatus: string, atHome: boolean | null): Promise<void> {
+async function checkVehicleArrival(webhookUrl: string, flagFile: string, isDriving: boolean, atHome: boolean | null, label: string): Promise<void> {
   if (!webhookUrl) return;
 
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
-  const path = join(dir, ARRIVAL_FLAG_FILE);
+  const path = join(dir, flagFile);
   const wasNotified = existsSync(path);
 
   if (atHome !== true) {
     if (wasNotified) await unlink(path).catch(() => null);
     return;
   }
-  if (gearStatus !== 'drive' || wasNotified) return;
+  if (!isDriving || wasNotified) return;
 
   try {
     await fetch(webhookUrl, { method: 'POST' });
     await writeFile(path, String(Date.now()));
-    console.log('[rivian] arrival webhook fired');
+    console.log(`[${label}] arrival webhook fired`);
   } catch (e) {
-    console.error('[rivian] arrival webhook failed', e);
+    console.error(`[${label}] arrival webhook failed`, e);
   }
 }
 
@@ -542,7 +547,10 @@ async function handleGet(req: Request) {
   }
 
   const rivianAtHome = computeAtHome('rivian', rivianState?.lat, rivianState?.lon, !!(rivianState && (rivianState as { _gpsFresh?: boolean })._gpsFresh));
-  if (rivianState) await checkRivianArrival(cfg.home.arrivalWebhookUrl, rivianState.gearStatus, rivianAtHome);
+  if (rivianState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive', rivianAtHome, 'rivian');
+
+  const teslaAtHome = computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh));
+  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, true, teslaAtHome, 'tesla');
 
   const vehicles: VehicleData[] = [
     {
@@ -561,7 +569,7 @@ async function handleGet(req: Request) {
       chargerSide: cfg.vehicles.tesla.chargerSide,
       state: teslaState,
       connected: teslaConnected,
-      atHome: computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh)),
+      atHome: teslaAtHome,
     },
   ];
 
