@@ -121,6 +121,13 @@ const RATE_LIMIT_COOLDOWN_MS = 15 * 60_000;
 let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 
+// Exposed so the dashboard can show a "Tesla API paused, retrying in Nm"
+// banner instead of silently serving stale cache with no explanation.
+export function getCircuitBreakerRetryMinutes(): number | null {
+  const remainingMs = circuitOpenUntil - Date.now();
+  return remainingMs > 0 ? Math.ceil(remainingMs / 60_000) : null;
+}
+
 async function fleetGet<T>(path: string): Promise<T | null> {
   if (!readConfig().vehicles.tesla.pollingEnabled) {
     console.log(`[tesla] ${path}: polling manually disabled in admin settings — skipping`);

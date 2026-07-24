@@ -131,9 +131,10 @@ function buildAlerts(data: DashboardData): AlertInputs {
 }
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
-function CircuitPanel({ wallConnectors, vehicles }: {
+function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable }: {
   wallConnectors: WallConnectorData[];
   vehicles: VehicleData[];
+  wcDataUnavailable: boolean;
 }) {
   const left  = wallConnectors.find(w => w.side === 'LEFT');
   const right = wallConnectors.find(w => w.side === 'RIGHT');
@@ -187,7 +188,13 @@ function CircuitPanel({ wallConnectors, vehicles }: {
   ];
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 13, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '16px 22px' }}>
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 13, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '16px 22px' }}>
+      {wcDataUnavailable && (
+        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(224,181,61,0.15)', color: '#e0b53d', fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999, whiteSpace: 'nowrap' }}>
+          <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 13, lineHeight: 1 }}>warning</span>
+          WALL CONNECTOR DATA UNAVAILABLE · CHECK LOGS
+        </div>
+      )}
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flex: 'none' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -567,12 +574,18 @@ export default function Dashboard() {
         {/* Middle: auth banners (Tesla/Rivian re-auth) — fits inside this
             row's existing height, never adds its own row */}
         {data && (
-          <AuthBanners banners={buildTopBanners(alerts, {
-            onReauthTesla:  () => { window.location.href = '/admin?tesla_reauth=1'; },
-            onReauthRivian: () => { window.location.href = '/admin?rivian_reauth=1'; },
-            onDismiss:      () => setBannerDismissed(true),
-            bannerDismissed,
-          })} />
+          <AuthBanners
+            banners={buildTopBanners(alerts, {
+              onReauthTesla:  () => { window.location.href = '/admin?tesla_reauth=1'; },
+              onReauthRivian: () => { window.location.href = '/admin?rivian_reauth=1'; },
+              onDismiss:      () => setBannerDismissed(true),
+              bannerDismissed,
+            })}
+            pills={[
+              ...(data.flags.teslaPollingDisabled ? [{ key: 'polling-off', icon: 'sync_disabled', label: 'TESLA POLLING DISABLED' }] : []),
+              ...(data.flags.teslaApiPaused ? [{ key: 'api-paused', icon: 'pause_circle', label: `TESLA API PAUSED · RETRYING IN ${data.flags.teslaApiRetryMinutes}m` }] : []),
+            ]}
+          />
         )}
         {/* Right: controls + stat chips */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
@@ -654,7 +667,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── Circuit Panel ── */}
-      <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} />
+      <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} wcDataUnavailable={!!data?.flags.wcDataUnavailable} />
 
       {/* ── Camera Modal ── */}
       {showCamera && (

@@ -41,6 +41,22 @@ function NumberField({
   );
 }
 
+// Small per-section quick-save button shown in each section header, in
+// addition to the floating bottom save bar — both call the same save().
+function SectionSaveButton({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
+  return (
+    <button
+      className="btn-secondary"
+      onClick={onClick}
+      disabled={disabled}
+      style={{ padding: '5px 11px', fontSize: 10, marginLeft: 'auto' }}
+    >
+      <span className="icon" style={{ fontSize: 13 }}>save</span>
+      SAVE
+    </button>
+  );
+}
+
 function teslaAuthUrl(redirectUri: string): string {
   const params = new URLSearchParams({
     response_type: 'code',
@@ -329,6 +345,7 @@ export default function AdminPage() {
             <span className="icon" style={{ fontSize: 18 }}>display_settings</span>
             Display
           </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
           <div className="form-row-2">
@@ -367,9 +384,13 @@ export default function AdminPage() {
       <div className="admin-section">
         <div className="admin-section-header">
           <div className="admin-section-title">
-            <div className={`status-dot ${teslaConnected ? 'connected' : 'disconnected'}`} />
+            <div
+              className={`status-dot ${teslaConnected ? 'connected' : 'disconnected'}`}
+              style={teslaConnected ? { background: config.display.accentColor, boxShadow: `0 0 6px ${config.display.accentColor}` } : undefined}
+            />
             Tesla Fleet API
           </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
           <div className="tesla-auth-row">
@@ -535,9 +556,12 @@ export default function AdminPage() {
             <div className={`status-dot ${rivianConnected ? 'connected' : rivianStep === 'error' ? 'disconnected' : 'disconnected'}`} />
             Rivian
           </div>
-          {rivianConnected && (
-            <span style={{ fontSize: 12, color: '#34e07a' }}>✓ Connected</span>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {rivianConnected && (
+              <span style={{ fontSize: 12, color: '#34e07a' }}>✓ Connected</span>
+            )}
+            <SectionSaveButton onClick={save} disabled={saving} />
+          </div>
         </div>
         <div className="admin-section-body">
           <div className="form-row-2">
@@ -698,6 +722,7 @@ export default function AdminPage() {
             <div className={`status-dot ${config.camera.streamUrl ? 'connected' : 'disconnected'}`} />
             Garage Camera
           </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
           <div className="form-row-2">
@@ -742,6 +767,7 @@ export default function AdminPage() {
             <div className={`status-dot ${config.weather.apiKey ? 'connected' : 'disconnected'}`} />
             Weather
           </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
           <div className="form-row">
@@ -795,6 +821,7 @@ export default function AdminPage() {
             <div className={`status-dot ${config.home.lat !== null && config.home.lon !== null ? 'connected' : 'disconnected'}`} />
             Home Location
           </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
           <div className="form-row-2">
@@ -880,6 +907,7 @@ export default function AdminPage() {
             <div className={`status-dot ${config.solar.enabled && config.solar.host ? 'connected' : 'disconnected'}`} />
             SolarEdge Inverter
           </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
           <div className="form-row">
@@ -993,6 +1021,7 @@ export default function AdminPage() {
             <div className={`status-dot ${config.nvr.enabled && config.nvr.host ? 'connected' : 'disconnected'}`} />
             NVR / Recorded Clips
           </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
           <div className="form-row">
@@ -1060,7 +1089,7 @@ export default function AdminPage() {
       </div>
 
       {/* ── Charge History ── */}
-      <ChargeStatsSection />
+      <ChargeStatsSection onSave={save} saving={saving} />
 
       {/* Save bar */}
       <div className="save-bar">
@@ -1096,7 +1125,7 @@ interface ChargeStats {
   vehicles: ChargeStatsVehicle[]; recentSessions: ChargeStatsSession[];
 }
 
-function ChargeStatsSection() {
+function ChargeStatsSection({ onSave, saving }: { onSave: () => void; saving: boolean }) {
   const [stats, setStats] = useState<ChargeStats | null>(null);
   const [rate, setRate] = useState(() => {
     try { return localStorage.getItem('admin_kwh_rate') ?? ''; } catch { return ''; }
@@ -1122,6 +1151,7 @@ function ChargeStatsSection() {
           <span className="icon" style={{ fontSize: 18 }}>battery_charging_full</span>
           Charge History
         </div>
+        <SectionSaveButton onClick={onSave} disabled={saving} />
       </div>
       <div className="admin-section-body">
         <div className="form-row-2">

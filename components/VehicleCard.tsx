@@ -200,10 +200,14 @@ export function buildTopBanners(
 // is corner-absolute so it doesn't affect that alignment either.
 // ─────────────────────────────────────────────────────────────
 
-export const AuthBanners: React.FC<{ banners: BannerItem[] }> = ({ banners }) => {
-  if (banners.length === 0) return null;
+// Compact status pills (Tesla polling disabled / API circuit breaker open) —
+// render in the same middle slot as the auth banners, after them.
+export type StatusPill = { key: string; icon: string; label: string };
+
+export const AuthBanners: React.FC<{ banners: BannerItem[]; pills?: StatusPill[] }> = ({ banners, pills = [] }) => {
+  if (banners.length === 0 && pills.length === 0) return null;
   return (
-    <div style={{ flex: 1, minWidth: 0, alignSelf: 'center', display: 'flex', gap: 8, maxWidth: 500, margin: '0 auto' }}>
+    <div style={{ flex: 1, minWidth: 0, alignSelf: 'center', display: 'flex', justifyContent: 'center', gap: 8, maxWidth: 500, margin: '0 auto' }}>
       {banners.map(b => (
         <div key={b.key} style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
@@ -233,6 +237,17 @@ export const AuthBanners: React.FC<{ banners: BannerItem[] }> = ({ banners }) =>
             }}>{b.ctaLabel}</button>
           )}
         </div>
+      ))}
+      {pills.map(p => (
+        <span key={p.key} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 7,
+          background: 'rgba(224,181,61,0.15)', color: '#e0b53d',
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+          padding: '5px 11px', borderRadius: 999, alignSelf: 'center', whiteSpace: 'nowrap'
+        }}>
+          <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 14, lineHeight: 1 }}>{p.icon}</span>
+          {p.label}
+        </span>
       ))}
     </div>
   );

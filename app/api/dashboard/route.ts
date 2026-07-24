@@ -6,6 +6,7 @@ import { logError } from '@/lib/logger';
 import {
   fetchVehicleState,
   fetchWallConnectorVitals,
+  getCircuitBreakerRetryMinutes,
   TeslaVehicleState,
   WallConnectorVitals,
 } from '@/lib/tesla';
@@ -100,6 +101,10 @@ export interface DashboardFlags {
   rivianWiperFluidLow: boolean;
   rivianBrakeFluidLow: boolean;
   rivianChargeSlowedLastSession: boolean; // derate was seen at some point during the most recently completed charge
+  teslaPollingDisabled: boolean; // manual admin-panel kill switch, config.vehicles.tesla.pollingEnabled === false
+  teslaApiPaused: boolean; // circuit breaker open after repeated Fleet API failures
+  teslaApiRetryMinutes: number | null;
+  wcDataUnavailable: boolean; // a connected vehicle's wall connector vitals fetch is returning null
 }
 
 export interface DashboardData {
@@ -634,6 +639,12 @@ async function handleGet(req: Request) {
   const wcLeft  = teslaSide === 'LEFT'  ? teslaWcVitals : rivianWcVitals;
   const wcRight = teslaSide === 'RIGHT' ? teslaWcVitals : rivianWcVitals;
 
+  // Tesla's side is synthesized straight from telemetry (never a separate
+  // fetch), so this only ever fires for Rivian's side -- a real attempt to
+  // read its wall connector (cloud or local) came back null.
+  const rivianWcFetchAttempted = !!(rivianLocalIp || (rivianConnected && rivianSerial && rivianProbablyHome));
+  const wcDataUnavailable = rivianWcFetchAttempted && rivianWcVitals === null;
+
   // Resolve "home" coordinates. If the admin hasn't filled out the home
   // section, fall back to the weather location — for most setups that's
   // literally where the user lives (your "weather" lat/lon is your house's
@@ -752,6 +763,10 @@ async function handleGet(req: Request) {
     rivianWiperFluidLow: !!rivState && /low/i.test(rivState.wiperFluidState),
     rivianBrakeFluidLow: !!rivState?.brakeFluidLow,
     rivianChargeSlowedLastSession: cfg.vehicles.rivian.chargerSide === 'LEFT' ? sessions.left.endedThrottled : sessions.right.endedThrottled,
+    teslaPollingDisabled: !cfg.vehicles.tesla.pollingEnabled,
+    teslaApiPaused: getCircuitBreakerRetryMinutes() !== null,
+    teslaApiRetryMinutes: getCircuitBreakerRetryMinutes(),
+    wcDataUnavailable,
   };
 
   // Fire-and-forget Pushover notifications for newly raised flags
