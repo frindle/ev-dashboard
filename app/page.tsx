@@ -342,7 +342,7 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
           {streamUrl && !imgError ? (
             <img
               src={`/api/camera/stream?k=${reloadKey}`}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
               alt="Camera"
               onError={reportCameraError}
               onLoad={onFrame}

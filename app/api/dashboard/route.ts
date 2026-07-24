@@ -435,8 +435,11 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   // Fresh-enough cache → don't touch the Rivian API at all this cycle.
   if (!force && cache.state && cache.fetchedAt) {
     const ageMs = Date.now() - cache.fetchedAt;
+    // Plugged-in-but-not-yet-charging (e.g. waiting for a TOU window) must
+    // use the faster tier too, not idle — otherwise a fresh plug-in event
+    // can be masked by a stale "unplugged" cache for up to 5 minutes.
     const interval = cache.state.gearStatus === 'drive' ? RIVIAN_INTERVAL_DRIVING_MS
-      : cache.state.isCharging ? RIVIAN_INTERVAL_CHARGING_MS
+      : (cache.state.isCharging || cache.state.isPluggedIn) ? RIVIAN_INTERVAL_CHARGING_MS
       : RIVIAN_INTERVAL_IDLE_MS;
     if (ageMs < interval) {
       // Skipping the network this cycle doesn't mean the GPS data itself is
