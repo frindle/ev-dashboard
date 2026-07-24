@@ -283,6 +283,16 @@ function anyConnectorActive(data: LiveStatus): boolean {
   return (data.wall_connectors ?? []).some(wc => wc.wall_connector_state === 1 || (wc.wall_connector_power ?? 0) > 100);
 }
 
+// TOU charging kicks in at midnight -- briefly poll at the active cadence
+// right at that boundary so charging start is picked up within ~30s instead
+// of waiting out a stale idle-window TTL (up to 5min lag otherwise).
+function nearMidnightBoundary(): boolean {
+  const now = new Date();
+  const h = now.getHours();
+  const m = now.getMinutes();
+  return (h === 23 && m === 59) || (h === 0 && m <= 2);
+}
+
 // route.ts calls fetchSiteLiveStatus + fetchWallConnectorVitals(left) +
 // fetchWallConnectorVitals(right) all inside one Promise.all. The 5s cache
 // above only helps *after* the first call has resolved — three concurrent
@@ -295,7 +305,7 @@ let liveStatusInFlight: { siteId: string; promise: Promise<LiveStatus | null> } 
 async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
   // Serve a fresh-enough cached response without hitting the API at all.
   if (liveStatusCache && liveStatusCache.siteId === energySiteId) {
-    const ttl = anyConnectorActive(liveStatusCache.data) ? LIVE_STATUS_ACTIVE_MS : LIVE_STATUS_IDLE_MS;
+    const ttl = anyConnectorActive(liveStatusCache.data) || nearMidnightBoundary() ? LIVE_STATUS_ACTIVE_MS : LIVE_STATUS_IDLE_MS;
     if (Date.now() - liveStatusCache.at < ttl) return liveStatusCache.data;
   }
   if (liveStatusInFlight && liveStatusInFlight.siteId === energySiteId) {
