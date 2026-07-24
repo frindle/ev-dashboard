@@ -178,6 +178,10 @@ function applyDatum(state, key, value) {
       state.minutesToFull = Math.round((Number(v) || 0) * 60); break;
     case 'ChargerVoltage':
       state.chargerVoltage = Number(v) || 0; break;
+    // Reported directly by the vehicle (accounts for phases/power factor),
+    // more accurate than deriving amps * voltage ourselves.
+    case 'ACChargingPower':
+      state.chargerPowerKw = Number(v) || 0; break;
 
     // Access / climate
     case 'Locked':

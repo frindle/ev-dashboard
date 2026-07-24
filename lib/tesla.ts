@@ -22,6 +22,7 @@ export interface TeslaVehicleState {
   minutesToFull: number;
   chargerActualCurrentA: number;
   chargerVoltage: number;
+  chargerPowerKw: number;
   online: boolean;
   lat: number | null;
   lon: number | null;
@@ -244,6 +245,9 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     minutesToFull: cs.minutes_to_full_charge ?? 0,
     chargerActualCurrentA: cs.charger_actual_current ?? 0,
     chargerVoltage: cs.charger_voltage ?? 0,
+    // REST poll has no direct power field (unlike telemetry's ACChargingPower)
+    // -- derive it so the field is populated regardless of data source.
+    chargerPowerKw: ((cs.charger_actual_current ?? 0) * (cs.charger_voltage ?? 0)) / 1000,
     online: data.state === 'online',
     lat: ds.latitude ?? null,
     lon: ds.longitude ?? null,

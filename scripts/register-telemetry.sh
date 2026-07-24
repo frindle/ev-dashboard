@@ -80,7 +80,8 @@ PAYLOAD=$(jq -n \
         HvacACEnabled:       { interval_seconds: 300 },
         ChargeAmps:          { interval_seconds: 30 },
         ChargeRateMilePerHour: { interval_seconds: 30 },
-        ChargerVoltage:      { interval_seconds: 300 }
+        ChargerVoltage:      { interval_seconds: 300 },
+        ACChargingPower:     { interval_seconds: 30 }
       }
     }
   }')
