@@ -537,6 +537,8 @@ async function handleGet(req: Request) {
 
   const leftSerial  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.serial  ?? '';
   const rightSerial = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.serial ?? '';
+  const leftLocalIp  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.localIp  ?? '';
+  const rightLocalIp = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.localIp ?? '';
 
   // Fetch all data in parallel. Site live_status and per-connector vitals now
   // share one underlying API call (Tesla deprecated /wall_connectors/{id}/vitals
@@ -547,8 +549,8 @@ async function handleGet(req: Request) {
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
     teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id, telemetryConfirmedCharging) : Promise.resolve(null),
-    teslaConnected && leftSerial  ? fetchWallConnectorVitals(cfg.energySite.id, leftSerial, telemetryConfirmedCharging)  : Promise.resolve(null),
-    teslaConnected && rightSerial ? fetchWallConnectorVitals(cfg.energySite.id, rightSerial, telemetryConfirmedCharging) : Promise.resolve(null),
+    leftLocalIp || (teslaConnected && leftSerial)  ? fetchWallConnectorVitals(cfg.energySite.id, leftSerial, telemetryConfirmedCharging, leftLocalIp)  : Promise.resolve(null),
+    rightLocalIp || (teslaConnected && rightSerial) ? fetchWallConnectorVitals(cfg.energySite.id, rightSerial, telemetryConfirmedCharging, rightLocalIp) : Promise.resolve(null),
     fetchWeather(cfg),
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);

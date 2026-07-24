@@ -371,10 +371,61 @@ export async function fetchSiteLiveStatus(energySiteId: string, telemetryConfirm
   };
 }
 
+// Gen 3 Wall Connectors expose an unauthenticated local HTTP API
+// (http://<ip>/api/1/vitals) with zero Fleet API quota cost — added
+// 2026-07-25 to cut cloud usage after hitting 80% of the monthly quota with
+// days left in the billing cycle. Field names are community-documented (no
+// official Tesla docs), confirmed stable across the Home Assistant
+// tesla_wall_connector integration. Only used when a connector's config has
+// localIp set — load-sharing pairs typically expose just one unit's IP on
+// the LAN (the other talks to it over a private link), so this is
+// necessarily per-side opt-in, not both-or-nothing.
+interface LocalVitals {
+  contactor_closed?: boolean;
+  vehicle_connected?: boolean;
+  vehicle_current_a?: number;
+  voltageA_v?: number;
+  voltageB_v?: number;
+  voltageC_v?: number;
+  session_energy_wh?: number;
+}
+
+async function fetchWallConnectorVitalsLocal(ip: string): Promise<WallConnectorVitals | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`http://${ip}/api/1/vitals`, { signal: controller.signal });
+    if (!res.ok) return null;
+    const v = await res.json() as LocalVitals;
+    const voltageV = v.voltageA_v || v.voltageB_v || v.voltageC_v || 240;
+    const currentA = v.vehicle_current_a ?? 0;
+    const charging = !!v.contactor_closed;
+    return {
+      vehicleConnected: !!v.vehicle_connected,
+      vehicleCharging: charging,
+      currentA,
+      voltageV,
+      sessionEnergyWh: v.session_energy_wh ?? 0,
+      powerW: currentA * voltageV,
+      online: true,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // Now takes (siteId, serial) since per-connector data comes from live_status
 // matched by DIN suffix. Session energy is no longer exposed in this response —
 // we report 0 for sessionEnergyWh. Current is derived from power / voltage.
-export async function fetchWallConnectorVitals(siteId: string, serial: string, telemetryConfirmedCharging = false): Promise<WallConnectorVitals | null> {
+export async function fetchWallConnectorVitals(siteId: string, serial: string, telemetryConfirmedCharging = false, localIp = ''): Promise<WallConnectorVitals | null> {
+  if (localIp) {
+    const local = await fetchWallConnectorVitalsLocal(localIp);
+    if (local) return local;
+    // Local fetch failed (device rebooting, network hiccup) — fall through
+    // to the cloud path rather than going blank for this poll cycle.
+  }
   if (!serial) return null;
   const data = await getLiveStatus(siteId, telemetryConfirmedCharging);
   const wc = data?.wall_connectors?.find(w => w.din?.endsWith(`--${serial}`));

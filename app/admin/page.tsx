@@ -469,9 +469,27 @@ export default function AdminPage() {
                         </option>
                       )}
                     </select>
+                    <input
+                      className="form-input"
+                      type="text"
+                      value={current?.localIp ?? ''}
+                      onChange={e => {
+                        const wcs = config.energySite.wallConnectors.map(w =>
+                          w.side === side ? { ...w, localIp: e.target.value.trim() } : w
+                        );
+                        update('energySite', { ...config.energySite, wallConnectors: wcs });
+                      }}
+                      placeholder="Local IP (optional, e.g. 10.0.12.29)"
+                    />
                   </div>
                 );
               })}
+            </div>
+            <div className="form-hint">
+              Local IP is optional — if set, this connector&apos;s vitals are read directly
+              from the Wall Connector&apos;s own local API (zero Tesla Fleet API usage) instead
+              of Tesla&apos;s cloud live_status. Load-sharing pairs typically expose only one
+              unit&apos;s IP on the LAN — leave the other side blank to keep it on the cloud API.
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span className="form-hint">

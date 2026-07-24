@@ -6,6 +6,13 @@ export interface WallConnectorConfig {
   deviceId: string; // UUID — legacy fallback if serial is empty
   side: 'LEFT' | 'RIGHT';
   vehicleName: string;
+  // Optional: Gen 3 Wall Connectors expose an unauthenticated local HTTP API
+  // (http://<ip>/api/1/vitals) with zero Tesla Fleet API quota cost. When
+  // set, per-connector vitals are read directly from the device on the LAN
+  // instead of Tesla's cloud live_status — added 2026-07-25 to cut Fleet
+  // API usage after hitting 80% of the monthly quota with days left in the
+  // billing cycle. Leave blank to keep using the cloud API for this side.
+  localIp: string;
 }
 
 export interface AppConfig {
@@ -96,8 +103,8 @@ const DEFAULT_CONFIG: AppConfig = {
   energySite: {
     id: '2252299088632281',
     wallConnectors: [
-      { serial: 'B7S23088J08030', deviceId: '9ded5c3b-f4ca-4061-b400-9e1591268156', side: 'LEFT', vehicleName: 'Midknight' },
-      { serial: 'E4A23172000137', deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'RIGHT', vehicleName: 'Tesla' },
+      { serial: 'B7S23088J08030', deviceId: '9ded5c3b-f4ca-4061-b400-9e1591268156', side: 'LEFT', vehicleName: 'Midknight', localIp: '' },
+      { serial: 'E4A23172000137', deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'RIGHT', vehicleName: 'Tesla', localIp: '' },
     ],
   },
   garage: {
@@ -155,9 +162,13 @@ export function readConfig(): AppConfig {
     // deepMerge replaces arrays wholesale, so new fields on WC objects (like
     // serial) don't get seeded from defaults. Back-fill by matching on deviceId.
     merged.energySite.wallConnectors = merged.energySite.wallConnectors.map(wc => {
-      if (wc.serial) return wc;
-      const def = DEFAULT_CONFIG.energySite.wallConnectors.find(d => d.deviceId === wc.deviceId);
-      return def?.serial ? { ...wc, serial: def.serial } : wc;
+      const withSerial = wc.serial ? wc : (() => {
+        const def = DEFAULT_CONFIG.energySite.wallConnectors.find(d => d.deviceId === wc.deviceId);
+        return def?.serial ? { ...wc, serial: def.serial } : wc;
+      })();
+      // localIp is new (2026-07-25) — old saved configs won't have the key
+      // at all, default it to '' rather than leaving it undefined.
+      return { ...withSerial, localIp: withSerial.localIp ?? '' };
     });
     return merged;
   } catch {
