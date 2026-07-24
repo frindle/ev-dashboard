@@ -165,8 +165,12 @@ function applyDatum(state, key, value) {
       state.isPluggedIn = (v !== 0 && v !== 1);
       state.chargingState = String(v); break;
 
-    // Charging power / progress
+    // Charging power / progress -- ChargeAmps is actual amps, NOT mph;
+    // these used to share one field (bug, caught 2026-07-25 when both got
+    // subscribed at once -- whichever arrived last silently overwrote
+    // chargeRateMph with a wrong-unit number).
     case 'ChargeAmps':
+      state.chargerActualCurrentA = Number(v) || 0; break;
     case 'ChargeRateMilePerHour':
       state.chargeRateMph = Number(v) || 0; break;
     case 'TimeToFullCharge':
