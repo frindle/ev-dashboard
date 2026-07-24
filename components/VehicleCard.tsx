@@ -1,8 +1,10 @@
 // components/VehicleCard.tsx
 // Ported from design handoff 2026-07-25 (vehicle-card.tsx, tap-to-set charge
-// limit popup + chip overlay iteration). Kept as-is from the handoff except
-// for this header comment and the dial-wrapper positioning fix noted below —
-// do not rename exports or paraphrase copy.
+// limit popup + chip overlay iteration; later revision swapped the single
+// priority-picked auth banner for independent Tesla/Rivian banners that can
+// show side by side). Kept as-is from the handoff except for this header
+// comment and the dial-wrapper positioning fix noted below — do not rename
+// exports or paraphrase copy.
 
 import * as React from 'react';
 
@@ -147,89 +149,91 @@ export function buildChipsFor(veh: Vehicle, a: AlertInputs): Chip[] {
   return chips;
 }
 
-type BannerState =
-  | { show: false }
-  | {
-      show: true;
-      color: string; bg: string; border: string;
-      icon: string; title: string; copy: string;
-      hasCta: boolean; ctaLabel?: string; onCta?: () => void;
-      dismissible: boolean; onDismiss?: () => void;
-    };
+type BannerItem = {
+  key: 'tesla' | 'rivian';
+  color: string; bg: string; border: string;
+  icon: string; copy: string;
+  hasCta: boolean; ctaLabel?: string; onCta?: () => void;
+  dismissible: boolean; onDismiss?: () => void;
+};
 
-export function buildTopBanner(
+// Tesla and Rivian banners are independent — both can be active at once and
+// render side by side (symmetric cards) in the same middle header slot, not
+// a single priority-picked banner.
+export function buildTopBanners(
   a: AlertInputs,
   handlers: { onReauthTesla: () => void; onReauthRivian: () => void; onDismiss: () => void; bannerDismissed: boolean }
-): BannerState {
+): BannerItem[] {
+  const banners: BannerItem[] = [];
+
   if (a.teslaReauth === 'expired') {
-    return { show: true, ...SEV.critical,
+    banners.push({ key: 'tesla', ...SEV.critical,
       icon: 'lock_reset',
-      title: 'TESLA · RE-AUTHENTICATION REQUIRED',
       copy: 'Tesla connection expired. Re-authenticate to resume.',
       hasCta: true, ctaLabel: 'Re-authenticate', onCta: handlers.onReauthTesla,
-      dismissible: false };
+      dismissible: false });
   }
   if (a.rivianAuth === 'expired') {
-    return { show: true, ...SEV.critical,
+    banners.push({ key: 'rivian', ...SEV.critical,
       icon: 'lock_reset',
-      title: 'RIVIAN · RE-AUTHENTICATION REQUIRED',
       copy: 'Rivian connection expired. Re-authenticate to resume.',
       hasCta: true, ctaLabel: 'Re-authenticate', onCta: handlers.onReauthRivian,
-      dismissible: false };
-  }
-  if (a.rivianAuth === 'due-soon' && !handlers.bannerDismissed) {
+      dismissible: false });
+  } else if (a.rivianAuth === 'due-soon' && !handlers.bannerDismissed) {
     const d = a.rivianAuthDays;
-    return { show: true, ...SEV.warning,
+    banners.push({ key: 'rivian', ...SEV.warning,
       icon: 'schedule',
-      title: 'RIVIAN · ACCESS RENEWAL',
       copy: `Rivian access renews in ${d} day${d === 1 ? '' : 's'}.`,
       hasCta: true, ctaLabel: 'Re-authenticate', onCta: handlers.onReauthRivian,
-      dismissible: true, onDismiss: handlers.onDismiss };
+      dismissible: true, onDismiss: handlers.onDismiss });
   }
-  return { show: false };
+  return banners;
 }
 
 // ─────────────────────────────────────────────────────────────
-// AuthBanner — mount above the "Energy" header
+// AuthBanners — mount in the middle of the header row, between the
+// title/date column and the stats column. Renders as a flex:1 middle
+// child so it fits inside the row's EXISTING height (set by the taller
+// stats column) — it must never grow or shift that row. Each banner is
+// a symmetric card: icon, copy (fixed min-height so CTA buttons align
+// across cards regardless of copy length), then CTA button; dismiss (X)
+// is corner-absolute so it doesn't affect that alignment either.
 // ─────────────────────────────────────────────────────────────
 
-export const AuthBanner: React.FC<{ state: BannerState }> = ({ state }) => {
-  if (!state.show) return null;
+export const AuthBanners: React.FC<{ banners: BannerItem[] }> = ({ banners }) => {
+  if (banners.length === 0) return null;
   return (
-    <div style={{
-      flex: 'none', display: 'flex', alignItems: 'center', gap: 14,
-      padding: '12px 18px', borderRadius: 14,
-      background: state.bg, border: `1px solid ${state.border}`,
-      borderLeft: `3px solid ${state.color}`
-    }}>
-      <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 24, color: state.color, lineHeight: 1, flex: 'none' }}>
-        {state.icon}
-      </span>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, letterSpacing: '.16em', color: state.color }}>
-          {state.title}
-        </span>
-        <span style={{ fontSize: 13, color: '#e8edf2' }}>{state.copy}</span>
-      </div>
-      {state.hasCta && state.onCta && (
-        <button onClick={state.onCta} style={{
-          appearance: 'none', cursor: 'pointer', padding: '9px 18px',
-          borderRadius: 10, background: state.color, color: '#0e1216',
-          border: 'none', fontFamily: "'Space Grotesk', sans-serif",
-          fontSize: 13, fontWeight: 600, flex: 'none'
-        }}>{state.ctaLabel}</button>
-      )}
-      {state.dismissible && state.onDismiss && (
-        <button onClick={state.onDismiss} title="Dismiss for 24h" style={{
-          appearance: 'none', cursor: 'pointer', width: 32, height: 32,
-          borderRadius: 9, background: 'transparent',
-          border: '1px solid rgba(255,255,255,0.08)', color: '#a4afba',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 0, flex: 'none'
+    <div style={{ flex: 1, minWidth: 0, alignSelf: 'center', display: 'flex', gap: 8, maxWidth: 500, margin: '0 auto' }}>
+      {banners.map(b => (
+        <div key={b.key} style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+          padding: '12px 16px', borderRadius: 12,
+          background: b.bg, border: `1px solid ${b.border}`, borderTop: `3px solid ${b.color}`,
+          minWidth: 0, flex: 1, position: 'relative'
         }}>
-          <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 17, lineHeight: 1 }}>close</span>
-        </button>
-      )}
+          {b.dismissible && b.onDismiss && (
+            <button onClick={b.onDismiss} title="Dismiss for 24h" style={{
+              position: 'absolute', top: 8, right: 8,
+              appearance: 'none', cursor: 'pointer', width: 18, height: 18, borderRadius: 5,
+              background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#a4afba',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+            }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 11, lineHeight: 1 }}>close</span>
+            </button>
+          )}
+          <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: b.color, lineHeight: 1 }}>{b.icon}</span>
+          <span style={{ fontSize: 10.5, color: '#e8edf2', lineHeight: 1.3, textAlign: 'center', minHeight: 26, display: 'flex', alignItems: 'center' }}>
+            {b.copy}
+          </span>
+          {b.hasCta && b.onCta && (
+            <button onClick={b.onCta} style={{
+              appearance: 'none', cursor: 'pointer', padding: '5px 14px', borderRadius: 8,
+              background: b.color, color: '#0e1216', border: 'none',
+              fontFamily: "'Space Grotesk', sans-serif", fontSize: 9.5, fontWeight: 600, whiteSpace: 'nowrap'
+            }}>{b.ctaLabel}</button>
+          )}
+        </div>
+      ))}
     </div>
   );
 };

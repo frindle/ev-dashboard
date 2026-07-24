@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
 import {
-  AuthBanner,
+  AuthBanners,
   VehicleCard as DesignVehicleCard,
-  buildTopBanner,
+  buildTopBanners,
   type Vehicle as DesignVehicle,
   type AlertInputs,
 } from '@/components/VehicleCard';
@@ -564,6 +564,16 @@ export default function Dashboard() {
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>Energy</h1>
           <span style={{ fontSize: 12, color: '#a4afba' }}>{dateStr} · {timeStr}</span>
         </div>
+        {/* Middle: auth banners (Tesla/Rivian re-auth) — fits inside this
+            row's existing height, never adds its own row */}
+        {data && (
+          <AuthBanners banners={buildTopBanners(alerts, {
+            onReauthTesla:  () => { window.location.href = '/admin?tesla_reauth=1'; },
+            onReauthRivian: () => { window.location.href = '/admin?rivian_reauth=1'; },
+            onDismiss:      () => setBannerDismissed(true),
+            bannerDismissed,
+          })} />
+        )}
         {/* Right: controls + stat chips */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -613,16 +623,6 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
-      {/* ── Auth banner (Tesla / Rivian re-auth) ── */}
-      {data && (
-        <AuthBanner state={buildTopBanner(alerts, {
-          onReauthTesla:  () => { window.location.href = '/admin?tesla_reauth=1'; },
-          onReauthRivian: () => { window.location.href = '/admin?rivian_reauth=1'; },
-          onDismiss:      () => setBannerDismissed(true),
-          bannerDismissed,
-        })} />
-      )}
 
       {/* ── Vehicle Cards ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, flex: 'none' }}>
