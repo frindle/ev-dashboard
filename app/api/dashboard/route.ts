@@ -406,7 +406,7 @@ const RIVIAN_INTERVAL_IDLE_MS = 5 * 60_000;
 // After the vehicle stops driving, keep the fast tier for a bit longer —
 // catches a plug-in that happens moments after parking (walking in from the
 // garage) instead of waiting for the next 5-min idle cycle to notice.
-const RIVIAN_PARKED_GRACE_MS = 60_000;
+const RIVIAN_PARKED_GRACE_MS = 180_000;
 // Trust GNSS only when it's < 15 min old — older readings (last known
 // before sleep) may lie about the current position. Shared by both the
 // real-poll and served-from-cache paths so atHome doesn't flicker to
