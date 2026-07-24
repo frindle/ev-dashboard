@@ -120,10 +120,11 @@ function buildAlerts(data: DashboardData): AlertInputs {
     rivianThermal: flags.rivianHvThermalEvent ? 'detected' : 'ok',
     rivianDerate: flags.rivianDerateReason ?? '',
     rivianPluggedIn: flags.rivianPluggedIn,
-    // Same underlying signal as rivianDerate/rivianDerateActive (confirmed
-    // with the user — throttling from max down to ~5kW is one phenomenon,
-    // not two), not a separate data source.
-    rivianHandleHot: flags.rivianDerateActive,
+    // Same underlying phenomenon as rivianDerate/rivianDerateActive
+    // (throttling from max down to ~5kW), but sticky until unplugged rather
+    // than clearing the instant the derate condition itself clears —
+    // confirmed with the user this is the desired persistence for this chip.
+    rivianHandleHot: flags.rivianDerateStickyUntilUnplugged,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',
   };

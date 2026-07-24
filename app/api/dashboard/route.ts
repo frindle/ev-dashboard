@@ -91,6 +91,9 @@ export interface DashboardFlags {
   rivianOtaInstalling: boolean;
   rivianDerateActive: boolean;
   rivianDerateReason: string | null;
+  // Sticky until unplugged (not until charging stops) -- distinct from
+  // rivianDerateActive, which clears the instant the derate itself clears.
+  rivianDerateStickyUntilUnplugged: boolean;
   rivianPluggedIn: boolean;
   rivianHvThermalEvent: boolean;
   rivianTirePressureLow: boolean;
@@ -416,6 +419,13 @@ interface RivianCache {
   fetchedAt?: number;
   parkedAt?: number; // when gearStatus last transitioned away from 'drive'
   chargeStartedAt?: number; // when isCharging last transitioned false -> true
+  // Sticky per plug-in cycle (not per charging session): true once a derate
+  // is seen while plugged in, stays true even if the derate condition
+  // itself clears mid-session, only resets when fully unplugged. Different
+  // from the existing wasThrottled/endedThrottled session tracking, which
+  // resets when charging stops (e.g. reaching the limit) even if still
+  // plugged in -- this one specifically wants "until unplugged."
+  throttledSincePluggedIn?: boolean;
   // legacy shape (pre full-state cache) — file held bare coords
   lat?: number | null;
   lon?: number | null;
@@ -505,7 +515,8 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
       // to 0 every idle cycle even though the vehicle hadn't moved).
       const cachedGnssMs = cache.state.gnssTimeStamp ? new Date(cache.state.gnssTimeStamp).getTime() : 0;
       const cachedGnssFresh = cachedGnssMs > 0 && Date.now() - cachedGnssMs < GPS_STALE_MS;
-      (cache.state as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = cachedGnssFresh;
+      (cache.state as RivianVehicleState & { _gpsFresh?: boolean; _throttledSincePluggedIn?: boolean })._gpsFresh = cachedGnssFresh;
+      (cache.state as RivianVehicleState & { _throttledSincePluggedIn?: boolean })._throttledSincePluggedIn = !!cache.throttledSincePluggedIn;
       return cache.state;
     }
   }
@@ -515,7 +526,8 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
     // Backoff window or fetch failure — serve last-known so the card
     // doesn't blank out. atHome stays neutral (_gpsFresh=false).
     if (cache.state) {
-      (cache.state as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = false;
+      (cache.state as RivianVehicleState & { _gpsFresh?: boolean; _throttledSincePluggedIn?: boolean })._gpsFresh = false;
+      (cache.state as RivianVehicleState & { _throttledSincePluggedIn?: boolean })._throttledSincePluggedIn = !!cache.throttledSincePluggedIn;
       return cache.state;
     }
     return null;
@@ -545,10 +557,15 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   const chargeStartedAt = justStartedCharging ? Date.now()
     : !fresh.isCharging ? undefined
     : cache.chargeStartedAt;
+  // Sticky until unplugged, not until charging stops -- see RivianCache's
+  // throttledSincePluggedIn comment.
+  const throttledSincePluggedIn = !fresh.isPluggedIn ? false
+    : (fresh.isThrottled || !!cache.throttledSincePluggedIn);
   try {
-    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt, chargeStartedAt } satisfies RivianCache));
+    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt, chargeStartedAt, throttledSincePluggedIn } satisfies RivianCache));
   } catch { /* non-fatal */ }
-  (fresh as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
+  (fresh as RivianVehicleState & { _gpsFresh?: boolean; _throttledSincePluggedIn?: boolean })._gpsFresh = freshGpsFromPoll;
+  (fresh as RivianVehicleState & { _throttledSincePluggedIn?: boolean })._throttledSincePluggedIn = throttledSincePluggedIn;
   return fresh;
 }
 
@@ -728,6 +745,7 @@ async function handleGet(req: Request) {
     rivianOtaInstalling: !!rivState?.otaInstalling,
     rivianDerateActive: !!rivState?.isThrottled,
     rivianDerateReason: rivState?.isThrottled ? rivState.derateReason : null,
+    rivianDerateStickyUntilUnplugged: !!(rivState as (RivianVehicleState & { _throttledSincePluggedIn?: boolean }) | null)?._throttledSincePluggedIn,
     rivianPluggedIn: !!rivState?.isPluggedIn,
     rivianHvThermalEvent: !!rivState?.hvThermalActive,
     rivianTirePressureLow: tirePressureLow,
