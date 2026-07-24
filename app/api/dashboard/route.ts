@@ -403,6 +403,10 @@ async function updateSessionKwh(
 const RIVIAN_INTERVAL_CHARGING_MS = 60_000;
 const RIVIAN_INTERVAL_DRIVING_MS = 20_000;
 const RIVIAN_INTERVAL_IDLE_MS = 5 * 60_000;
+// After the vehicle stops driving, keep the fast tier for a bit longer —
+// catches a plug-in that happens moments after parking (walking in from the
+// garage) instead of waiting for the next 5-min idle cycle to notice.
+const RIVIAN_PARKED_GRACE_MS = 60_000;
 // Trust GNSS only when it's < 15 min old — older readings (last known
 // before sleep) may lie about the current position. Shared by both the
 // real-poll and served-from-cache paths so atHome doesn't flicker to
@@ -413,6 +417,7 @@ const GPS_STALE_MS = 15 * 60 * 1000;
 interface RivianCache {
   state?: RivianVehicleState;
   fetchedAt?: number;
+  parkedAt?: number; // when gearStatus last transitioned away from 'drive'
   // legacy shape (pre full-state cache) — file held bare coords
   lat?: number | null;
   lon?: number | null;
@@ -438,7 +443,8 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
     // Plugged-in-but-not-yet-charging (e.g. waiting for a TOU window) must
     // use the faster tier too, not idle — otherwise a fresh plug-in event
     // can be masked by a stale "unplugged" cache for up to 5 minutes.
-    const interval = cache.state.gearStatus === 'drive' ? RIVIAN_INTERVAL_DRIVING_MS
+    const justParked = cache.parkedAt != null && (Date.now() - cache.parkedAt) < RIVIAN_PARKED_GRACE_MS;
+    const interval = (cache.state.gearStatus === 'drive' || justParked) ? RIVIAN_INTERVAL_DRIVING_MS
       : (cache.state.isCharging || cache.state.isPluggedIn) ? RIVIAN_INTERVAL_CHARGING_MS
       : RIVIAN_INTERVAL_IDLE_MS;
     if (ageMs < interval) {
@@ -476,8 +482,12 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   if ((fresh.lat === null || !gnssTrustworthy) && cachedGps.lat !== null) fresh.lat = cachedGps.lat;
   if ((fresh.lon === null || !gnssTrustworthy) && cachedGps.lon !== null) fresh.lon = cachedGps.lon;
 
+  const justStoppedDriving = cache.state?.gearStatus === 'drive' && fresh.gearStatus !== 'drive';
+  const parkedAt = justStoppedDriving ? Date.now()
+    : fresh.gearStatus === 'drive' ? undefined
+    : cache.parkedAt;
   try {
-    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now() } satisfies RivianCache));
+    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt } satisfies RivianCache));
   } catch { /* non-fatal */ }
   (fresh as RivianVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
   return fresh;
