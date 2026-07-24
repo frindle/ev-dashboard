@@ -91,6 +91,7 @@ export interface DashboardFlags {
   rivianOtaInstalling: boolean;
   rivianDerateActive: boolean;
   rivianDerateReason: string | null;
+  rivianPluggedIn: boolean;
   rivianHvThermalEvent: boolean;
   rivianTirePressureLow: boolean;
   rivianWiperFluidLow: boolean;
@@ -727,6 +728,7 @@ async function handleGet(req: Request) {
     rivianOtaInstalling: !!rivState?.otaInstalling,
     rivianDerateActive: !!rivState?.isThrottled,
     rivianDerateReason: rivState?.isThrottled ? rivState.derateReason : null,
+    rivianPluggedIn: !!rivState?.isPluggedIn,
     rivianHvThermalEvent: !!rivState?.hvThermalActive,
     rivianTirePressureLow: tirePressureLow,
     rivianWiperFluidLow: !!rivState && /low/i.test(rivState.wiperFluidState),

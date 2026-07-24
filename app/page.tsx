@@ -74,7 +74,6 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
     odo: s ? Math.round(s.odometer) : 0,
     capacity: isTesla ? 82 : 135,
     charging: s?.isCharging ?? false,
-    pluggedIn: s?.isPluggedIn ?? false,
     amps: t?.chargerActualCurrentA ?? 0,
     today: 0,
     ctrl: isTesla ? 'full' : 'schedule',
@@ -120,7 +119,11 @@ function buildAlerts(data: DashboardData): AlertInputs {
     rivianBrake: flags.rivianBrakeFluidLow ? 'low' : 'ok',
     rivianThermal: flags.rivianHvThermalEvent ? 'detected' : 'ok',
     rivianDerate: flags.rivianDerateReason ?? '',
-    rivianChargeSlowedLastSession: flags.rivianChargeSlowedLastSession,
+    rivianPluggedIn: flags.rivianPluggedIn,
+    // Same underlying signal as rivianDerate/rivianDerateActive (confirmed
+    // with the user — throttling from max down to ~5kW is one phenomenon,
+    // not two), not a separate data source.
+    rivianHandleHot: flags.rivianDerateActive,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',
   };
@@ -534,7 +537,7 @@ export default function Dashboard() {
         rivianTire: 'ok', rivianTireCorner: 'FL',
         rivianWiper: 'ok', rivianBrake: 'ok',
         rivianThermal: 'ok', rivianDerate: '',
-        rivianChargeSlowedLastSession: false,
+        rivianPluggedIn: false, rivianHandleHot: false,
         teslaLocationScope: 'granted',
       } as AlertInputs;
     }
