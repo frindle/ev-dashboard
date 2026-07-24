@@ -231,7 +231,6 @@ wss.on('connection', (ws, req) => {
   let windowStart = Date.now();
 
   ws.on('message', (data, isBinary) => {
-    console.log(`[telemetry] raw message from ${ip}: isBinary=${isBinary} len=${data.length} hex=${Buffer.from(data).subarray(0, 32).toString('hex')}`);
     if (!isBinary || !Payload) return;
 
     const now = Date.now();
