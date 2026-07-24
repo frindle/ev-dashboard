@@ -204,6 +204,16 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     try { cache = JSON.parse(await readFile(path, 'utf-8')) as TeslaCache; } catch { /* fall through */ }
   }
 
+  // Temporary kill switch (TESLA_DISABLE_POLLING=1): never call the Fleet
+  // API at all, rely entirely on telemetry -- set while verifying telemetry
+  // actually works, after the account got rate-limited/suspended from a
+  // polling bug. Overrides ?fresh=1 too, deliberately -- the whole point is
+  // zero further API usage while this is on, no exceptions. Unset the env
+  // var (and redeploy) to go back to normal smart-poll behavior.
+  if (process.env.TESLA_DISABLE_POLLING === '1') {
+    return cache?.state ?? null;
+  }
+
   if (!force && cache) {
     const ageMs = Date.now() - cache.fetchedAt;
     // Telemetry-sourced data is fresh-by-default; we only poll if it's been
