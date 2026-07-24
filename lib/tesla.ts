@@ -276,14 +276,19 @@ interface LiveStatus {
 // 5min otherwise -- TOU rates mean charging only really happens midnight-8am,
 // so most of the day this cuts live_status calls by ~10x.
 const LIVE_STATUS_ACTIVE_MS = 30_000;
-const LIVE_STATUS_IDLE_MS = 5 * 60_000;
+// Widened from 5min 2026-07-25 — still hitting the monthly Fleet API quota
+// (80% used with days left in the cycle) even after the sustained-charging
+// backoff below. This is background home-energy-flow data (solar/grid/
+// battery power) when nothing's actively charging — 20min is plenty.
+const LIVE_STATUS_IDLE_MS = 20 * 60_000;
 // Once a charge session has been steadily active a while, 30s is overkill —
 // kW draw doesn't need sub-minute freshness mid-session, only at the start.
 // A full overnight TOU charge at 30s the whole time is what pushed the
 // Fleet API's monthly quota to 80% usage (email alert, 2026-07-24) — this
 // keeps fast detection at the start of a session without paying that cost
-// for every hour after.
-const LIVE_STATUS_SUSTAINED_ACTIVE_MS = 5 * 60_000;
+// for every hour after. Widened further from 5min same day as the IDLE
+// bump above, same reason.
+const LIVE_STATUS_SUSTAINED_ACTIVE_MS = 10 * 60_000;
 const SUSTAINED_ACTIVE_THRESHOLD_MS = 15 * 60_000;
 let liveStatusCache: { siteId: string; data: LiveStatus; at: number; activeSince?: number } | null = null;
 

@@ -177,11 +177,17 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
 //   - Asleep:           5 min (no state can change without a wake)
 const TESLA_CACHE_FILE = 'tesla-state.json';
 const TESLA_INTERVAL_ACTIVE_MS = 30_000;
-const TESLA_INTERVAL_IDLE_MS = 5 * 60_000;
-// If telemetry is pushing data, trust it for up to 10 min between updates.
-// Tesla only pushes on change, so silence != stale — but if we go too long
-// without any update we should still poll once to confirm the vehicle is alive.
-const TELEMETRY_TRUST_WINDOW_MS = 10 * 60_000;
+// Widened 2026-07-25 from 5min — Fleet API monthly quota hit 80% usage with
+// days left in the billing cycle, needed an across-the-board cut, not just
+// the live_status tiers. This is now mostly a dead-man's-switch fallback for
+// when telemetry isn't covering a field at all, not the primary data path.
+const TESLA_INTERVAL_IDLE_MS = 20 * 60_000;
+// If telemetry is pushing data, trust it between updates. Tesla only pushes
+// on change, so silence != stale — but if we go too long without any update
+// we should still poll once to confirm the vehicle is alive. Widened from
+// 10min alongside the quota cut above; telemetry silence this long is still
+// almost always "nothing changed," not "connection dropped."
+const TELEMETRY_TRUST_WINDOW_MS = 30 * 60_000;
 
 interface TeslaCache {
   state: TeslaVehicleState;
