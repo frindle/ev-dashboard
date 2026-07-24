@@ -271,8 +271,17 @@ interface LiveStatus {
 }
 
 // Module-level cache so fetchSiteLiveStatus and fetchWallConnectorVitals don't
-// each make a separate API call on the same poll cycle. Cached for 5 seconds.
+// each make a separate API call on the same poll cycle. TTL adapts to whether
+// a wall connector was last seen actively drawing power: 30s while charging,
+// 5min otherwise -- TOU rates mean charging only really happens midnight-8am,
+// so most of the day this cuts live_status calls by ~10x.
+const LIVE_STATUS_ACTIVE_MS = 30_000;
+const LIVE_STATUS_IDLE_MS = 5 * 60_000;
 let liveStatusCache: { siteId: string; data: LiveStatus; at: number } | null = null;
+
+function anyConnectorActive(data: LiveStatus): boolean {
+  return (data.wall_connectors ?? []).some(wc => wc.wall_connector_state === 1 || (wc.wall_connector_power ?? 0) > 100);
+}
 
 // route.ts calls fetchSiteLiveStatus + fetchWallConnectorVitals(left) +
 // fetchWallConnectorVitals(right) all inside one Promise.all. The 5s cache
@@ -285,8 +294,9 @@ let liveStatusInFlight: { siteId: string; promise: Promise<LiveStatus | null> } 
 
 async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
   // Serve a fresh-enough cached response without hitting the API at all.
-  if (liveStatusCache && liveStatusCache.siteId === energySiteId && Date.now() - liveStatusCache.at < 5000) {
-    return liveStatusCache.data;
+  if (liveStatusCache && liveStatusCache.siteId === energySiteId) {
+    const ttl = anyConnectorActive(liveStatusCache.data) ? LIVE_STATUS_ACTIVE_MS : LIVE_STATUS_IDLE_MS;
+    if (Date.now() - liveStatusCache.at < ttl) return liveStatusCache.data;
   }
   if (liveStatusInFlight && liveStatusInFlight.siteId === energySiteId) {
     return liveStatusInFlight.promise;
