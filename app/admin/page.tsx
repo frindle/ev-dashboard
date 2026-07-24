@@ -391,6 +391,23 @@ export default function AdminPage() {
             After clicking, log in to Tesla and approve access. You&apos;ll be redirected back and tokens will be saved automatically.
           </div>
 
+          <div className="form-row" style={{ marginTop: 8 }}>
+            <label className="form-label">
+              <input
+                type="checkbox"
+                checked={config.vehicles.tesla.pollingEnabled}
+                onChange={e => update('vehicles', { tesla: { ...config.vehicles.tesla, pollingEnabled: e.target.checked } })}
+                style={{ marginRight: 8 }}
+              />
+              Enable Fleet API polling
+            </label>
+            <div className="form-hint">
+              Off skips every Tesla Fleet API call (vehicle_data, live_status, commands) — useful to force a
+              quota pause or test what happens when Tesla data goes stale. Telemetry (charge state pushed
+              from the car) keeps flowing regardless, since it doesn&apos;t use the Fleet API.
+            </div>
+          </div>
+
           <div className="form-row-2" style={{ marginTop: 8 }}>
             <div className="form-row">
               <label className="form-label">Vehicle VIN</label>

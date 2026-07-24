@@ -122,6 +122,10 @@ let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 
 async function fleetGet<T>(path: string): Promise<T | null> {
+  if (!readConfig().vehicles.tesla.pollingEnabled) {
+    console.log(`[tesla] ${path}: polling manually disabled in admin settings — skipping`);
+    return null;
+  }
   if (Date.now() < circuitOpenUntil) {
     console.log(`[tesla] ${path}: circuit breaker open — skipping until cooldown ends`);
     return null;
@@ -167,6 +171,10 @@ async function fleetGet<T>(path: string): Promise<T | null> {
 }
 
 async function fleetPost<T>(path: string, body: unknown): Promise<T | null> {
+  if (!readConfig().vehicles.tesla.pollingEnabled) {
+    console.log(`[tesla] ${path}: polling manually disabled in admin settings — skipping`);
+    return null;
+  }
   const token = await getAccessToken();
   if (!token) return null;
   try {

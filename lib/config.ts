@@ -26,6 +26,7 @@ export interface AppConfig {
       name: string;
       model: string;
       chargerSide: 'LEFT' | 'RIGHT';
+      pollingEnabled: boolean; // manual kill switch for Fleet API calls — telemetry keeps flowing regardless
     };
     rivian: {
       name: string;
@@ -91,6 +92,7 @@ const DEFAULT_CONFIG: AppConfig = {
       name: 'Tesla',
       model: 'Model 3',
       chargerSide: 'RIGHT',
+      pollingEnabled: true,
     },
     rivian: {
       name: 'Midknight',
