@@ -821,7 +821,7 @@ export default function AdminPage() {
             150m covers most driveways/garages. If unset, the dashboard falls back to using each vehicle&apos;s online status.
           </div>
           <div className="form-row">
-            <label className="form-label">Arrival webhook URL (Rivian only)</label>
+            <label className="form-label">Arrival webhook URL</label>
             <input
               className="form-input"
               type="text"
@@ -830,8 +830,9 @@ export default function AdminPage() {
               placeholder="http://homeassistant.local:8123/api/webhook/..."
             />
             <div className="form-hint">
-              Fired once when the Rivian enters the home radius while still driving (not waiting for
-              &quot;parked&quot;, to avoid lagging behind actual arrival). Leave blank to disable.
+              Fired once when a vehicle enters the home radius (Rivian: while still driving, not waiting
+              for &quot;parked&quot;, to avoid lagging behind actual arrival). Shared by both vehicles.
+              Leave blank to disable.
             </div>
           </div>
         </div>
