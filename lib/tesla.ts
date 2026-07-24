@@ -283,7 +283,7 @@ const LIVE_STATUS_IDLE_MS = 5 * 60_000;
 // Fleet API's monthly quota to 80% usage (email alert, 2026-07-24) — this
 // keeps fast detection at the start of a session without paying that cost
 // for every hour after.
-const LIVE_STATUS_SUSTAINED_ACTIVE_MS = 2 * 60_000;
+const LIVE_STATUS_SUSTAINED_ACTIVE_MS = 5 * 60_000;
 const SUSTAINED_ACTIVE_THRESHOLD_MS = 15 * 60_000;
 let liveStatusCache: { siteId: string; data: LiveStatus; at: number; activeSince?: number } | null = null;
 
