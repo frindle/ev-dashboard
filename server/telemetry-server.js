@@ -17,6 +17,57 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const protobuf = require('protobufjs');
+const { ByteBuffer } = require('flatbuffers');
+
+// The vehicle does NOT send a raw protobuf Payload over the WebSocket --
+// it wraps it in a FlatBuffers envelope (confirmed against Tesla's own
+// teslamotors/fleet-telemetry repo: messages/tesla/FlatbuffersEnvelope.go,
+// FlatbuffersStream.go, Message.go, verified byte-for-byte against a real
+// captured payload). Envelope fields (vtable slot -> byte offset): Txid=4,
+// Topic=6, MessageType=8, Message=10 (union), MessageId=12. MessageType 4 =
+// FlatbuffersStream, whose fields are: CreatedAt=4, SenderId=6, Payload=8
+// (byte vector -- the actual protobuf-encoded Payload our schema decodes),
+// DeviceType=10 (constant "vehicle_device"), DeviceId=12 (the vehicle's VIN,
+// straight from its mTLS cert CN). Decoding the raw WS frame directly as
+// protobuf (the old code) fails immediately since FlatBuffers and protobuf
+// are structurally unrelated wire formats. Also: the inner protobuf Payload
+// does NOT reliably carry a `vin` field in this wire format (a real captured
+// payload had none) -- DeviceId is the actual source of truth for VIN gating.
+const MSG_TYPE_FLATBUFFERS_STREAM = 4;
+
+function extractStreamMessage(data) {
+  const bb = new ByteBuffer(data);
+  const envelopePos = bb.readInt32(bb.position()) + bb.position();
+
+  const messageType = readByteField(bb, envelopePos, 8);
+  if (messageType !== MSG_TYPE_FLATBUFFERS_STREAM) return null; // e.g. StreamAck, ignore
+
+  const messageOffset = bb.__offset(envelopePos, 10);
+  if (!messageOffset) return null;
+  const streamPos = bb.__indirect(envelopePos + messageOffset);
+
+  const payloadFieldOffset = bb.__offset(streamPos, 8);
+  if (!payloadFieldOffset) return null;
+  const vectorStart = bb.__vector(streamPos + payloadFieldOffset);
+  const vectorLen = bb.__vector_len(streamPos + payloadFieldOffset);
+  const protoBytes = bb.bytes().subarray(vectorStart, vectorStart + vectorLen);
+
+  const vin = readByteVectorField(bb, streamPos, 12);
+  return { protoBytes, vin };
+}
+
+function readByteField(bb, tablePos, vtableOffset) {
+  const offset = bb.__offset(tablePos, vtableOffset);
+  return offset ? bb.readUint8(tablePos + offset) : 0;
+}
+
+function readByteVectorField(bb, tablePos, vtableOffset) {
+  const offset = bb.__offset(tablePos, vtableOffset);
+  if (!offset) return '';
+  const start = bb.__vector(tablePos + offset);
+  const len = bb.__vector_len(tablePos + offset);
+  return Buffer.from(bb.bytes().subarray(start, start + len)).toString('utf-8');
+}
 
 const PORT = parseInt(process.env.TELEMETRY_PORT || '50051', 10);
 const KEYS_DIR = process.env.KEYS_DIR || path.join(process.cwd(), 'keys');
@@ -194,9 +245,14 @@ wss.on('connection', (ws, req) => {
     }
 
     try {
-      const msg = Payload.decode(data);
+      const stream = extractStreamMessage(data);
+      if (!stream) return; // non-stream envelope message (e.g. StreamAck), nothing to decode
+
+      const msg = Payload.decode(stream.protoBytes);
       const obj = Payload.toObject(msg, { enums: Number, defaults: false });
-      const incomingVin = (obj.vin || '').trim().toUpperCase();
+      // The protobuf Payload doesn't reliably carry `vin` in this wire format
+      // -- the FlatBuffers envelope's DeviceId field is the real source.
+      const incomingVin = (stream.vin || obj.vin || '').trim().toUpperCase();
 
       // VIN gate: reject any payload not from our configured vehicle
       const expectedVin = getExpectedVin();

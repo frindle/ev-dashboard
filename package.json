@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "flatbuffers": "^25.9.23",
     "next": "15.3.3",
     "protobufjs": "^7.4.0",
     "react": "^19.0.0",
