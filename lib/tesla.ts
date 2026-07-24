@@ -310,13 +310,18 @@ function nearMidnightBoundary(): boolean {
 // so concurrent callers within the same tick share one upstream fetch.
 let liveStatusInFlight: { siteId: string; promise: Promise<LiveStatus | null> } | null = null;
 
-async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
+async function getLiveStatus(energySiteId: string, telemetryConfirmedCharging = false): Promise<LiveStatus | null> {
   // Serve a fresh-enough cached response without hitting the API at all.
   if (liveStatusCache && liveStatusCache.siteId === energySiteId) {
     const active = anyConnectorActive(liveStatusCache.data);
-    const sustained = active && liveStatusCache.activeSince != null
-      && (Date.now() - liveStatusCache.activeSince) > SUSTAINED_ACTIVE_THRESHOLD_MS;
-    const ttl = sustained ? LIVE_STATUS_SUSTAINED_ACTIVE_MS
+    // Telemetry already told us (in real time) whether the vehicle is
+    // charging — no need to spend 15 minutes of 30s live_status polling to
+    // rediscover that ourselves. Skip straight to the relaxed cadence,
+    // except right at the midnight TOU boundary, which still gets the fast
+    // tier to catch the actual start of a session promptly.
+    const sustained = telemetryConfirmedCharging || (active && liveStatusCache.activeSince != null
+      && (Date.now() - liveStatusCache.activeSince) > SUSTAINED_ACTIVE_THRESHOLD_MS);
+    const ttl = sustained && !nearMidnightBoundary() ? LIVE_STATUS_SUSTAINED_ACTIVE_MS
       : (active || nearMidnightBoundary()) ? LIVE_STATUS_ACTIVE_MS
       : LIVE_STATUS_IDLE_MS;
     if (Date.now() - liveStatusCache.at < ttl) return liveStatusCache.data;
@@ -349,8 +354,8 @@ async function getLiveStatus(energySiteId: string): Promise<LiveStatus | null> {
   }
 }
 
-export async function fetchSiteLiveStatus(energySiteId: string): Promise<TeslaSiteState | null> {
-  const data = await getLiveStatus(energySiteId);
+export async function fetchSiteLiveStatus(energySiteId: string, telemetryConfirmedCharging = false): Promise<TeslaSiteState | null> {
+  const data = await getLiveStatus(energySiteId, telemetryConfirmedCharging);
   if (!data) return null;
   return {
     solarPowerW: data.solar_power ?? 0,
@@ -364,9 +369,9 @@ export async function fetchSiteLiveStatus(energySiteId: string): Promise<TeslaSi
 // Now takes (siteId, serial) since per-connector data comes from live_status
 // matched by DIN suffix. Session energy is no longer exposed in this response —
 // we report 0 for sessionEnergyWh. Current is derived from power / voltage.
-export async function fetchWallConnectorVitals(siteId: string, serial: string): Promise<WallConnectorVitals | null> {
+export async function fetchWallConnectorVitals(siteId: string, serial: string, telemetryConfirmedCharging = false): Promise<WallConnectorVitals | null> {
   if (!serial) return null;
-  const data = await getLiveStatus(siteId);
+  const data = await getLiveStatus(siteId, telemetryConfirmedCharging);
   const wc = data?.wall_connectors?.find(w => w.din?.endsWith(`--${serial}`));
   if (!wc) return null;
 

@@ -200,6 +200,23 @@ function warnNoHomeOnce(): true {
   return true;
 }
 
+// Peek at the telemetry/poll cache's last-known charging state without
+// triggering a fetch — telemetry already pushes DetailedChargeState in real
+// time, so if it says we're charging, live_status polling doesn't need its
+// own slow ramp-up to (re-)discover that fact, only the midnight-boundary
+// window still matters for catching the very start of a session.
+async function peekTeslaCharging(): Promise<boolean> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, TESLA_CACHE_FILE);
+  if (!existsSync(path)) return false;
+  try {
+    const cache = JSON.parse(await readFile(path, 'utf-8')) as TeslaCache;
+    return !!cache.state?.isCharging || cache.state?.chargingState === 'Charging';
+  } catch {
+    return false;
+  }
+}
+
 async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicleState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, TESLA_CACHE_FILE);
@@ -518,12 +535,14 @@ async function handleGet(req: Request) {
   // Fetch all data in parallel. Site live_status and per-connector vitals now
   // share one underlying API call (Tesla deprecated /wall_connectors/{id}/vitals
   // and moved per-connector fields into the same live_status response).
+  const telemetryConfirmedCharging = teslaConnected ? await peekTeslaCharging() : false;
+
   const [teslaState, rivianState, siteState, wcLeft, wcRight, weather, doorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
-    teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id) : Promise.resolve(null),
-    teslaConnected && leftSerial  ? fetchWallConnectorVitals(cfg.energySite.id, leftSerial)  : Promise.resolve(null),
-    teslaConnected && rightSerial ? fetchWallConnectorVitals(cfg.energySite.id, rightSerial) : Promise.resolve(null),
+    teslaConnected ? fetchSiteLiveStatus(cfg.energySite.id, telemetryConfirmedCharging) : Promise.resolve(null),
+    teslaConnected && leftSerial  ? fetchWallConnectorVitals(cfg.energySite.id, leftSerial, telemetryConfirmedCharging)  : Promise.resolve(null),
+    teslaConnected && rightSerial ? fetchWallConnectorVitals(cfg.energySite.id, rightSerial, telemetryConfirmedCharging) : Promise.resolve(null),
     fetchWeather(cfg),
     myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
