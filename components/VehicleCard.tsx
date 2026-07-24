@@ -368,8 +368,8 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   return (
     <div style={{
       background: '#161c22', border: '1px solid rgba(255,255,255,0.06)',
-      borderRadius: 20, padding: '20px 22px',
-      display: 'flex', flexDirection: 'column', gap: 14,
+      borderRadius: 20, padding: '16px 22px',
+      display: 'flex', flexDirection: 'column', gap: 12,
       boxShadow: '0 18px 44px -30px rgba(0,0,0,.85)',
       position: 'relative'
     }}>

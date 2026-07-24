@@ -188,7 +188,7 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable }: {
   ];
 
   return (
-    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 13, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '16px 22px' }}>
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '12px 22px' }}>
       {wcDataUnavailable && (
         <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(224,181,61,0.15)', color: '#e0b53d', fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999, whiteSpace: 'nowrap' }}>
           <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 13, lineHeight: 1 }}>warning</span>
@@ -239,7 +239,7 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable }: {
             ? (side.wc?.vehicleName ?? side.name) + ' charging'
             : side.vehicleConnected ? 'Vehicle connected · not charging' : 'No vehicle connected';
           return (
-            <div key={side.name} style={{ display: 'flex', flexDirection: 'column', gap: 10, background: '#161c22', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: '13px 16px' }}>
+            <div key={side.name} style={{ display: 'flex', flexDirection: 'column', gap: 10, background: '#161c22', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: '11px 16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, letterSpacing: '0.14em', color: '#7d8893' }}>WALL CONNECTOR · {side.name}</span>
@@ -561,7 +561,7 @@ export default function Dashboard() {
   }, [data]);
 
   return (
-    <div style={{ position: 'relative', width: 1180, height: 820, overflow: 'hidden', background: 'radial-gradient(1000px 600px at 78% -16%, #1a2530 0%, #0e1216 56%)', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif", padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 11 }}>
+    <div style={{ position: 'relative', width: 1180, height: 820, overflow: 'hidden', background: 'radial-gradient(1000px 600px at 78% -16%, #1a2530 0%, #0e1216 56%)', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif", padding: '18px 28px', display: 'flex', flexDirection: 'column', gap: 7 }}>
 
       {/* ── Header ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, flex: 'none' }}>
