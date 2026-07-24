@@ -13,6 +13,8 @@ export interface NotifyInput {
   rivianReauthDaysLeft: number | null;
   rivianOtaUpdateAvailable: boolean;
   rivianOtaAvailableVersion: string;
+  teslaOtaUpdateAvailable: boolean;
+  teslaOtaAvailableVersion: string;
 }
 
 export function notifyFlagChanges(n: NotifyInput): void {
@@ -41,10 +43,18 @@ export function notifyFlagChanges(n: NotifyInput): void {
   }
 
   if (n.rivianOtaUpdateAvailable && n.rivianOtaAvailableVersion &&
-      shouldPushOtaOnce(n.rivianOtaAvailableVersion)) {
+      shouldPushOtaOnce('rivian', n.rivianOtaAvailableVersion)) {
     void sendPush(
       'EV Dashboard — Rivian software update available',
       `Version ${n.rivianOtaAvailableVersion} is available for the Rivian.`,
+    );
+  }
+
+  if (n.teslaOtaUpdateAvailable && n.teslaOtaAvailableVersion &&
+      shouldPushOtaOnce('tesla', n.teslaOtaAvailableVersion)) {
+    void sendPush(
+      'EV Dashboard — Tesla software update available',
+      `Version ${n.teslaOtaAvailableVersion} is available for the Tesla.`,
     );
   }
 }

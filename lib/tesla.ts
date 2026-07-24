@@ -26,6 +26,10 @@ export interface TeslaVehicleState {
   online: boolean;
   lat: number | null;
   lon: number | null;
+  otaStatus: string;          // vehicle_state.software_update.status, e.g. "", "available", "downloading", "installing"
+  otaAvailableVersion: string;
+  otaInstalling: boolean;
+  otaUpdateAvailable: boolean;
 }
 
 export interface WallConnectorVitals {
@@ -213,7 +217,11 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
       charger_actual_current?: number;
       charger_voltage?: number;
     };
-    vehicle_state?: { locked?: boolean; odometer?: number };
+    vehicle_state?: {
+      locked?: boolean;
+      odometer?: number;
+      software_update?: { status?: string; version?: string };
+    };
     climate_state?: { is_climate_on?: boolean };
     drive_state?: { latitude?: number; longitude?: number };
   }
@@ -232,6 +240,12 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
   const vs = data.vehicle_state ?? {};
   const cls = data.climate_state ?? {};
   const ds = data.drive_state ?? {};
+  const su = vs.software_update ?? {};
+  // Tesla only exposes the pending/target version (no "current version" in
+  // this endpoint set) -- unlike Rivian, so there's no otaCurrentVersion to
+  // compare against. Any non-empty status means an update is somewhere in
+  // the pipeline (available/scheduled/downloading/installing).
+  const otaStatus = su.status ?? '';
 
   return {
     chargePercent: cs.battery_level ?? 0,
@@ -258,6 +272,10 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     online: data.state === 'online',
     lat: ds.latitude ?? null,
     lon: ds.longitude ?? null,
+    otaStatus,
+    otaAvailableVersion: su.version ?? '',
+    otaInstalling: otaStatus === 'installing',
+    otaUpdateAvailable: otaStatus !== '',
   };
 }
 

@@ -12,8 +12,9 @@ export interface SessionFlags {
   rivian_reauth_pushover_at?: number;
   rivian_due_soon_pushover_at?: number;
 
-  // Rivian OTA push-dedupe: last version we notified about.
+  // OTA push-dedupe: last version we notified about, per vehicle.
   rivian_ota_notified_version?: string;
+  tesla_ota_notified_version?: string;
 }
 
 function flagsPath(): string {
@@ -111,9 +112,10 @@ export function shouldPushDueSoonOnce(): boolean {
   return true;
 }
 
-export function shouldPushOtaOnce(version: string): boolean {
+export function shouldPushOtaOnce(vehicle: 'rivian' | 'tesla', version: string): boolean {
+  const key = vehicle === 'tesla' ? 'tesla_ota_notified_version' : 'rivian_ota_notified_version';
   const f = readFlags();
-  if (f.rivian_ota_notified_version === version) return false;
-  mutate(g => { g.rivian_ota_notified_version = version; });
+  if (f[key] === version) return false;
+  mutate(g => { g[key] = version; });
   return true;
 }

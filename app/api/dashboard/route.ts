@@ -105,6 +105,8 @@ export interface DashboardFlags {
   teslaApiPaused: boolean; // circuit breaker open after repeated Fleet API failures
   teslaApiRetryMinutes: number | null;
   wcDataUnavailable: boolean; // a connected vehicle's wall connector vitals fetch is returning null
+  teslaOtaUpdateAvailable: boolean;
+  teslaOtaInstalling: boolean;
 }
 
 export interface DashboardData {
@@ -767,6 +769,8 @@ async function handleGet(req: Request) {
     teslaApiPaused: getCircuitBreakerRetryMinutes() !== null,
     teslaApiRetryMinutes: getCircuitBreakerRetryMinutes(),
     wcDataUnavailable,
+    teslaOtaUpdateAvailable: !!teslaState?.otaUpdateAvailable,
+    teslaOtaInstalling: !!teslaState?.otaInstalling,
   };
 
   // Fire-and-forget Pushover notifications for newly raised flags
@@ -781,6 +785,8 @@ async function handleGet(req: Request) {
       rivianReauthDaysLeft: flags.rivianReauthDaysLeft,
       rivianOtaUpdateAvailable: flags.rivianOtaUpdateAvailable,
       rivianOtaAvailableVersion: rivState?.otaAvailableVersion ?? '',
+      teslaOtaUpdateAvailable: flags.teslaOtaUpdateAvailable,
+      teslaOtaAvailableVersion: teslaState?.otaAvailableVersion ?? '',
     });
   } catch (e) {
     console.warn('[notify] failed:', String(e).slice(0, 160));
