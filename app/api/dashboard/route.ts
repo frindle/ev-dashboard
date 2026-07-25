@@ -14,6 +14,7 @@ import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/
 import { getDoorState, hasMyQTokens } from '@/lib/myq';
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
+import { logApiCall } from '@/lib/apiLog';
 
 export const dynamic = 'force-dynamic';
 
@@ -718,6 +719,18 @@ async function handleGet(req: Request) {
   // an unset signal shouldn't ever suppress a real arrival.
   const teslaIsDriving = teslaState?.gearStatus ? teslaState.gearStatus === 'drive' : true;
   if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, teslaIsDriving, teslaHome.fresh ? teslaHome.atHome : null, 'tesla');
+
+  // Usage estimate for the live-map tile (VehicleCard.tsx renders one
+  // whenever a vehicle is away with known coordinates -- mirror that exact
+  // condition here). Leaflet/OSM tiles are free so this isn't billed, but
+  // logging it gives a real request-volume estimate before ever switching
+  // to a metered static-map API, same idea as api-calls.jsonl for Rivian/Tesla.
+  if (rivianAtHome === false && rivianState?.lat != null && rivianState?.lon != null) {
+    void logApiCall({ provider: 'map-tile', endpoint: 'rivian', status: 200, durationMs: 0, ok: true });
+  }
+  if (teslaAtHome === false && teslaState?.lat != null && teslaState?.lon != null) {
+    void logApiCall({ provider: 'map-tile', endpoint: 'tesla', status: 200, durationMs: 0, ok: true });
+  }
 
   const vehicles: VehicleData[] = [
     {

@@ -7,6 +7,11 @@
 // exports or paraphrase copy.
 
 import * as React from 'react';
+import dynamic from 'next/dynamic';
+
+// Leaflet touches window/document at import time -- ssr:false keeps it out
+// of the server render pass entirely (see components/MapTile.tsx).
+const MapTile = dynamic(() => import('./MapTile'), { ssr: false });
 
 // ─────────────────────────────────────────────────────────────
 // Shared severity palette (banner + chips)
@@ -59,6 +64,8 @@ export type Vehicle = {
   place: string;
   speed: number;            // mph
   heading: number;          // degrees, 0-360 -- compass heading while driving
+  lat: number | null;
+  lon: number | null;
 };
 
 export type AlertInputs = {
@@ -488,16 +495,20 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
       {/* ── MIDDLE: dial + mirrored 2x2 stats ── */}
       <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir }}>
         {/* Driving/away tile — replaces the charge dial while the vehicle is
-            away from home. No live map tile integration exists (design's
-            source used a placeholder image-slot for one) -- this renders a
-            plain dark tile with a heading-arrow/place-pin + real speed and
-            place text instead of fabricating map imagery we don't have. */}
+            away from home. Design's source used a placeholder image-slot
+            for a live map -- that's a Claude Design editor-only element,
+            not usable directly, so this renders a real Leaflet + OpenStreetMap
+            map (free, no API key) when we have coordinates, with the
+            heading-arrow/place-pin + speed/place text overlaid on top. */}
         {!atHome && (
           <div style={{
             position: 'relative', flex: 'none', width: 128, height: 128,
             borderRadius: 18, overflow: 'hidden', background: '#161c22',
             border: '1px solid rgba(255,255,255,0.06)'
           }}>
+            {v.lat !== null && v.lon !== null && (
+              <MapTile lat={v.lat} lon={v.lon} />
+            )}
             <div style={{
               position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center', gap: 4, pointerEvents: 'none'

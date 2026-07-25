@@ -94,6 +94,8 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
     place: '',
     speed: Math.round(speed),
     heading: Math.round(heading),
+    lat: s?.lat ?? null,
+    lon: s?.lon ?? null,
   };
 }
 
