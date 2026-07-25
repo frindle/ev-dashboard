@@ -54,7 +54,12 @@ async function checkVehicleArrival(webhookUrl: string, flagFile: string, isDrivi
   if (!isDriving || wasNotified) return;
 
   try {
-    await fetch(webhookUrl, { method: 'POST' });
+    const res = await fetch(webhookUrl, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`[${label}] arrival webhook returned HTTP ${res.status}: ${body.slice(0, 200)}`);
+      return; // don't mark notified -- let it retry on the next qualifying poll
+    }
     await writeFile(path, String(Date.now()));
     console.log(`[${label}] arrival webhook fired`);
   } catch (e) {
