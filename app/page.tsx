@@ -80,8 +80,10 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
     apiLabel: isTesla ? 'TESLA FLEET API' : 'RIVIAN · UNOFFICIAL API',
     ac: s?.climateOn ?? false,
     locked: s?.isLocked ?? true,
-    // Preserve prior null-atHome-means-probably-home behavior so vehicles
-    // with stale GPS don't false-flag as AWAY.
+    // atHome is a real distance check against last-known position now (see
+    // computeAtHome in the dashboard route) -- null only means we've never
+    // gotten any GPS at all, in which case default to home rather than
+    // false-flagging as AWAY with zero information.
     location: v.atHome === false ? 'away' : 'home',
     place: '',
     speed: 0,

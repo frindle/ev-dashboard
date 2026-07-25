@@ -236,7 +236,16 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     // Telemetry-sourced data is fresh-by-default; we only poll if it's been
     // silent for the trust window (in case telemetry connection dropped).
     if (cache.source === 'telemetry' && ageMs < TELEMETRY_TRUST_WINDOW_MS) {
-      return cache.state;
+      // atHome detection specifically requires the _gpsFresh flag (see
+      // computeAtHome below) -- without this, telemetry-sourced lat/lon
+      // (populated via the Location field, see telemetry-server.js) was
+      // silently treated as stale forever, since only a real REST poll
+      // used to set this flag. Tesla's REST poll never actually gets
+      // lat/lon anyway (drive_state is dropped from the vehicle_data query
+      // -- requesting the vehicle_location scope 403s the whole call), so
+      // telemetry's Location field is the *only* real GPS source for Tesla.
+      const gpsFresh = cache.state.lat !== null && cache.state.lon !== null;
+      return { ...cache.state, _gpsFresh: gpsFresh } as TeslaVehicleState & { _gpsFresh: boolean };
     }
     // Poll-sourced data: use the original cadence (30s active / 5min idle).
     if (cache.source !== 'telemetry') {
@@ -661,33 +670,39 @@ async function handleGet(req: Request) {
   const homeLon = cfg.home.lon ?? cfg.weather.lon ?? null;
   const homeRadius = cfg.home.radiusMeters > 0 ? cfg.home.radiusMeters : 150;
 
-  function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined, gpsFresh: boolean): boolean | null {
+  // Returns a best-guess atHome from whatever position we have (fresh or
+  // last-known) for display, plus whether that position is fresh enough to
+  // trust for anything with a real side effect. Previously this returned
+  // null whenever GPS wasn't fresh, and the UI just defaulted null -> "home"
+  // for display -- which threw away a last-known position that might clearly
+  // put the car away, and only *looked* reasonable by coincidence when the
+  // car happened to be sitting at home when it went quiet.
+  function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined, gpsFresh: boolean): { atHome: boolean | null; fresh: boolean } {
     if (homeLat === null || homeLon === null) {
       noHomeCoordsWarned ||= warnNoHomeOnce();
-      return null;
+      return { atHome: null, fresh: false };
     }
     if (lat === null || lat === undefined || lon === null || lon === undefined) {
-      return null;
-    }
-    if (!gpsFresh) {
-      // Lat/lon came from cache, not this poll. We can't tell if the car
-      // is still here or drove off — return null instead of falsely
-      // reporting at-home. (UI keeps showing cached coords for "last
-      // seen at" purposes, but the at-home dot stays neutral.)
-      console.log(`[home] ${label}: GPS stale (from cache) — atHome=null until vehicle reports fresh location`);
-      return null;
+      return { atHome: null, fresh: false };
     }
     const dist = distanceMeters(lat, lon, homeLat, homeLon);
     const atHome = dist <= homeRadius;
-    console.log(`[home] ${label}: lat=${lat.toFixed(5)},lon=${lon.toFixed(5)} home=${homeLat.toFixed(5)},${homeLon.toFixed(5)} dist=${dist.toFixed(0)}m radius=${homeRadius}m → atHome=${atHome}`);
-    return atHome;
+    const staleNote = gpsFresh ? '' : ' (stale — last known position, not this poll)';
+    console.log(`[home] ${label}: lat=${lat.toFixed(5)},lon=${lon.toFixed(5)} home=${homeLat.toFixed(5)},${homeLon.toFixed(5)} dist=${dist.toFixed(0)}m radius=${homeRadius}m → atHome=${atHome}${staleNote}`);
+    return { atHome, fresh: gpsFresh };
   }
 
-  const rivianAtHome = computeAtHome('rivian', rivianState?.lat, rivianState?.lon, !!(rivianState && (rivianState as { _gpsFresh?: boolean })._gpsFresh));
-  if (rivianState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive', rivianAtHome, 'rivian');
+  const rivianHome = computeAtHome('rivian', rivianState?.lat, rivianState?.lon, !!(rivianState && (rivianState as { _gpsFresh?: boolean })._gpsFresh));
+  const rivianAtHome = rivianHome.atHome;
+  // Arrival webhook has a real side effect (turning on lights) -- only trust
+  // a fresh position for it, not a last-known one, so it can't fire off a
+  // stale reading. Force the "confident" atHome to null (not true) when the
+  // position is stale, regardless of what the display value says.
+  if (rivianState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive', rivianHome.fresh ? rivianHome.atHome : null, 'rivian');
 
-  const teslaAtHome = computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh));
-  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, true, teslaAtHome, 'tesla');
+  const teslaHome = computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh));
+  const teslaAtHome = teslaHome.atHome;
+  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, true, teslaHome.fresh ? teslaHome.atHome : null, 'tesla');
 
   const vehicles: VehicleData[] = [
     {
