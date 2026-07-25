@@ -592,7 +592,6 @@ html, body {
 .admin-page {
   min-height: 100vh;
   padding: 32px;
-  overflow-y: auto;
   max-width: 800px;
   margin: 0 auto;
 }
