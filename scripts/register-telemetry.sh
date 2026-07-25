@@ -78,6 +78,10 @@ PAYLOAD=$(jq -n \
         # otherwise running. See telemetry-server.js field handler.
         Location:            { interval_seconds: 60 },
         HvacACEnabled:       { interval_seconds: 300 },
+        # Real climate on/off state -- HvacACEnabled above is only the
+        # AC/cooling subsystem specifically, kept subscribed but unused for
+        # climateOn now (caused a stuck "on" reading, see telemetry-server.js).
+        HvacPower:           { interval_seconds: 60 },
         ChargeAmps:          { interval_seconds: 30 },
         ChargeRateMilePerHour: { interval_seconds: 30 },
         ChargerVoltage:      { interval_seconds: 300 },

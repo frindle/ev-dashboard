@@ -138,7 +138,7 @@ function applyDatum(state, key, value) {
   const v = value.stringValue ?? value.intValue ?? value.longValue
          ?? value.floatValue ?? value.doubleValue ?? value.booleanValue
          ?? value.locationValue ?? value.chargingValue ?? value.shiftStateValue
-         ?? value.detailedChargeStateValue ?? null;
+         ?? value.detailedChargeStateValue ?? value.hvacPowerValue ?? null;
 
   switch (fieldName) {
     // Battery / range
@@ -186,8 +186,14 @@ function applyDatum(state, key, value) {
     // Access / climate
     case 'Locked':
       state.isLocked = Boolean(v); break;
-    case 'HvacACEnabled':
-      state.climateOn = Boolean(v); break;
+    // HvacPower is the real on/off state of the whole climate system
+    // (HvacPowerState: 0 Unknown, 1 Off, 2 On, 3 Precondition, 4 OverheatProtect).
+    // HvacACEnabled (still subscribed, unused here) is only the AC/cooling
+    // subsystem specifically -- it can read false while climate is still on
+    // running fan-only/heat-only/defrost, which caused a stuck "climate on"
+    // display after it got used for this instead (caught 2026-07-25).
+    case 'HvacPower':
+      state.climateOn = (v === 2 || v === 3 || v === 4); break;
 
     // Position
     case 'Location':

@@ -40,6 +40,7 @@ message Value {
     Doors door_value = 21;
     TimeValue time_value = 31;
     DetailedChargeStateValue detailed_charge_state_value = 32;
+    HvacPowerState hvac_power_value = 38;
   }
 }
 
@@ -68,6 +69,21 @@ enum DetailedChargeStateValue {
   DetailedChargeStateCharging = 4;
   DetailedChargeStateComplete = 5;
   DetailedChargeStateStopped = 6;
+}
+
+// HvacPowerState enum used by HvacPower field (hvac_power_value) -- the
+// actual on/off state of the whole climate system. HvacACEnabled (field 196)
+// is only the AC/cooling subsystem specifically and can be false while
+// climate is still on (fan-only, heat-only, defrost, precondition) --
+// confirmed via github.com/teslamotors/fleet-telemetry 2026-07-25 after it
+// caused a stuck "climate on" reading (stale HvacACEnabled=true survived a
+// sleep cycle with no corresponding update).
+enum HvacPowerState {
+  HvacPowerStateUnknown = 0;
+  HvacPowerStateOff = 1;
+  HvacPowerStateOn = 2;
+  HvacPowerStatePrecondition = 3;
+  HvacPowerStateOverheatProtect = 4;
 }
 
 enum ShiftState {
@@ -125,5 +141,6 @@ enum Field {
   DetailedChargeState = 179;
   ChargerVoltage = 184;
   HvacACEnabled = 196;
+  HvacPower = 201;
   ChargeRateMilePerHour = 256;
 }
