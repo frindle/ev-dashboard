@@ -186,6 +186,16 @@ enum Field {
   Odometer = 5;
   Soc = 8;
   Gear = 10;
+  // Regression fix 2026-07-25: these two were present before the broad
+  // telemetry-field-capture pass and got silently dropped when that pass
+  // rewrote this enum block -- Tesla GPS (at-home detection, map tile,
+  // arrival webhook) and live charge power (session/today kWh) both
+  // depend on these and were quietly broken the whole time as a result.
+  // Caught by an Opus code review, verified against the real upstream
+  // proto (curl https://raw.githubusercontent.com/teslamotors/fleet-telemetry/main/protos/vehicle_data.proto)
+  // before re-adding, not guessed.
+  Location = 21;
+  ACChargingPower = 37;
   GpsState = 22;
   GpsHeading = 23;
   RatedRange = 32;

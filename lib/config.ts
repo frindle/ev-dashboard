@@ -91,13 +91,19 @@ const DEFAULT_CONFIG: AppConfig = {
       vin: '5YJ3E1EA3PF609276',
       name: 'Tesla',
       model: 'Model 3',
-      chargerSide: 'RIGHT',
+      // Must match the wall connector array's side assignment below (the
+      // Tesla-labeled connector is 'LEFT') -- these two were inconsistent
+      // with each other until caught by an Opus code review 2026-07-25.
+      chargerSide: 'LEFT',
       pollingEnabled: true,
     },
     rivian: {
       name: 'Midknight',
       model: 'Rivian R1S',
-      chargerSide: 'LEFT',
+      // Must match the wall connector array's side assignment below (the
+      // Midknight-labeled connector, localIp 10.0.12.29, is 'RIGHT' --
+      // confirmed directly by the user, "8030 is the right connector").
+      chargerSide: 'RIGHT',
       email: '',
       password: '',
     },
