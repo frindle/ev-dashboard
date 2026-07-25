@@ -38,6 +38,7 @@ export interface TeslaVehicleState {
   // in the UI yet, see server/telemetry-server.js for the raw values.
   speedMph?: number;
   gpsHeadingDeg?: number;
+  gearStatus?: string;           // 'park' | 'reverse' | 'neutral' | 'drive' | '' -- mirrors RivianVehicleState.gearStatus
   gpsState?: number;
   locatedAtHome?: boolean;
   locatedAtWork?: boolean;

@@ -112,6 +112,7 @@ export interface DashboardFlags {
   wcDataUnavailable: boolean; // a connected vehicle's wall connector vitals fetch is returning null
   teslaOtaUpdateAvailable: boolean;
   teslaOtaInstalling: boolean;
+  teslaTelemetryDegraded: boolean; // serving poll-fallback data, not live telemetry (see smartFetchTesla)
 }
 
 export interface DashboardData {
@@ -245,13 +246,18 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
       // -- requesting the vehicle_location scope 403s the whole call), so
       // telemetry's Location field is the *only* real GPS source for Tesla.
       const gpsFresh = cache.state.lat !== null && cache.state.lon !== null;
-      return { ...cache.state, _gpsFresh: gpsFresh } as TeslaVehicleState & { _gpsFresh: boolean };
+      return { ...cache.state, _gpsFresh: gpsFresh, _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
     }
     // Poll-sourced data: use the original cadence (30s active / 5min idle).
+    // cache.source !== 'telemetry' here means we've fallen back to polling
+    // (telemetry went silent past TELEMETRY_TRUST_WINDOW_MS, or never
+    // connected) -- surfaced to the dashboard as "telemetry degraded".
     if (cache.source !== 'telemetry') {
       const isActive = cache.state.isCharging || (cache.state.online && cache.state.chargingState === 'Charging');
       const interval = isActive ? TESLA_INTERVAL_ACTIVE_MS : TESLA_INTERVAL_IDLE_MS;
-      if (ageMs < interval) return cache.state;
+      if (ageMs < interval) {
+        return { ...cache.state, _telemetryDegraded: true } as TeslaVehicleState & { _telemetryDegraded: boolean };
+      }
     }
   }
 
@@ -296,11 +302,15 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     }
     // Mutate-attach so the caller can tell what happened. (Avoids changing
     // the public return type while still threading the flag through.)
-    (fresh as TeslaVehicleState & { _gpsFresh?: boolean })._gpsFresh = freshGpsFromPoll;
+    (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._gpsFresh = freshGpsFromPoll;
+    (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = true;
     return fresh;
   }
   // Fetch failed — fall back to cached if we have it so the UI doesn't go blank.
-  if (cache?.state) (cache.state as TeslaVehicleState & { _gpsFresh?: boolean })._gpsFresh = false;
+  if (cache?.state) {
+    (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._gpsFresh = false;
+    (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = true;
+  }
   return cache?.state ?? null;
 }
 
@@ -702,7 +712,12 @@ async function handleGet(req: Request) {
 
   const teslaHome = computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh));
   const teslaAtHome = teslaHome.atHome;
-  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, true, teslaHome.fresh ? teslaHome.atHome : null, 'tesla');
+  // Now that Gear telemetry exposes a real gearStatus (see telemetry-server.js),
+  // use it the same way Rivian's arrival check does. Default to true (the old
+  // hardcoded behavior) when gearStatus is unknown/empty rather than false --
+  // an unset signal shouldn't ever suppress a real arrival.
+  const teslaIsDriving = teslaState?.gearStatus ? teslaState.gearStatus === 'drive' : true;
+  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, teslaIsDriving, teslaHome.fresh ? teslaHome.atHome : null, 'tesla');
 
   const vehicles: VehicleData[] = [
     {
@@ -791,6 +806,7 @@ async function handleGet(req: Request) {
     wcDataUnavailable,
     teslaOtaUpdateAvailable: !!teslaState?.otaUpdateAvailable,
     teslaOtaInstalling: !!teslaState?.otaInstalling,
+    teslaTelemetryDegraded: !!(teslaState as (TeslaVehicleState & { _telemetryDegraded?: boolean }) | null)?._telemetryDegraded,
   };
 
   // Fire-and-forget Pushover notifications for newly raised flags

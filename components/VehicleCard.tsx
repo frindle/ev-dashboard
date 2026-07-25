@@ -58,6 +58,7 @@ export type Vehicle = {
   location: 'home' | 'away';
   place: string;
   speed: number;            // mph
+  heading: number;          // degrees, 0-360 -- compass heading while driving
 };
 
 export type AlertInputs = {
@@ -80,6 +81,16 @@ export type AlertInputs = {
 
   // tesla card
   teslaLocationScope: 'granted' | 'missing';
+  teslaOta:        'none' | 'available' | 'installing';
+  teslaOtaVersion: string;
+  teslaOtaDownloading: boolean; // true = still downloading, false = installing (only meaningful when teslaOta === 'installing')
+  teslaOtaDownloadPct: number;
+  teslaOtaInstallPct: number;
+  teslaOtaEtaMin: number;       // 0 = unknown/omit
+  teslaTireWarn:       'ok' | 'soft' | 'hard';
+  teslaTireCorner:     'FL' | 'FR' | 'RL' | 'RR';
+  teslaPluggedIn:       boolean;
+  teslaTelemetryDegraded: boolean;
 };
 
 type Chip = {
@@ -142,8 +153,32 @@ export function buildChipsFor(veh: Vehicle, a: AlertInputs): Chip[] {
     if (a.rivianWiper === 'low') chips.push(mkChip('neutral',  'wash',       'WIPER FLUID LOW'));
   }
 
-  if (veh.id === 'tesla' && a.teslaLocationScope === 'missing') {
-    chips.push(mkChip('warning', 'location_off', 'LOCATION SCOPE MISSING · RE-AUTH'));
+  if (veh.id === 'tesla') {
+    if (a.teslaLocationScope === 'missing') {
+      chips.push(mkChip('warning', 'location_off', 'LOCATION SCOPE MISSING · RE-AUTH'));
+    }
+    if (a.teslaOta === 'available') {
+      chips.push(mkChip('info', 'system_update', 'UPDATE ' + a.teslaOtaVersion + ' AVAILABLE'));
+    } else if (a.teslaOta === 'installing') {
+      const pct = a.teslaOtaDownloading
+        ? a.teslaOtaDownloadPct + '% DOWNLOADED'
+        : a.teslaOtaInstallPct + '% INSTALLED';
+      const mins = a.teslaOtaEtaMin > 0 ? ' · ~' + a.teslaOtaEtaMin + 'm LEFT' : '';
+      chips.push(mkChip('info', 'sync', 'INSTALLING ' + a.teslaOtaVersion + '\n' + pct + mins,
+        { anim: 'acspin 2s linear infinite' }));
+    }
+    if (a.teslaTireWarn !== 'ok') {
+      const sev: Severity = a.teslaTireWarn === 'hard' ? 'critical' : 'warning';
+      const cornerNames: Record<string, string> = { FL: 'FRONT LEFT', FR: 'FRONT RIGHT', RL: 'REAR LEFT', RR: 'REAR RIGHT' };
+      chips.push(mkChip(sev, 'tire_repair',
+        (cornerNames[a.teslaTireCorner] || a.teslaTireCorner) + ' TIRE · ' + (a.teslaTireWarn === 'hard' ? 'LOW' : 'CHECK')));
+    }
+    if (a.teslaTelemetryDegraded) {
+      chips.unshift(mkChip('critical', 'sensors_off', 'TELEMETRY STALE 30m+ · POLLING FALLBACK'));
+    }
+    if (a.teslaPluggedIn && !veh.charging) {
+      chips.unshift(mkChip('info', 'power', 'PLUGGED IN'));
+    }
   }
 
   return chips;
@@ -319,7 +354,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const a            = alloc(v);
   const etaMin       = etaFor(v, a.kw);
   const canEditLimit = v.ctrl === 'full';   // only Tesla (Fleet API) can set a limit directly
-  const pluggedIn    = v.charging || (v.id === 'rivian' && alerts.rivianPluggedIn);
+  const pluggedIn    = v.charging || (v.id === 'rivian' && alerts.rivianPluggedIn) || (v.id === 'tesla' && alerts.teslaPluggedIn);
 
   // status pill
   let statusLabel: string, statusAccent: boolean, statusPulse: boolean;
@@ -452,10 +487,47 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
 
       {/* ── MIDDLE: dial + mirrored 2x2 stats ── */}
       <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir }}>
+        {/* Driving/away tile — replaces the charge dial while the vehicle is
+            away from home. No live map tile integration exists (design's
+            source used a placeholder image-slot for one) -- this renders a
+            plain dark tile with a heading-arrow/place-pin + real speed and
+            place text instead of fabricating map imagery we don't have. */}
+        {!atHome && (
+          <div style={{
+            position: 'relative', flex: 'none', width: 128, height: 128,
+            borderRadius: 18, overflow: 'hidden', background: '#161c22',
+            border: '1px solid rgba(255,255,255,0.06)'
+          }}>
+            <div style={{
+              position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', gap: 4, pointerEvents: 'none'
+            }}>
+              {v.speed > 0 ? (
+                <svg width={26} height={26} viewBox="0 0 24 24" style={{ position: 'absolute', top: 38, transform: `rotate(${v.heading}deg)` }}>
+                  <path d="M12 2 L20 20 L12 15.5 L4 20 Z" fill={ACCENT} />
+                </svg>
+              ) : (
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 24, color: '#a4afba', position: 'absolute', top: 36 }}>place</span>
+              )}
+              <div style={{ position: 'absolute', bottom: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                {v.speed > 0 && (
+                  <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 18, fontWeight: 700, color: '#e8edf2', lineHeight: 1 }}>
+                    {v.speed} <span style={{ fontSize: 9, fontWeight: 500, color: '#a4afba' }}>mph</span>
+                  </span>
+                )}
+                <span style={{
+                  fontFamily: "'JetBrains Mono', monospace", fontSize: 7.5, letterSpacing: '.1em', color: '#a4afba',
+                  maxWidth: 118, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                }}>{v.place}</span>
+              </div>
+            </div>
+          </div>
+        )}
         {/* Dial wrapper — position:relative anchor for the SOC/limit text
             overlay and the limit-editor popup below. Without this, their
             position:absolute would anchor to the outer card instead of the
             128x128 dial (the card is the nearest OTHER positioned ancestor). */}
+        {atHome && (
         <div style={{ position: 'relative', width: 128, height: 128, flex: 'none' }}>
           <svg width={128} height={128} viewBox="0 0 120 120"
                onClick={onDialTap}
@@ -519,6 +591,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             </div>
           )}
         </div>
+        )}
 
         <div style={{
           display: 'grid', gridTemplateColumns: '1fr 1fr',

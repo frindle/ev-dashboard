@@ -109,6 +109,8 @@ export interface RivianVehicleState {
   gnssSpeedMph: number | null;
   gnssAltitudeM: number | null;
   gnssErrorM: number | null;
+  gnssBearingDeg: number | null; // heading -- gnssError.bearing was already queried but never extracted
+  powerState: string;            // raw powerState.value, e.g. "go" | "ready" -- already logged, not exposed until now
   hvThermalEvent: string;     // batteryHvThermalEvent raw
   hvThermalPropagation: string; // batteryHvThermalEventPropagation raw
   hvThermalActive: boolean;   // true only for a genuine excursion, not the idle "off"/"nominal" values
@@ -631,6 +633,8 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       gnssSpeedMph: vs.gnssSpeed?.value != null ? vs.gnssSpeed.value * 2.23694 : null,
       gnssAltitudeM: vs.gnssAltitude?.value ?? null,
       gnssErrorM: vs.gnssError?.positionHorizontal ?? null,
+      gnssBearingDeg: vs.gnssError?.bearing ?? null,
+      powerState: powerStateRaw,
       hvThermalEvent: hvThermalRaw,
       hvThermalPropagation: hvThermalPropRaw,
       hvThermalActive,

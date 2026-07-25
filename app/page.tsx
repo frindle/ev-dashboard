@@ -63,6 +63,9 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
   const s = v.state;
   const isTesla = v.id === 'tesla';
   const t = isTesla ? (s as TeslaVehicleState | null) : null;
+  const r = !isTesla ? (s as RivianVehicleState | null) : null;
+  const speed = isTesla ? (t?.speedMph ?? 0) : (r?.gnssSpeedMph ?? 0);
+  const heading = isTesla ? (t?.gpsHeadingDeg ?? 0) : (r?.gnssBearingDeg ?? 0);
   return {
     id: v.id,
     charger: v.chargerSide,
@@ -85,8 +88,12 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
     // gotten any GPS at all, in which case default to home rather than
     // false-flagging as AWAY with zero information.
     location: v.atHome === false ? 'away' : 'home',
+    // No reverse-geocoding integration exists (no map/geocoding API
+    // configured) -- a real "I-80 W · Emeryville"-style place label isn't
+    // available, so this stays blank rather than fabricating one.
     place: '',
-    speed: 0,
+    speed: Math.round(speed),
+    heading: Math.round(heading),
   };
 }
 
@@ -94,6 +101,8 @@ function buildAlerts(data: DashboardData): AlertInputs {
   const flags: DashboardFlags = data.flags;
   const rivVeh = data.vehicles.find(v => v.id === 'rivian');
   const rivState = rivVeh?.state as RivianVehicleState | null;
+  const teslaVeh = data.vehicles.find(v => v.id === 'tesla');
+  const teslaState = teslaVeh?.state as TeslaVehicleState | null;
 
   // Pick the worst tire corner to surface (critical > low).
   const tires: Array<[AlertInputs['rivianTireCorner'], string]> = [
@@ -108,6 +117,24 @@ function buildAlerts(data: DashboardData): AlertInputs {
     if (/critical/i.test(v)) { tireStatus = 'critical'; tireCorner = corner; break; }
     if (/low/i.test(v)) { tireStatus = 'low'; tireCorner = corner; }
   }
+
+  // Tesla TPMS gives direct per-corner soft/hard booleans (unlike Rivian's
+  // string-based severity) -- pick the worst, hard wins over soft.
+  const teslaTireCorners: Array<[AlertInputs['teslaTireCorner'], 'front_left' | 'front_right' | 'rear_left' | 'rear_right']> = [
+    ['FL', 'front_left'], ['FR', 'front_right'], ['RL', 'rear_left'], ['RR', 'rear_right'],
+  ];
+  let teslaTireStatus: AlertInputs['teslaTireWarn'] = 'ok';
+  let teslaTireCorner: AlertInputs['teslaTireCorner'] = 'FL';
+  for (const [corner, key] of teslaTireCorners) {
+    if (teslaState?.tpmsHardWarnings?.[key]) { teslaTireStatus = 'hard'; teslaTireCorner = corner; break; }
+    if (teslaState?.tpmsSoftWarnings?.[key]) { teslaTireStatus = 'soft'; teslaTireCorner = corner; }
+  }
+
+  // Tesla OTA download/install progress comes from telemetry (SoftwareUpdate*
+  // fields), separate from the otaStatus/otaInstalling flags which come from
+  // the REST poll -- fields are optional since telemetry may not have pushed
+  // them yet even while otaInstalling is true.
+  const teslaOtaDownloading = !/install/i.test(teslaState?.otaStatus ?? '');
 
   return {
     teslaReauth: flags.teslaReauthRequired ? 'expired' : 'ok',
@@ -129,6 +156,16 @@ function buildAlerts(data: DashboardData): AlertInputs {
     rivianHandleHot: flags.rivianDerateStickyUntilUnplugged,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',
+    teslaOta: flags.teslaOtaInstalling ? 'installing' : flags.teslaOtaUpdateAvailable ? 'available' : 'none',
+    teslaOtaVersion: teslaState?.otaAvailableVersion || teslaState?.otaVersion || '',
+    teslaOtaDownloading,
+    teslaOtaDownloadPct: teslaState?.otaDownloadPercent ?? 0,
+    teslaOtaInstallPct: teslaState?.otaInstallPercent ?? 0,
+    teslaOtaEtaMin: teslaState?.otaExpectedDurationMin ?? 0,
+    teslaTireWarn: teslaTireStatus,
+    teslaTireCorner,
+    teslaPluggedIn: !!teslaState?.isPluggedIn,
+    teslaTelemetryDegraded: flags.teslaTelemetryDegraded,
   };
 }
 
@@ -557,6 +594,10 @@ export default function Dashboard() {
         rivianThermal: 'ok', rivianDerate: '',
         rivianPluggedIn: false, rivianHandleHot: false,
         teslaLocationScope: 'granted',
+        teslaOta: 'none', teslaOtaVersion: '', teslaOtaDownloading: false,
+        teslaOtaDownloadPct: 0, teslaOtaInstallPct: 0, teslaOtaEtaMin: 0,
+        teslaTireWarn: 'ok', teslaTireCorner: 'FL',
+        teslaPluggedIn: false, teslaTelemetryDegraded: false,
       } as AlertInputs;
     }
     return buildAlerts(data);

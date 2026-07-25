@@ -229,10 +229,16 @@ function applyDatum(state, key, value) {
     case 'VehicleSpeed':
       state.speedMph = Number(v) || 0; break;
 
-    // Gear → if we get any gear value the car is awake
-    case 'Gear':
+    // Gear → if we get any gear value the car is awake. Also expose the
+    // actual P/R/N/D value (mirrors Rivian's gearStatus) -- previously
+    // thrown away, which is why the arrival webhook had to hardcode
+    // isDriving=true for Tesla instead of checking a real gear state.
+    case 'Gear': {
       state.online = (v !== null && v !== undefined);
+      const GEAR_MAP = { 2: 'park', 3: 'reverse', 4: 'neutral', 5: 'drive' };
+      state.gearStatus = GEAR_MAP[v] || '';
       break;
+    }
 
     // Security
     // SentryModeState: 0 Unknown, 1 Off, 2 Idle, 3 Armed, 4 Aware, 5 Panic, 6 Quiet
