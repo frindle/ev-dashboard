@@ -135,10 +135,16 @@ function applyDatum(state, key, value) {
   const fieldName = fieldNumberToName.get(key) || `Field${key}`;
   // Extract the populated oneof variant. Tesla packs primitives into typed
   // fields; we read whichever one is present.
+  // Message-typed variants (locationValue, tireLocationValue, timeValue,
+  // doorValue) are objects, not scalars -- their cases below read
+  // value.<name> directly instead of through v, same pattern as Location.
   const v = value.stringValue ?? value.intValue ?? value.longValue
          ?? value.floatValue ?? value.doubleValue ?? value.booleanValue
          ?? value.locationValue ?? value.chargingValue ?? value.shiftStateValue
-         ?? value.detailedChargeStateValue ?? value.hvacPowerValue ?? null;
+         ?? value.detailedChargeStateValue ?? value.hvacPowerValue
+         ?? value.sentryModeStateValue ?? value.chargePortLatchValue
+         ?? value.fastChargerValue ?? value.cableTypeValue
+         ?? value.scheduledChargingModeValue ?? null;
 
   switch (fieldName) {
     // Battery / range
@@ -194,6 +200,12 @@ function applyDatum(state, key, value) {
     // display after it got used for this instead (caught 2026-07-25).
     case 'HvacPower':
       state.climateOn = (v === 2 || v === 3 || v === 4); break;
+    case 'BatteryHeaterOn':
+      state.batteryHeaterOn = Boolean(v); break;
+    case 'PreconditioningEnabled':
+      state.preconditioningEnabled = Boolean(v); break;
+    case 'WiperHeatEnabled':
+      state.wiperHeatEnabled = Boolean(v); break;
 
     // Position
     case 'Location':
@@ -202,11 +214,102 @@ function applyDatum(state, key, value) {
         state.lon = value.locationValue.longitude;
       }
       break;
+    case 'GpsHeading':
+      state.gpsHeadingDeg = Number(v) || 0; break;
+    case 'GpsState':
+      state.gpsState = v; break;
+    case 'LocatedAtHome':
+      state.locatedAtHome = Boolean(v); break;
+    case 'LocatedAtWork':
+      state.locatedAtWork = Boolean(v); break;
+    case 'LocatedAtFavorite':
+      state.locatedAtFavorite = Boolean(v); break;
+
+    // Driving
+    case 'VehicleSpeed':
+      state.speedMph = Number(v) || 0; break;
 
     // Gear → if we get any gear value the car is awake
     case 'Gear':
       state.online = (v !== null && v !== undefined);
       break;
+
+    // Security
+    // SentryModeState: 0 Unknown, 1 Off, 2 Idle, 3 Armed, 4 Aware, 5 Panic, 6 Quiet
+    case 'SentryMode':
+      state.sentryModeState = v; break;
+    case 'ValetModeEnabled':
+      state.valetModeEnabled = Boolean(v); break;
+
+    // Doors -- reuses the Doors message (same type as DoorState).
+    case 'DoorState':
+      if (value.doorValue) state.doorsOpen = value.doorValue;
+      break;
+
+    // Tire pressure -- not surfaced in the UI yet, captured for a future
+    // parity feature with Rivian's tirePressureLow flags.
+    case 'TpmsPressureFl':
+      state.tpmsPressureFl = Number(v) || 0; break;
+    case 'TpmsPressureFr':
+      state.tpmsPressureFr = Number(v) || 0; break;
+    case 'TpmsPressureRl':
+      state.tpmsPressureRl = Number(v) || 0; break;
+    case 'TpmsPressureRr':
+      state.tpmsPressureRr = Number(v) || 0; break;
+    case 'TpmsSoftWarnings':
+      if (value.tireLocationValue) state.tpmsSoftWarnings = value.tireLocationValue;
+      break;
+    case 'TpmsHardWarnings':
+      if (value.tireLocationValue) state.tpmsHardWarnings = value.tireLocationValue;
+      break;
+
+    // Charge port / cable
+    case 'ChargePortDoorOpen':
+      state.chargePortDoorOpen = Boolean(v); break;
+    // ChargePortLatchValue: 0 Unknown, 1 SNA, 2 Disengaged, 3 Engaged, 4 Blocking
+    case 'ChargePortLatch':
+      state.chargePortLatch = v; break;
+    // CableType: 0 Unknown, 1 IEC, 2 SAE, 3 GB_AC, 4 GB_DC, 5 SNA
+    case 'ChargingCableType':
+      state.chargingCableType = v; break;
+    case 'FastChargerPresent':
+      state.fastChargerPresent = Boolean(v); break;
+    // FastCharger: 0 Unknown, 1 Supercharger, 2 CHAdeMO, 3 GB, 4 ACSingleWireCAN,
+    // 5 Combo, 6 MCSingleWireCAN, 7 Other, 8 SNA
+    case 'FastChargerType':
+      state.fastChargerType = v; break;
+
+    // OTA -- not surfaced in the UI yet, the OTA feature currently reads
+    // from the REST poll's vehicle_state.software_update instead. Captured
+    // here so it's available to switch to telemetry (zero poll cost) later.
+    case 'SoftwareUpdateVersion':
+      state.otaVersion = v; break;
+    case 'SoftwareUpdateDownloadPercentComplete':
+      state.otaDownloadPercent = Number(v) || 0; break;
+    case 'SoftwareUpdateInstallationPercentComplete':
+      state.otaInstallPercent = Number(v) || 0; break;
+    case 'SoftwareUpdateExpectedDurationMinutes':
+      state.otaExpectedDurationMin = Number(v) || 0; break;
+    case 'SoftwareUpdateScheduledStartTime':
+      if (value.timeValue) state.otaScheduledStartTime = value.timeValue;
+      break;
+
+    // Scheduled charging -- not surfaced in the UI yet.
+    case 'ScheduledChargingPending':
+      state.scheduledChargingPending = Boolean(v); break;
+    case 'ScheduledChargingStartTime':
+      if (value.timeValue) state.scheduledChargingStartTime = value.timeValue;
+      break;
+    case 'ScheduledDepartureTime':
+      if (value.timeValue) state.scheduledDepartureTime = value.timeValue;
+      break;
+    // ScheduledChargingModeValue: 0 Unknown, 1 Off, 2 StartAt, 3 DepartBy
+    case 'ScheduledChargingMode':
+      state.scheduledChargingMode = v; break;
+
+    // Trip stats -- not surfaced in the UI yet.
+    case 'MilesSinceReset':
+      state.milesSinceReset = Number(v) || 0; break;
 
     default:
       if (process.env.TELEMETRY_DEBUG === '1') {
