@@ -85,7 +85,45 @@ PAYLOAD=$(jq -n \
         ChargeAmps:          { interval_seconds: 30 },
         ChargeRateMilePerHour: { interval_seconds: 30 },
         ChargerVoltage:      { interval_seconds: 300 },
-        ACChargingPower:     { interval_seconds: 30 }
+        ACChargingPower:     { interval_seconds: 30 },
+
+        # Broad capture, mostly not surfaced in the UI yet -- pulled in per
+        # "grab anything we may ever want, even if we just dump it for now"
+        # (2026-07-25). See TeslaVehicleState in lib/tesla.ts for the fields
+        # these land on and telemetry-server.js for the raw mapping.
+        VehicleSpeed:        { interval_seconds: 10 },
+        GpsHeading:          { interval_seconds: 30 },
+        GpsState:            { interval_seconds: 60 },
+        LocatedAtHome:       { interval_seconds: 60 },
+        LocatedAtWork:       { interval_seconds: 300 },
+        LocatedAtFavorite:   { interval_seconds: 300 },
+        SentryMode:          { interval_seconds: 60 },
+        ValetModeEnabled:    { interval_seconds: 300 },
+        DoorState:           { interval_seconds: 30 },
+        TpmsPressureFl:      { interval_seconds: 300 },
+        TpmsPressureFr:      { interval_seconds: 300 },
+        TpmsPressureRl:      { interval_seconds: 300 },
+        TpmsPressureRr:      { interval_seconds: 300 },
+        TpmsSoftWarnings:    { interval_seconds: 300 },
+        TpmsHardWarnings:    { interval_seconds: 300 },
+        ChargePortDoorOpen:  { interval_seconds: 60 },
+        ChargePortLatch:     { interval_seconds: 60 },
+        ChargingCableType:   { interval_seconds: 300 },
+        FastChargerPresent:  { interval_seconds: 30 },
+        FastChargerType:     { interval_seconds: 300 },
+        BatteryHeaterOn:     { interval_seconds: 60 },
+        PreconditioningEnabled: { interval_seconds: 60 },
+        WiperHeatEnabled:    { interval_seconds: 60 },
+        SoftwareUpdateVersion: { interval_seconds: 600 },
+        SoftwareUpdateDownloadPercentComplete: { interval_seconds: 30 },
+        SoftwareUpdateInstallationPercentComplete: { interval_seconds: 30 },
+        SoftwareUpdateExpectedDurationMinutes: { interval_seconds: 60 },
+        SoftwareUpdateScheduledStartTime: { interval_seconds: 300 },
+        ScheduledChargingPending: { interval_seconds: 300 },
+        ScheduledChargingStartTime: { interval_seconds: 300 },
+        ScheduledDepartureTime: { interval_seconds: 300 },
+        ScheduledChargingMode: { interval_seconds: 300 },
+        MilesSinceReset:     { interval_seconds: 600 }
       }
     }
   }')

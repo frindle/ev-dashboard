@@ -37,10 +37,16 @@ message Value {
     ChargeState charging_value = 8;
     ShiftState shift_state_value = 9;
     Invalid invalid = 10;
+    ScheduledChargingModeValue scheduled_charging_mode_value = 12;
+    SentryModeState sentry_mode_state_value = 13;
+    ChargePortLatchValue charge_port_latch_value = 19;
     Doors door_value = 21;
     TimeValue time_value = 31;
     DetailedChargeStateValue detailed_charge_state_value = 32;
     HvacPowerState hvac_power_value = 38;
+    TireLocation tire_location_value = 39;
+    FastCharger fast_charger_value = 40;
+    CableType cable_type_value = 41;
   }
 }
 
@@ -86,6 +92,60 @@ enum HvacPowerState {
   HvacPowerStateOverheatProtect = 4;
 }
 
+enum ScheduledChargingModeValue {
+  ScheduledChargingModeUnknown = 0;
+  ScheduledChargingModeOff = 1;
+  ScheduledChargingModeStartAt = 2;
+  ScheduledChargingModeDepartBy = 3;
+}
+
+enum SentryModeState {
+  SentryModeStateUnknown = 0;
+  SentryModeStateOff = 1;
+  SentryModeStateIdle = 2;
+  SentryModeStateArmed = 3;
+  SentryModeStateAware = 4;
+  SentryModeStatePanic = 5;
+  SentryModeStateQuiet = 6;
+}
+
+enum ChargePortLatchValue {
+  ChargePortLatchUnknown = 0;
+  ChargePortLatchSNA = 1;
+  ChargePortLatchDisengaged = 2;
+  ChargePortLatchEngaged = 3;
+  ChargePortLatchBlocking = 4;
+}
+
+enum FastCharger {
+  FastChargerUnknown = 0;
+  FastChargerSupercharger = 1;
+  FastChargerCHAdeMO = 2;
+  FastChargerGB = 3;
+  FastChargerACSingleWireCAN = 4;
+  FastChargerCombo = 5;
+  FastChargerMCSingleWireCAN = 6;
+  FastChargerOther = 7;
+  FastChargerSNA = 8;
+}
+
+enum CableType {
+  CableTypeUnknown = 0;
+  CableTypeIEC = 1;
+  CableTypeSAE = 2;
+  CableTypeGB_AC = 3;
+  CableTypeGB_DC = 4;
+  CableTypeSNA = 5;
+}
+
+// Per-tire boolean set, used by TpmsSoftWarnings/TpmsHardWarnings.
+message TireLocation {
+  bool front_left = 1;
+  bool front_right = 2;
+  bool rear_left = 3;
+  bool rear_right = 4;
+}
+
 enum ShiftState {
   ShiftStateUnknown = 0;
   ShiftStateInvalid = 1;
@@ -126,21 +186,52 @@ enum Field {
   Odometer = 5;
   Soc = 8;
   Gear = 10;
-  Location = 21;
+  GpsState = 22;
+  GpsHeading = 23;
   RatedRange = 32;
+  FastChargerPresent = 39;
   ChargeLimitSoc = 38;
   EstBatteryRange = 40;
   IdealBatteryRange = 41;
   BatteryLevel = 42;
   TimeToFullCharge = 43;
+  ScheduledChargingStartTime = 44;
+  ScheduledChargingPending = 45;
+  ScheduledDepartureTime = 46;
+  PreconditioningEnabled = 47;
+  ScheduledChargingMode = 48;
   ChargeAmps = 49;
+  BatteryHeaterOn = 55;
+  DoorState = 58;
   Locked = 59;
+  SentryMode = 65;
+  TpmsPressureFl = 69;
+  TpmsPressureFr = 70;
+  TpmsPressureRl = 71;
+  TpmsPressureRr = 72;
   VehicleName = 64;
   InsideTemp = 85;
   OutsideTemp = 86;
   DetailedChargeState = 179;
+  ChargePortDoorOpen = 183;
   ChargerVoltage = 184;
+  ChargingCableType = 185;
+  FastChargerType = 193;
   HvacACEnabled = 196;
   HvacPower = 201;
+  SoftwareUpdateDownloadPercentComplete = 216;
+  SoftwareUpdateExpectedDurationMinutes = 217;
+  SoftwareUpdateInstallationPercentComplete = 218;
+  SoftwareUpdateScheduledStartTime = 219;
+  SoftwareUpdateVersion = 220;
+  TpmsHardWarnings = 224;
+  TpmsSoftWarnings = 225;
+  ValetModeEnabled = 226;
+  WiperHeatEnabled = 228;
+  LocatedAtHome = 229;
+  LocatedAtWork = 230;
+  LocatedAtFavorite = 231;
+  ChargePortLatch = 118;
+  MilesSinceReset = 258;
   ChargeRateMilePerHour = 256;
 }

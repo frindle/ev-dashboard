@@ -30,6 +30,47 @@ export interface TeslaVehicleState {
   otaAvailableVersion: string;
   otaInstalling: boolean;
   otaUpdateAvailable: boolean;
+
+  // Telemetry-only fields below -- the REST poll path (fetchVehicleState)
+  // doesn't populate these, so they're optional rather than defaulted.
+  // Captured per the user's "pull anything we may ever want, even if we
+  // just dump it for now" direction (2026-07-25) -- most aren't surfaced
+  // in the UI yet, see server/telemetry-server.js for the raw values.
+  speedMph?: number;
+  gpsHeadingDeg?: number;
+  gpsState?: number;
+  locatedAtHome?: boolean;
+  locatedAtWork?: boolean;
+  locatedAtFavorite?: boolean;
+  sentryModeState?: number;      // 0 Unknown, 1 Off, 2 Idle, 3 Armed, 4 Aware, 5 Panic, 6 Quiet
+  valetModeEnabled?: boolean;
+  doorsOpen?: { front_left: boolean; front_right: boolean; rear_left: boolean; rear_right: boolean };
+  tpmsPressureFl?: number;
+  tpmsPressureFr?: number;
+  tpmsPressureRl?: number;
+  tpmsPressureRr?: number;
+  tpmsSoftWarnings?: { front_left: boolean; front_right: boolean; rear_left: boolean; rear_right: boolean };
+  tpmsHardWarnings?: { front_left: boolean; front_right: boolean; rear_left: boolean; rear_right: boolean };
+  chargePortDoorOpen?: boolean;
+  chargePortLatch?: number;      // 0 Unknown, 1 SNA, 2 Disengaged, 3 Engaged, 4 Blocking
+  chargingCableType?: number;    // 0 Unknown, 1 IEC, 2 SAE, 3 GB_AC, 4 GB_DC, 5 SNA
+  fastChargerPresent?: boolean;
+  fastChargerType?: number;      // 0 Unknown, 1 Supercharger, 2 CHAdeMO, 3 GB, 4 ACSingleWireCAN, 5 Combo, 6 MCSingleWireCAN, 7 Other, 8 SNA
+  batteryHeaterOn?: boolean;
+  preconditioningEnabled?: boolean;
+  wiperHeatEnabled?: boolean;
+  // OTA via telemetry (not wired into the otaStatus/otaAvailableVersion
+  // fields above yet -- those still come from the REST poll).
+  otaVersion?: string;
+  otaDownloadPercent?: number;
+  otaInstallPercent?: number;
+  otaExpectedDurationMin?: number;
+  otaScheduledStartTime?: { hour: number; minute: number; second: number };
+  scheduledChargingPending?: boolean;
+  scheduledChargingStartTime?: { hour: number; minute: number; second: number };
+  scheduledDepartureTime?: { hour: number; minute: number; second: number };
+  scheduledChargingMode?: number; // 0 Unknown, 1 Off, 2 StartAt, 3 DepartBy
+  milesSinceReset?: number;
 }
 
 export interface WallConnectorVitals {
