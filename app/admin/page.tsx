@@ -465,7 +465,18 @@ export default function AdminPage() {
               <select
                 className="form-select"
                 value={config.vehicles.tesla.chargerSide}
-                onChange={e => update('vehicles', { tesla: { ...config.vehicles.tesla, chargerSide: e.target.value as 'LEFT' | 'RIGHT' } })}
+                onChange={e => {
+                  // Only Rivian's chargerSide actually drives which wall connector
+                  // each vehicle's data comes from (server derives Tesla's side as
+                  // the complement) — keep this field in lockstep so it can never
+                  // silently disagree with what's actually displayed.
+                  const side = e.target.value as 'LEFT' | 'RIGHT';
+                  const oppositeSide = side === 'LEFT' ? 'RIGHT' : 'LEFT';
+                  update('vehicles', {
+                    tesla: { ...config.vehicles.tesla, chargerSide: side },
+                    rivian: { ...config.vehicles.rivian, chargerSide: oppositeSide },
+                  });
+                }}
               >
                 <option value="LEFT">LEFT</option>
                 <option value="RIGHT">RIGHT</option>
@@ -579,7 +590,14 @@ export default function AdminPage() {
               <select
                 className="form-select"
                 value={config.vehicles.rivian.chargerSide}
-                onChange={e => update('vehicles', { rivian: { ...config.vehicles.rivian, chargerSide: e.target.value as 'LEFT' | 'RIGHT' } })}
+                onChange={e => {
+                  const side = e.target.value as 'LEFT' | 'RIGHT';
+                  const oppositeSide = side === 'LEFT' ? 'RIGHT' : 'LEFT';
+                  update('vehicles', {
+                    rivian: { ...config.vehicles.rivian, chargerSide: side },
+                    tesla: { ...config.vehicles.tesla, chargerSide: oppositeSide },
+                  });
+                }}
               >
                 <option value="LEFT">LEFT</option>
                 <option value="RIGHT">RIGHT</option>

@@ -755,8 +755,13 @@ async function handleGet(req: Request) {
 
   // Integrate live power into session/today kWh. Appends a row to the history
   // log when a session ends (transition from active → idle).
-  const leftVehicleName  = cfg.energySite.wallConnectors.find(w => w.side === 'LEFT')?.vehicleName  ?? 'Rivian';
-  const rightVehicleName = cfg.energySite.wallConnectors.find(w => w.side === 'RIGHT')?.vehicleName ?? 'Tesla';
+  // Derived from rivianSide/teslaSide (both from cfg.vehicles.*.chargerSide) --
+  // NOT from cfg.energySite.wallConnectors[].vehicleName, which is a separate
+  // stored field the admin panel never edits and could silently drift out of
+  // sync with chargerSide (the actual bug: swapping sides in admin flipped
+  // which vitals showed on each side without flipping the label to match).
+  const leftVehicleName  = rivianSide === 'LEFT'  ? cfg.vehicles.rivian.name : cfg.vehicles.tesla.name;
+  const rightVehicleName = rivianSide === 'RIGHT' ? cfg.vehicles.rivian.name : cfg.vehicles.tesla.name;
   // Only Rivian ever reports isThrottled today (Tesla's API doesn't expose
   // it — always false there), matched to whichever side it's actually
   // wired to rather than assumed.
