@@ -10,7 +10,7 @@
   "dependencies": {
     "flatbuffers": "^25.9.23",
     "leaflet": "^1.9.4",
-    "next": "15.3.3",
+    "next": "16.2.12",
     "protobufjs": "^7.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
