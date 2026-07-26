@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:26-alpine AS base
 
 # Build Tesla's vehicle-command HTTP proxy from source. Required for any
 # Fleet API endpoint that demands a signed request (fleet_telemetry_config,
