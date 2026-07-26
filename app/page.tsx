@@ -513,7 +513,21 @@ export default function Dashboard() {
   useEffect(() => {
     fetchData();
     const t = setInterval(fetchData, REFRESH_MS);
-    return () => clearInterval(t);
+    // iPadOS Safari suspends timers while the tab is backgrounded or the
+    // screen is off, so the kiosk can sit on a snapshot from minutes ago and
+    // only catch up when someone manually reloads. Re-poll the moment the
+    // page becomes visible again (or the network comes back) so what's on
+    // screen is never older than REFRESH_MS of actual foreground time.
+    const wake = () => { if (document.visibilityState === 'visible') fetchData(); };
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('pageshow', wake);
+    window.addEventListener('online', wake);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('pageshow', wake);
+      window.removeEventListener('online', wake);
+    };
   }, [fetchData]);
 
   async function sendCommand(cmd: string, params?: Record<string, unknown>) {
