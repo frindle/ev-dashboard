@@ -636,7 +636,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
         borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir }}>
-          {v.ctrl === 'full' && (
+          {v.ctrl === 'full' && (v.charging || pluggedIn) && (
             <button onClick={() => onToggleCharging(v)} style={{
               appearance: 'none', cursor: 'pointer', flex: 'none',
               padding: '10px 18px', borderRadius: 11,

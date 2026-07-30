@@ -383,11 +383,11 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
           </button>
         </div>
         {/* Video area */}
-        <div style={{ position: 'relative', aspectRatio: '16/9', background: 'radial-gradient(120% 90% at 50% 30%, #1c252e 0%, #0c1014 100%)', overflow: 'hidden' }}>
+        <div style={{ position: 'relative', aspectRatio: '1/1', background: 'radial-gradient(120% 90% at 50% 30%, #1c252e 0%, #0c1014 100%)', overflow: 'hidden' }}>
           {streamUrl && !imgError ? (
             <img
               src={`/api/camera/stream?k=${reloadKey}`}
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               alt="Camera"
               onError={reportCameraError}
               onLoad={onFrame}
