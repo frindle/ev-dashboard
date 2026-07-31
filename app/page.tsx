@@ -149,13 +149,11 @@ function buildAlerts(data: DashboardData): AlertInputs {
     rivianWiper: flags.rivianWiperFluidLow ? 'low' : 'ok',
     rivianBrake: flags.rivianBrakeFluidLow ? 'low' : 'ok',
     rivianThermal: flags.rivianHvThermalEvent ? 'detected' : 'ok',
-    rivianDerate: flags.rivianDerateReason ?? '',
+    // Sticky reason text, not the live one — rivianDerateReason clears the
+    // instant isThrottled flips false, but the chip should persist (with
+    // its reason) for the whole plug-in cycle, per the user's actual ask.
+    rivianDerate: flags.rivianDerateStickyUntilUnplugged ? (flags.rivianDerateStickyReason ?? '') : '',
     rivianPluggedIn: flags.rivianPluggedIn,
-    // Same underlying phenomenon as rivianDerate/rivianDerateActive
-    // (throttling from max down to ~5kW), but sticky until unplugged rather
-    // than clearing the instant the derate condition itself clears —
-    // confirmed with the user this is the desired persistence for this chip.
-    rivianHandleHot: flags.rivianDerateStickyUntilUnplugged,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',
     teslaOta: flags.teslaOtaInstalling ? 'installing' : flags.teslaOtaUpdateAvailable ? 'available' : 'none',
@@ -594,7 +592,7 @@ export default function Dashboard() {
         rivianTire: 'ok', rivianTireCorner: 'FL',
         rivianWiper: 'ok', rivianBrake: 'ok',
         rivianThermal: 'ok', rivianDerate: '',
-        rivianPluggedIn: false, rivianHandleHot: false,
+        rivianPluggedIn: false,
         teslaLocationScope: 'granted',
         teslaOta: 'none', teslaOtaVersion: '', teslaOtaDownloading: false,
         teslaOtaDownloadPct: 0, teslaOtaInstallPct: 0, teslaOtaEtaMin: 0,

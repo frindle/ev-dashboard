@@ -101,6 +101,9 @@ export interface DashboardFlags {
   // Sticky until unplugged (not until charging stops) -- distinct from
   // rivianDerateActive, which clears the instant the derate itself clears.
   rivianDerateStickyUntilUnplugged: boolean;
+  // Reason text for the whole sticky window — rivianDerateReason clears the
+  // instant isThrottled flips false, which is too soon for a sticky chip.
+  rivianDerateStickyReason: string | null;
   rivianPluggedIn: boolean;
   rivianHvThermalEvent: boolean;
   rivianTirePressureLow: boolean;
@@ -458,6 +461,11 @@ interface RivianCache {
   // resets when charging stops (e.g. reaching the limit) even if still
   // plugged in -- this one specifically wants "until unplugged."
   throttledSincePluggedIn?: boolean;
+  // Last non-empty derate reason seen this plug-in cycle — isThrottled/
+  // derateReason clear the instant the condition lifts, but the sticky
+  // "CHARGING RATE THROTTLED" chip needs a reason to show for the whole
+  // sticky window, not just the moments derate is actively live.
+  lastDerateReason?: string;
   // legacy shape (pre full-state cache) — file held bare coords
   lat?: number | null;
   lon?: number | null;
@@ -549,6 +557,7 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
       const cachedGnssFresh = cachedGnssMs > 0 && Date.now() - cachedGnssMs < GPS_STALE_MS;
       (cache.state as RivianVehicleState & { _gpsFresh?: boolean; _throttledSincePluggedIn?: boolean })._gpsFresh = cachedGnssFresh;
       (cache.state as RivianVehicleState & { _throttledSincePluggedIn?: boolean })._throttledSincePluggedIn = !!cache.throttledSincePluggedIn;
+      (cache.state as RivianVehicleState & { _lastDerateReason?: string })._lastDerateReason = cache.lastDerateReason;
       return cache.state;
     }
   }
@@ -560,6 +569,7 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
     if (cache.state) {
       (cache.state as RivianVehicleState & { _gpsFresh?: boolean; _throttledSincePluggedIn?: boolean })._gpsFresh = false;
       (cache.state as RivianVehicleState & { _throttledSincePluggedIn?: boolean })._throttledSincePluggedIn = !!cache.throttledSincePluggedIn;
+      (cache.state as RivianVehicleState & { _lastDerateReason?: string })._lastDerateReason = cache.lastDerateReason;
       return cache.state;
     }
     return null;
@@ -593,11 +603,14 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   // throttledSincePluggedIn comment.
   const throttledSincePluggedIn = !fresh.isPluggedIn ? false
     : (fresh.isThrottled || !!cache.throttledSincePluggedIn);
+  const lastDerateReason = !fresh.isPluggedIn ? undefined
+    : (fresh.isThrottled ? fresh.derateReason : cache.lastDerateReason);
   try {
-    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt, chargeStartedAt, throttledSincePluggedIn } satisfies RivianCache));
+    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt, chargeStartedAt, throttledSincePluggedIn, lastDerateReason } satisfies RivianCache));
   } catch { /* non-fatal */ }
   (fresh as RivianVehicleState & { _gpsFresh?: boolean; _throttledSincePluggedIn?: boolean })._gpsFresh = freshGpsFromPoll;
   (fresh as RivianVehicleState & { _throttledSincePluggedIn?: boolean })._throttledSincePluggedIn = throttledSincePluggedIn;
+  (fresh as RivianVehicleState & { _lastDerateReason?: string })._lastDerateReason = lastDerateReason;
   return fresh;
 }
 
@@ -812,6 +825,9 @@ async function handleGet(req: Request) {
     rivianDerateActive: !!rivState?.isThrottled,
     rivianDerateReason: rivState?.isThrottled ? rivState.derateReason : null,
     rivianDerateStickyUntilUnplugged: !!(rivState as (RivianVehicleState & { _throttledSincePluggedIn?: boolean }) | null)?._throttledSincePluggedIn,
+    // Persists for the whole sticky window, unlike rivianDerateReason above
+    // which clears the instant isThrottled itself flips false.
+    rivianDerateStickyReason: (rivState as (RivianVehicleState & { _lastDerateReason?: string }) | null)?._lastDerateReason ?? null,
     rivianPluggedIn: !!rivState?.isPluggedIn,
     rivianHvThermalEvent: !!rivState?.hvThermalActive,
     rivianTirePressureLow: tirePressureLow,
@@ -841,6 +857,8 @@ async function handleGet(req: Request) {
       rivianOtaAvailableVersion: rivState?.otaAvailableVersion ?? '',
       teslaOtaUpdateAvailable: flags.teslaOtaUpdateAvailable,
       teslaOtaAvailableVersion: teslaState?.otaAvailableVersion ?? '',
+      rivianThrottled: flags.rivianDerateActive,
+      rivianThrottleReason: flags.rivianDerateReason,
     });
   } catch (e) {
     console.warn('[notify] failed:', String(e).slice(0, 160));

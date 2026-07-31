@@ -82,9 +82,8 @@ export type AlertInputs = {
   rivianWiper:      'ok' | 'low';
   rivianBrake:      'ok' | 'low';
   rivianThermal:    'ok' | 'detected';
-  rivianDerate:     string;           // non-empty = fire
+  rivianDerate:     string;           // non-empty = fire; sticky until unplugged (see page.tsx)
   rivianPluggedIn:  boolean;          // "PLUGGED IN" chip — shown only while NOT charging (redundant if charging)
-  rivianHandleHot:  boolean;          // "CHARGING RATE THROTTLED" chip
 
   // tesla card
   teslaLocationScope: 'granted' | 'missing';
@@ -121,10 +120,7 @@ export function buildChipsFor(veh: Vehicle, a: AlertInputs): Chip[] {
   const chips: Chip[] = [];
 
   if (veh.id === 'rivian') {
-    // Handle-hot + plugged-in unshift LAST so they read first of all (most current status)
-    if (a.rivianHandleHot) {
-      chips.unshift(mkChip('warning', 'device_thermostat', 'CHARGING RATE THROTTLED'));
-    }
+    // Plugged-in unshifts LAST so it reads first of all (most current status)
     if (a.rivianPluggedIn && !veh.charging) {
       // Only show "plugged in" when it's the useful signal — i.e. plugged in but
       // NOT charging. While charging, plugged-in is implied; showing the chip then is redundant.
@@ -138,7 +134,7 @@ export function buildChipsFor(veh: Vehicle, a: AlertInputs): Chip[] {
         { anim: 'evpulse 1.6s ease-in-out infinite' }));
     } else if (a.rivianDerate?.trim()) {
       chips.push(mkChip('warning', 'device_thermostat',
-        'CHARGING SLOWED — ' + a.rivianDerate.trim().toUpperCase()));
+        'CHARGING THROTTLED — ' + a.rivianDerate.trim().toUpperCase()));
     }
 
     if (a.rivianOta === 'available') {

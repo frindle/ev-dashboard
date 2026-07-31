@@ -1,5 +1,8 @@
 import { sendPush } from './pushover';
-import { shouldPushOncePerLapse, shouldPushDueSoonOnce, shouldPushOtaOnce } from './sessionFlags';
+import {
+  shouldPushOncePerLapse, shouldPushDueSoonOnce, shouldPushOtaOnce,
+  shouldPushThrottleOnce, clearRivianThrottleDedup,
+} from './sessionFlags';
 
 // Fired from the dashboard poll after flags are computed. Each event is
 // deduped through a persisted stamp in session-flags.json, so a flag that
@@ -15,6 +18,8 @@ export interface NotifyInput {
   rivianOtaAvailableVersion: string;
   teslaOtaUpdateAvailable: boolean;
   teslaOtaAvailableVersion: string;
+  rivianThrottled: boolean;
+  rivianThrottleReason: string | null;
 }
 
 export function notifyFlagChanges(n: NotifyInput): void {
@@ -56,5 +61,18 @@ export function notifyFlagChanges(n: NotifyInput): void {
       'EV Dashboard — Tesla software update available',
       `Version ${n.teslaOtaAvailableVersion} is available for the Tesla.`,
     );
+  }
+
+  if (n.rivianThrottled) {
+    if (shouldPushThrottleOnce()) {
+      void sendPush(
+        'EV Dashboard — Rivian charging throttled',
+        `Charge rate is being reduced (${n.rivianThrottleReason || 'reason unknown'}).`,
+      );
+    }
+  } else {
+    // Not throttled right now — clear the dedup stamp so the next
+    // throttle event (a new lapse, not a continuation) pushes again.
+    clearRivianThrottleDedup();
   }
 }

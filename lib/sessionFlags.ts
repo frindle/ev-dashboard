@@ -15,6 +15,8 @@ export interface SessionFlags {
   // OTA push-dedupe: last version we notified about, per vehicle.
   rivian_ota_notified_version?: string;
   tesla_ota_notified_version?: string;
+
+  rivian_throttle_pushover_at?: number;
 }
 
 function flagsPath(): string {
@@ -118,4 +120,21 @@ export function shouldPushOtaOnce(vehicle: 'rivian' | 'tesla', version: string):
   if (f[key] === version) return false;
   mutate(g => { g[key] = version; });
   return true;
+}
+
+// Rivian charge-throttle: unlike reauth (persisted until the underlying
+// problem is fixed), isThrottled is re-derived live from vehicle state on
+// every poll — push once when it starts, and the caller clears the dedup
+// stamp once it stops, so the *next* throttle event pushes again too.
+export function shouldPushThrottleOnce(): boolean {
+  const f = readFlags();
+  if (f.rivian_throttle_pushover_at) return false;
+  mutate(g => { g.rivian_throttle_pushover_at = Date.now(); });
+  return true;
+}
+
+export function clearRivianThrottleDedup(): void {
+  mutate(f => {
+    if (f.rivian_throttle_pushover_at) delete f.rivian_throttle_pushover_at;
+  });
 }
