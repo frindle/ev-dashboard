@@ -459,6 +459,11 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: statusDot, animation: statusAnim }} />
             {statusLabel}
           </span>
+          {/* Lock/AC control only exists via the Tesla Fleet API today — Rivian
+              has no wired command path, so these must not render on that card
+              (they used to render unconditionally and silently hit Tesla's
+              command endpoint regardless of which card was tapped). */}
+          {v.ctrl === 'full' && (
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onToggleLock(v)} title={v.locked ? 'Locked' : 'Unlocked'} style={{
               appearance: 'none', cursor: 'pointer', width: 42, height: 42,
@@ -485,6 +490,35 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               }}>mode_fan</span>
             </button>
           </div>
+          )}
+          {/* Rivian has no command API, but lib/rivian.ts does read real
+              isLocked/climateOn state via GraphQL — show it read-only
+              (same icon/color scheme as the Tesla buttons, just no
+              cursor/onClick) instead of hiding the info entirely. */}
+          {v.ctrl !== 'full' && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div title={v.locked ? 'Locked' : 'Unlocked'} style={{
+              width: 42, height: 42, opacity: 0.7,
+              borderRadius: 12, background: v.locked ? '#1b232b' : 'rgba(226,104,95,0.16)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              color: v.locked ? '#a4afba' : '#e2685f',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 22, lineHeight: 1 }}>
+                {v.locked ? 'lock' : 'lock_open'}
+              </span>
+            </div>
+            <div title={v.ac ? 'AC on' : 'AC off'} style={{
+              width: 42, height: 42, opacity: 0.7,
+              borderRadius: 12, background: v.ac ? ACCENT_SOFT : '#1b232b',
+              border: '1px solid rgba(255,255,255,0.06)',
+              color: v.ac ? ACCENT : '#a4afba',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 23, lineHeight: 1 }}>mode_fan</span>
+            </div>
+          </div>
+          )}
         </div>
       </div>
 
@@ -647,6 +681,14 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               color: '#a4afba', fontFamily: "'JetBrains Mono', monospace",
               fontSize: 10.5, letterSpacing: '.04em'
             }}>SCHEDULE ONLY</span>
+          )}
+          {v.ctrl === 'full' && !v.charging && !pluggedIn && (
+            <span style={{
+              flex: 'none', padding: '10px 14px', borderRadius: 11,
+              background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)',
+              color: '#a4afba', fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10.5, letterSpacing: '.04em'
+            }}>NOT PLUGGED IN</span>
           )}
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,

@@ -63,7 +63,10 @@ export async function POST(req: NextRequest) {
         result = await stopCharging(vin);
         break;
       case 'set_charge_limit': {
-        const percent = params?.percent as number;
+        const percent = params?.percent;
+        if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 50 || percent > 100) {
+          return Response.json({ error: 'percent must be a number between 50 and 100' }, { status: 400 });
+        }
         result = await setChargeLimit(vin, percent);
         if (result) await patchTeslaCache({ chargeLimit: percent });
         break;

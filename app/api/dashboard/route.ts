@@ -11,7 +11,6 @@ import {
   WallConnectorVitals,
 } from '@/lib/tesla';
 import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/lib/rivian';
-import { getDoorState, hasMyQTokens } from '@/lib/myq';
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
@@ -41,19 +40,36 @@ export interface VehicleData {
 const RIVIAN_ARRIVAL_FLAG_FILE = 'rivian-arrival-notified.json';
 const TESLA_ARRIVAL_FLAG_FILE = 'tesla-arrival-notified.json';
 
+// ponytail: module-level in-memory lock, not cross-process — fine here since
+// this route always runs in a single Next.js server process. Guards against
+// two overlapping /api/dashboard requests both reading "not yet notified"
+// before either has written the flag file, which would double-fire the
+// webhook. Upgrade to a real file lock if this ever runs multi-process.
+const arrivalCheckInFlight = new Set<string>();
+
 async function checkVehicleArrival(webhookUrl: string, flagFile: string, isDriving: boolean, atHome: boolean | null, label: string): Promise<void> {
   if (!webhookUrl) return;
+  if (arrivalCheckInFlight.has(flagFile)) return; // a concurrent request is already handling this vehicle
+  arrivalCheckInFlight.add(flagFile);
 
-  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
-  const path = join(dir, flagFile);
-  const wasNotified = existsSync(path);
+  try {
+    const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+    const path = join(dir, flagFile);
+    const wasNotified = existsSync(path);
 
-  if (atHome !== true) {
-    if (wasNotified) await unlink(path).catch(() => null);
-    return;
+    if (atHome !== true) {
+      if (wasNotified) await unlink(path).catch(() => null);
+      return;
+    }
+    if (!isDriving || wasNotified) return;
+
+    await fireArrivalWebhook(webhookUrl, path, label);
+  } finally {
+    arrivalCheckInFlight.delete(flagFile);
   }
-  if (!isDriving || wasNotified) return;
+}
 
+async function fireArrivalWebhook(webhookUrl: string, path: string, label: string): Promise<void> {
   try {
     const res = await fetch(webhookUrl, { method: 'POST' });
     if (!res.ok) {
@@ -123,8 +139,6 @@ export interface DashboardData {
   vehicles: VehicleData[];
   wallConnectors: WallConnectorData[];
   weather: WeatherData | null;
-  garageConnected: boolean;
-  garageDoorOpen: boolean | null;
   streamUrl: string;
   lastUpdated: string;
   teslaConnected: boolean;
@@ -413,8 +427,17 @@ async function updateSessionKwh(
   const left  = step(file.left,  'LEFT',  leftVehicleName,  leftPowerW,  leftInUse,  leftThrottled);
   const right = step(file.right, 'RIGHT', rightVehicleName, rightPowerW, rightInUse, rightThrottled);
 
-  try { await writeFile(path, JSON.stringify({ left, right } satisfies SessionFile)); }
-  catch { /* non-fatal */ }
+  // Dirty-check before writing every poll cycle: lastUpdate always changes
+  // (it's stamped "now" on every call) so it's excluded from the comparison
+  // — otherwise nothing would ever count as unchanged.
+  const meaningful = (r: SessionRecord) => { const { lastUpdate: _lastUpdate, ...rest } = r; return rest; };
+  const unchanged = JSON.stringify(meaningful(left)) === JSON.stringify(meaningful(file.left))
+    && JSON.stringify(meaningful(right)) === JSON.stringify(meaningful(file.right));
+
+  if (!unchanged) {
+    try { await writeFile(path, JSON.stringify({ left, right } satisfies SessionFile)); }
+    catch { /* non-fatal */ }
+  }
 
   for (const { row } of endedSessions) await appendChargeHistory(row);
 
@@ -628,7 +651,6 @@ async function handleGet(req: Request) {
   const cfg = readConfig();
   const teslaConnected = readTokens() !== null;
   const rivianConnected = hasRivianTokens();
-  const myqConnected = hasMyQTokens();
 
   // ?fresh=1 forces a real fetch (used right after a command so the UI reflects it)
   const force = new URL(req.url).searchParams.get('fresh') === '1';
@@ -654,14 +676,13 @@ async function handleGet(req: Request) {
   // reason to skip it just because Rivian might be away.
   const rivianProbablyHome = rivianLocalIp || !rivianConnected ? true : await peekRivianProbablyHome();
 
-  const [teslaState, rivianState, rivianWcVitals, weather, doorState] = await Promise.all([
+  const [teslaState, rivianState, rivianWcVitals, weather] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
     rivianLocalIp || (rivianConnected && rivianSerial && rivianProbablyHome)
       ? fetchWallConnectorVitals(cfg.energySite.id, rivianSerial, rivianJustStartedCharging, rivianLocalIp)
       : Promise.resolve(null),
     fetchWeather(cfg),
-    myqConnected && cfg.garage.deviceSerial ? getDoorState(cfg.garage.deviceSerial) : Promise.resolve(null),
   ]);
 
   // Tesla's side is synthesized directly from its (telemetry-sourced) vehicle
@@ -868,8 +889,6 @@ async function handleGet(req: Request) {
     vehicles,
     wallConnectors,
     weather,
-    garageConnected: myqConnected,
-    garageDoorOpen: doorState === 'open' ? true : doorState === 'closed' ? false : null,
     streamUrl: cfg.camera.streamUrl,
     lastUpdated: new Date().toISOString(),
     teslaConnected,

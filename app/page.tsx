@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Component, type ReactNode } from 'react';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
 import {
   AuthBanners,
@@ -20,6 +20,48 @@ const ACCENT_SOFT = 'rgba(52,224,196,0.16)';
 const C = 326.726; // 2π × r52
 
 function kwFor(amps: number) { return amps * VOLTS / 1000; }
+
+// Shared client-error reporting pipeline — same one window.onerror /
+// onunhandledrejection use below, so a render-time React error lands in
+// keys/errors.log the same way a runtime JS error already does. Without
+// this, a render exception in the tree just produces a blank white screen
+// on the kiosk with nothing logged anywhere (see the "iPad kiosk error is
+// invisible" comment on the window-level listeners).
+function reportClientError(source: string, message: string, stack?: string) {
+  fetch('/api/errors', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, message, stack, extra: { ua: navigator.userAgent, url: location.href } }),
+  }).catch(() => null);
+}
+
+class DashboardErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: Error, info: { componentStack?: string | null }) {
+    reportClientError('client.render', error.message, error.stack ?? info.componentStack ?? undefined);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          width: 1180, height: 820, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 10,
+          background: '#0e1216', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif",
+        }}>
+          <span style={{ fontSize: 20, fontWeight: 600 }}>Dashboard hit an error</span>
+          <span style={{ fontSize: 13, color: '#a4afba' }}>It&apos;s been logged. This screen will keep retrying on the next refresh.</span>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function fmtEta(min: number): string {
   if (min <= 0) return 'AT TARGET';
@@ -170,10 +212,11 @@ function buildAlerts(data: DashboardData): AlertInputs {
 }
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
-function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable }: {
+function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnected }: {
   wallConnectors: WallConnectorData[];
   vehicles: VehicleData[];
   wcDataUnavailable: boolean;
+  teslaConnected: boolean;
 }) {
   const left  = wallConnectors.find(w => w.side === 'LEFT');
   const right = wallConnectors.find(w => w.side === 'RIGHT');
@@ -228,10 +271,14 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable }: {
 
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '12px 22px' }}>
-      {wcDataUnavailable && (
+      {(wcDataUnavailable || !teslaConnected) && (
         <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(224,181,61,0.15)', color: '#e0b53d', fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999, whiteSpace: 'nowrap' }}>
           <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 13, lineHeight: 1 }}>warning</span>
-          WALL CONNECTOR DATA UNAVAILABLE · CHECK LOGS
+          {/* Both Wall Connectors power-share off one circuit but only the
+              Tesla-side unit is LAN-reachable — Rivian has no local vitals
+              path at all. A Tesla cloud-auth outage means neither side's
+              session/today kWh is being tracked, not just Tesla's. */}
+          {!teslaConnected ? 'NO DATA — TESLA DISCONNECTED' : 'WALL CONNECTOR DATA UNAVAILABLE · CHECK LOGS'}
         </div>
       )}
       {/* Header */}
@@ -296,11 +343,11 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable }: {
               <div style={{ display: 'flex', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 12, marginTop: 'auto' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
                   <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>SESSION</span>
-                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.session > 0 ? side.session.toFixed(1) + ' kWh' : '—'}</span>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{!teslaConnected ? '—' : side.session > 0 ? side.session.toFixed(1) + ' kWh' : '—'}</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
                   <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>TODAY</span>
-                  <span style={{ fontSize: 15, fontWeight: 600 }}>{side.today.toFixed(1)} kWh</span>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{!teslaConnected ? '—' : side.today.toFixed(1) + ' kWh'}</span>
                 </div>
               </div>
             </div>
@@ -312,9 +359,8 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable }: {
 }
 
 // ── Camera Modal ──────────────────────────────────────────────────────────────
-function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onToggleGarage }: {
-  streamUrl: string; garageConnected: boolean; garageDoorOpen: boolean | null;
-  onClose: () => void; onToggleGarage: () => void;
+function CameraModal({ streamUrl, onClose }: {
+  streamUrl: string; onClose: () => void;
 }) {
   // No error handling existed before — a failed <img> load (wrong URL, CORS,
   // auth, host unreachable from outside the LAN) just rendered nothing,
@@ -359,13 +405,6 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
     lastFrameAt.current = Date.now();
     setImgError(false);
   }
-
-  const key = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
-  const dm = {
-    open:    { label: 'OPEN',    icon: 'garage_door', color: '#e0b53d', bg: 'rgba(224,181,61,0.15)', action: 'Close Garage' },
-    closed:  { label: 'CLOSED',  icon: 'garage',      color: '#a4afba', bg: '#1b232b',               action: 'Open Garage'  },
-    unknown: { label: 'UNKNOWN', icon: 'garage',      color: '#7d8893', bg: '#1b232b',               action: 'Toggle Garage' },
-  }[key];
 
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 30, background: 'rgba(8,11,14,0.82)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'evfade .18s ease-out' }}>
@@ -412,21 +451,6 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#e2685f', animation: 'evpulse 1.4s ease-in-out infinite' }} />LIVE
           </span>
         </div>
-        {/* Footer - garage door (only when connected) */}
-        {garageConnected && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 24, color: dm.color }}>{dm.icon}</span>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>GARAGE DOOR</span>
-                <span style={{ fontSize: 15, fontWeight: 600, color: dm.color }}>{dm.label}</span>
-              </div>
-            </div>
-            <button onClick={onToggleGarage} style={{ appearance: 'none', cursor: 'pointer', padding: '12px 22px', borderRadius: 12, background: dm.bg, border: '1px solid rgba(255,255,255,0.08)', color: dm.color, fontFamily: "'Space Grotesk',sans-serif", fontSize: 14, fontWeight: 600 }}>
-              {dm.action}
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -434,6 +458,14 @@ function CameraModal({ streamUrl, garageConnected, garageDoorOpen, onClose, onTo
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
+  return (
+    <DashboardErrorBoundary>
+      <DashboardInner />
+    </DashboardErrorBoundary>
+  );
+}
+
+function DashboardInner() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [feedState, setFeedState] = useState<'live' | 'stale' | 'error'>('stale');
   const [showCamera, setShowCamera] = useState(false);
@@ -465,15 +497,8 @@ export default function Dashboard() {
   // Forward any uncaught client error to the server so it lands in keys/errors.log.
   // Without this, an iPad kiosk error is invisible — no devtools, no console access.
   useEffect(() => {
-    const report = (source: string, message: string, stack?: string) => {
-      fetch('/api/errors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source, message, stack, extra: { ua: navigator.userAgent, url: location.href } }),
-      }).catch(() => null);
-    };
-    const onError = (e: ErrorEvent) => report('client.window', e.message, e.error?.stack);
-    const onRejection = (e: PromiseRejectionEvent) => report('client.promise', String(e.reason), e.reason?.stack);
+    const onError = (e: ErrorEvent) => reportClientError('client.window', e.message, e.error?.stack);
+    const onRejection = (e: PromiseRejectionEvent) => reportClientError('client.promise', String(e.reason), e.reason?.stack);
     window.addEventListener('error', onError);
     window.addEventListener('unhandledrejection', onRejection);
     return () => {
@@ -547,7 +572,11 @@ export default function Dashboard() {
 
   let feedLabel: string, feedColor: string, feedBg: string, feedPulse: boolean;
   if (feedState === 'error') {
-    feedLabel = 'API ERROR'; feedColor = '#e2685f'; feedBg = 'rgba(226,104,95,0.15)'; feedPulse = false;
+    // Escalate once the outage has run 5+ minutes — same pill, just louder,
+    // so a sustained failure doesn't look identical to a one-poll blip.
+    const longOutage = ageSec >= 300;
+    feedLabel = longOutage ? `API ERROR · ${Math.floor(ageSec / 60)}m STALE` : 'API ERROR';
+    feedColor = '#e2685f'; feedBg = longOutage ? 'rgba(226,104,95,0.32)' : 'rgba(226,104,95,0.15)'; feedPulse = longOutage;
   } else if (feedState === 'stale') {
     feedLabel = 'STALE'; feedColor = '#e0b53d'; feedBg = 'rgba(224,181,61,0.15)'; feedPulse = false;
   } else {
@@ -572,16 +601,7 @@ export default function Dashboard() {
   // about "how many do I know are home" — so we want positive evidence.
   const vehiclesHome = vehicles.filter(v => v.connected && v.atHome === true).length;
 
-  // Door
-  const garageConnected = data?.garageConnected ?? false;
-  const garageDoorOpen = data?.garageDoorOpen ?? null;
-  const doorKey = garageDoorOpen === true ? 'open' : garageDoorOpen === false ? 'closed' : 'unknown';
-  const doorDm = {
-    open:    { label: 'OPEN',    icon: 'garage_door', color: '#e0b53d', bg: 'rgba(224,181,61,0.15)' },
-    closed:  { label: 'CLOSED',  icon: 'garage',      color: '#a4afba', bg: '#1b232b' },
-    unknown: { label: '—',       icon: 'garage',      color: '#7d8893', bg: '#1b232b' },
-  }[doorKey];
-
+  // MyQ removed — future garage door integration will use Ratgdo.
   const streamUrl = data?.streamUrl ?? '';
 
   const alerts = useMemo(() => {
@@ -643,20 +663,6 @@ export default function Dashboard() {
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: feedColor, animation: feedPulse ? 'evpulse 1.8s ease-in-out infinite' : 'none', flexShrink: 0 }} />
               {feedLabel}
             </span>
-            {garageConnected && (
-              <button
-                onClick={async () => {
-                  const command = garageDoorOpen ? 'close' : 'open';
-                  await fetch('/api/myq/door', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
-                  setTimeout(fetchData, 3000);
-                }}
-                title={garageDoorOpen ? 'Close garage' : 'Open garage'}
-                style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, background: doorDm.bg, color: doorDm.color, border: '1px solid rgba(255,255,255,0.06)', fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
-                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 15, lineHeight: 1 }}>{doorDm.icon}</span>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: doorDm.color, flexShrink: 0 }} />
-                GARAGE {doorDm.label}
-              </button>
-            )}
             {streamUrl && (
               <button onClick={() => setShowCamera(true)} title="Garage camera"
                 style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#d3dae1', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: 0 }}>
@@ -710,20 +716,13 @@ export default function Dashboard() {
       </div>
 
       {/* ── Circuit Panel ── */}
-      <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} wcDataUnavailable={!!data?.flags.wcDataUnavailable} />
+      <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} wcDataUnavailable={!!data?.flags.wcDataUnavailable} teslaConnected={data?.teslaConnected ?? false} />
 
       {/* ── Camera Modal ── */}
       {showCamera && (
         <CameraModal
           streamUrl={streamUrl}
-          garageConnected={garageConnected}
-          garageDoorOpen={garageDoorOpen}
           onClose={() => setShowCamera(false)}
-          onToggleGarage={async () => {
-            const command = garageDoorOpen ? 'close' : 'open';
-            await fetch('/api/myq/door', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
-            setTimeout(fetchData, 3000);
-          }}
         />
       )}
     </div>

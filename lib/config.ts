@@ -1,5 +1,16 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'fs';
 import { join } from 'path';
+
+// Plain writeFileSync isn't atomic — a concurrent read (e.g. readTokens()
+// during a token-refresh writeTokens()) can observe a partially-written file
+// and throw/return null. Write to a temp file on the same volume, then
+// rename — POSIX guarantees rename() is atomic, so readers always see either
+// the old or the new complete file, never a partial one.
+function atomicWriteFileSync(path: string, data: string): void {
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, path);
+}
 
 export interface WallConnectorConfig {
   serial: string;   // S/N from sticker — resolved to deviceId at runtime
@@ -40,12 +51,7 @@ export interface AppConfig {
     id: string;
     wallConnectors: WallConnectorConfig[];
   };
-  garage: {
-    provider: string;
-    email: string;
-    password: string;
-    deviceSerial: string;
-  };
+  // MyQ removed — future garage door integration will use Ratgdo.
   camera: {
     streamUrl: string;
     type: 'mjpeg' | 'rtsp' | 'hls';
@@ -115,12 +121,6 @@ const DEFAULT_CONFIG: AppConfig = {
       { serial: 'E4A23172000137', deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'LEFT', vehicleName: 'Tesla', localIp: '' },
     ],
   },
-  garage: {
-    provider: 'myq',
-    email: '',
-    password: '',
-    deviceSerial: '',
-  },
   camera: {
     streamUrl: '',
     type: 'mjpeg',
@@ -184,8 +184,21 @@ export function readConfig(): AppConfig {
   }
 }
 
+// ponytail: lightweight shape guard, not a full schema validator — expand if
+// malformed writes start slipping past this.
+function isValidConfigShape(cfg: unknown): cfg is AppConfig {
+  if (!cfg || typeof cfg !== 'object') return false;
+  const c = cfg as Partial<AppConfig>;
+  return !!c.vehicles?.tesla && !!c.vehicles?.rivian
+    && !!c.energySite && Array.isArray(c.energySite.wallConnectors)
+    && !!c.display && !!c.camera && !!c.weather && !!c.home;
+}
+
 export function writeConfig(cfg: AppConfig): void {
-  writeFileSync(configPath(), JSON.stringify(cfg, null, 2));
+  if (!isValidConfigShape(cfg)) {
+    throw new Error('writeConfig: rejected — malformed config shape (missing required top-level keys)');
+  }
+  atomicWriteFileSync(configPath(), JSON.stringify(cfg, null, 2));
 }
 
 function deepMerge(target: unknown, source: unknown): unknown {
@@ -225,5 +238,5 @@ export function readTokens(): TeslaTokens | null {
 export function writeTokens(tokens: TeslaTokens): void {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, 'tokens.json');
-  writeFileSync(path, JSON.stringify({ ...tokens, issued_at: Math.floor(Date.now() / 1000) }, null, 2));
+  atomicWriteFileSync(path, JSON.stringify({ ...tokens, issued_at: Math.floor(Date.now() / 1000) }, null, 2));
 }
