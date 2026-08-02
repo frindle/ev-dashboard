@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { readChargeHistory, type ChargeHistoryRow } from '@/lib/chargeHistory';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,15 +9,6 @@ export const dynamic = 'force-dynamic';
 // Query params:
 //   ?months=6      how many calendar months back to include (default 6)
 //   ?rate=0.142    $/kWh for cost estimates (optional; cost omitted if absent)
-
-interface ChargeHistoryRow {
-  side: 'LEFT' | 'RIGHT';
-  vehicleName: string;
-  startedAt: string;
-  endedAt: string;
-  durationMin: number;
-  energyKwh: number;
-}
 
 interface MonthAgg {
   month: string;        // YYYY-MM
@@ -37,20 +27,6 @@ interface VehicleAgg {
   months: MonthAgg[];
 }
 
-async function readHistory(): Promise<ChargeHistoryRow[]> {
-  const dir = process.env.CHARGE_HISTORY_DIR ?? process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
-  let raw: string;
-  try { raw = await readFile(join(dir, 'charge-history.jsonl'), 'utf-8'); }
-  catch { return []; }
-  const out: ChargeHistoryRow[] = [];
-  for (const line of raw.split('\n')) {
-    if (!line) continue;
-    try { out.push(JSON.parse(line) as ChargeHistoryRow); }
-    catch { /* skip malformed */ }
-  }
-  return out;
-}
-
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const months = Math.max(1, Math.min(36, Number(url.searchParams.get('months') ?? '6')));
@@ -60,7 +36,7 @@ export async function GET(req: NextRequest) {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - months);
 
-  const rows = (await readHistory()).filter(r => {
+  const rows = (await readChargeHistory()).filter(r => {
     const t = new Date(r.startedAt).getTime();
     return !isNaN(t) && t >= cutoff.getTime();
   });

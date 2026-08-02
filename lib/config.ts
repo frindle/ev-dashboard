@@ -62,6 +62,12 @@ export interface AppConfig {
     lat: number | null;
     lon: number | null;
   };
+  eia: {
+    // U.S. Energy Information Administration API key — free, register at
+    // https://www.eia.gov/opendata/register.php. Powers the live gasoline
+    // price behind the fuel-savings tile (see lib/rates.ts).
+    apiKey: string;
+  };
   home: {
     lat: number | null;
     lon: number | null;
@@ -130,6 +136,9 @@ const DEFAULT_CONFIG: AppConfig = {
     location: 'Halton Place',
     lat: null,
     lon: null,
+  },
+  eia: {
+    apiKey: '',
   },
   home: {
     lat: null,

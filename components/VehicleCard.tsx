@@ -334,11 +334,19 @@ export type VehicleCardProps = {
   onToggleLock:     (v: Vehicle) => void;
   onToggleAc:       (v: Vehicle) => void;
   onSetLimit:       (v: Vehicle, pct: number) => void;   // called only on Save, Tesla-only flow
+
+  // Optional override for the away/driving map. Defaults to the OSM-tiled
+  // MapTile above, so the production dashboard at / is unaffected; the
+  // /14display route passes MapTile14 (CARTO Dark Matter) instead. Added as
+  // an opt-in prop rather than by editing MapTile in place, specifically so
+  // the design-locked main route keeps its exact current rendering.
+  mapComponent?: React.ComponentType<{ lat: number; lon: number }>;
 };
 
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
-          onToggleCharging, onToggleLock, onToggleAc, onSetLimit } = props;
+          onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
+          mapComponent: Map = MapTile } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -537,7 +545,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             border: '1px solid rgba(255,255,255,0.06)'
           }}>
             {v.lat !== null && v.lon !== null && (
-              <MapTile lat={v.lat} lon={v.lon} />
+              <Map lat={v.lat} lon={v.lon} />
             )}
             <div style={{
               position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',

@@ -778,6 +778,34 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* ── Gas prices (EIA) ── */}
+      <div className="admin-section">
+        <div className="admin-section-header">
+          <div className="admin-section-title">
+            <div className={`status-dot ${config.eia.apiKey ? 'connected' : 'disconnected'}`} />
+            Gas Prices
+          </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
+        </div>
+        <div className="admin-section-body">
+          <div className="form-row">
+            <label className="form-label">EIA API Key</label>
+            <input
+              className="form-input"
+              value={config.eia.apiKey}
+              onChange={e => update('eia', { apiKey: e.target.value })}
+              placeholder="Get a free key at eia.gov/opendata/register.php"
+            />
+            <div className="form-hint">
+              Powers the fuel-savings tile. Pulls the EIA weekly regular-gasoline retail price for
+              PADD 5 excluding California — EIA doesn&apos;t publish a Nevada-specific weekly series,
+              and that region is the closest one that covers Nevada. Fetched once a day, not on every
+              dashboard poll. Without a key the tile still shows electricity cost, just no gas comparison.
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* ── Weather ── */}
       <div className="admin-section">
         <div className="admin-section-header">

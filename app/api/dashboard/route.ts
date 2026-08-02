@@ -14,6 +14,7 @@ import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
+import { appendChargeHistory, type ChargeHistoryRow } from '@/lib/chargeHistory';
 
 export const dynamic = 'force-dynamic';
 
@@ -350,27 +351,11 @@ interface SessionRecord {
   endedThrottled: boolean;  // sticky: session ended while wasThrottled — cleared on next session start
 }
 interface SessionFile { left: SessionRecord; right: SessionRecord; }
-interface ChargeHistoryRow {
-  side: 'LEFT' | 'RIGHT';
-  vehicleName: string;
-  startedAt: string;   // ISO
-  endedAt: string;     // ISO
-  durationMin: number;
-  energyKwh: number;
-}
-
 function emptySession(): SessionRecord {
   return { sessionKwh: 0, todayKwh: 0, todayDate: localDateStr(), lastInUse: false, lastUpdate: 0, sessionStartedAt: 0, wasThrottled: false, endedThrottled: false };
 }
 function localDateStr(): string {
   return new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
-}
-
-async function appendChargeHistory(row: ChargeHistoryRow) {
-  const historyDir = process.env.CHARGE_HISTORY_DIR ?? process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
-  const path = join(historyDir, 'charge-history.jsonl');
-  try { await writeFile(path, JSON.stringify(row) + '\n', { flag: 'a' }); }
-  catch (e) { console.error('[charge-history] append failed:', e); }
 }
 
 async function updateSessionKwh(

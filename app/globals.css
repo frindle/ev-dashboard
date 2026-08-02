@@ -485,6 +485,32 @@ html, body {
   color: var(--text-dim);
 }
 
+/* ── Leaflet map tile, /14display only (components/MapTile14.tsx) ──
+   The map lives in a 128px card, where Leaflet's default attribution box
+   (white, 11px, full width) eats a third of the tile. CARTO's basemap terms
+   require the OSM + CARTO credit to stay visible, so this shrinks it and
+   tones it down instead of hiding it.
+   8px is the ceiling here: "© OpenStreetMap, © CARTO" measures 121px at 8px
+   and still fits the 128px tile on one line, while 9px wraps to two lines and
+   eats a fifth of the map. Don't drop below 8px — the credit has to stay
+   readable to actually count as attribution.
+   Deliberately scoped to .maptile-14 so the production dashboard's map at /
+   keeps Leaflet's stock attribution styling, untouched. */
+.maptile-14 .leaflet-container .leaflet-control-attribution {
+  background: rgba(14, 18, 22, 0.55);
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  line-height: 1.4;
+  padding: 1px 3px;
+  border-radius: 3px 0 0 0;
+  margin: 0;
+}
+.maptile-14 .leaflet-container .leaflet-control-attribution a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
 /* ── Camera modal ── */
 .modal-backdrop {
   position: fixed;
