@@ -478,9 +478,14 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
 
     resetBackoff();
     const vs = data.vehicleState;
-    const chargingStateRaw = vs.chargerState?.value ?? 'disconnected';
+    // String() on every enum-ish field: Rivian's gateway returns raw JSON
+    // numbers on fields its own schema types as String (confirmed on the OTA
+    // version fields), and any .trim()/.toLowerCase() on one of those throws
+    // out of this whole function — which the caller then reads as a poll
+    // failure and answers with a stale-cache serve.
+    const chargingStateRaw = String(vs.chargerState?.value ?? 'disconnected');
     const chargerStateTs = vs.chargerState?.timeStamp;
-    const chargerStatusRaw = vs.chargerStatus?.value ?? '';
+    const chargerStatusRaw = String(vs.chargerStatus?.value ?? '');
     const chargerStatusTs = vs.chargerStatus?.timeStamp;
     const chargePortRaw = vs.chargePortState?.value ?? '';
     const chargePortTs = vs.chargePortState?.timeStamp;
@@ -493,8 +498,8 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     const gearStatusTs = vs.gearStatus?.timeStamp;
 
     const derateRawEarly = vs.chargerDerateStatus?.value ?? '';
-    const hvThermalRaw = vs.batteryHvThermalEvent?.value ?? '';
-    const hvThermalPropRaw = vs.batteryHvThermalEventPropagation?.value ?? '';
+    const hvThermalRaw = String(vs.batteryHvThermalEvent?.value ?? '');
+    const hvThermalPropRaw = String(vs.batteryHvThermalEventPropagation?.value ?? '');
     const wiperFluidRaw = vs.wiperFluidState?.value ?? '';
     const brakeFluidRaw = vs.brakeFluidLow?.value;
     const tpFL = vs.tirePressureStatusFrontLeft?.value ?? '';
@@ -514,14 +519,6 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       `gnssErrH=${gnssErrH ?? '?'} online=${vs.cloudConnection?.isOnline ?? '?'}`
     );
 
-    // Staleness threshold for the chargerState (legacy logic). Once we
-    // confirm chargePortState is fresh and behaves correctly, this can
-    // be replaced with a direct chargePortState read.
-    const STALE_MS = 15 * 60 * 1000;
-    const chargerStateStale = chargerStateTs
-      ? (Date.now() - new Date(chargerStateTs).getTime()) > STALE_MS
-      : false;
-
     // Resolve plug status from chargerStatus alone — matches the proven
     // approach in Home Assistant's Rivian integration (bretterer/home-assistant-rivian,
     // coordinator.py): `chargerStatus.value != "chrgr_sts_not_connected"`.
@@ -534,32 +531,59 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     // show "not plugged in" while the car was actually charging.
     const isPluggedIn = chargerStatusRaw !== '' && chargerStatusRaw !== 'chrgr_sts_not_connected';
 
-    // Only treat as charging when the contactor is actually closed and power is flowing
+    // The old rule was `!chargerStateStale && CHARGING_ACTIVE.has(chargerState)`,
+    // where "stale" meant chargerState.timeStamp older than 15 min. That
+    // timestamp is a last-*changed* stamp, so a steady multi-hour charge ages
+    // out of the window and the veto flipped isCharging to false while the
+    // car was demonstrably still charging — the reported "IDLE · PLUGGED IN ·
+    // NOT CHARGING". isPluggedIn had no such veto, which is exactly why the
+    // plug state stayed right while the charging state went wrong.
+    //
+    // Age was always a proxy for the real question the veto existed to ask:
+    // "is this chargerState value still describing reality?" isPluggedIn
+    // answers that directly and doesn't decay — an unplugged car can't be
+    // charging no matter what a stale chargerState still says. So veto on
+    // the plug state instead of on the clock.
     const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active', 'charging_ac_1ph', 'charging_ac_3ph']);
-    const isCharging = !chargerStateStale && CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase());
+    // chargerStatus, if it reports charging at all, is the more direct signal
+    // (it's the same field isPluggedIn trusts). Only `chrgr_sts_not_connected`
+    // is confirmed from primary sources — the "connected and charging" literal
+    // is NOT, so match it tolerantly and fall through to chargerState when it
+    // doesn't hit rather than hard-coding a guessed enum value. Confirm the
+    // real string from the `[rivian] ... chargerStatus="…"` log line above
+    // during a live charge, then tighten this.
+    const statusSaysCharging = /charging/.test(chargerStatusRaw)
+      && !/not_charging|no_chrg/.test(chargerStatusRaw);
+    const isCharging = statusSaysCharging
+      || (isPluggedIn && CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase()));
 
     // Rivian charger derate (throttling). Treat anything that's not empty
     // / "no_derate" / "none" / "inactive" as throttled. Specific reason
     // strings are surfaced verbatim — we don't have a documented enum.
-    const derateRaw = (vs.chargerDerateStatus?.value ?? '').trim();
+    // String() because Rivian does send raw JSON numbers on fields its own
+    // schema types as String (already confirmed for the OTA version fields
+    // below). A numeric value here made .trim() throw, and the outer catch
+    // turned that into a backoff step + stale-cache serve — i.e. the entire
+    // Rivian card silently frozen on its last good poll, throttle included.
+    const derateRaw = String(vs.chargerDerateStatus?.value ?? '').trim();
     const derateLower = derateRaw.toLowerCase();
-    const isThrottled = derateRaw !== '' &&
-      derateLower !== 'no_derate' &&
-      derateLower !== 'none' &&
-      derateLower !== 'inactive' &&
-      derateLower !== 'normal';
+    // '0'/'false' are here because of the String() above: a numeric-0 "not
+    // derated" must not read as a throttle reason now that it survives to
+    // this comparison instead of throwing.
+    const DERATE_IDLE = new Set(['', 'no_derate', 'none', 'inactive', 'normal', '0', 'false']);
+    const isThrottled = !DERATE_IDLE.has(derateLower);
 
     // HV thermal event/propagation: same shape as derate above — Rivian
     // returns a non-empty idle string ("off" / "nominal", confirmed from
     // container logs 2026-07-18) even with no active excursion, so "not
     // empty" alone false-positives on every poll. Only flag genuine values.
-    const HV_IDLE = new Set(['', 'off', 'none', 'no_event', 'inactive', 'normal', 'nominal']);
+    const HV_IDLE = new Set(['', 'off', 'none', 'no_event', 'inactive', 'normal', 'nominal', '0', 'false']);
     const hvThermalActive =
       !HV_IDLE.has(hvThermalRaw.toLowerCase()) || !HV_IDLE.has(hvThermalPropRaw.toLowerCase());
 
     // Only show climate as on for explicitly active states; 'system_idle', 'not_available', etc. → off
     const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
-    const climateVal = (vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
+    const climateVal = String(vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
 
     // Rivian sends these as raw JSON numbers despite the GraphQL schema
     // typing them as strings — confirmed from a real poll (otaCurrent=1,

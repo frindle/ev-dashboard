@@ -44,8 +44,13 @@ export function writeFlags(f: SessionFlags): void {
 
 function mutate(fn: (f: SessionFlags) => void): void {
   const f = readFlags();
+  const before = JSON.stringify(f);
   fn(f);
-  writeFlags(f);
+  // Skip no-op writes. clearTeslaReauthRequired() now runs on every
+  // successful Fleet API call, and rewriting an unchanged file on each poll
+  // is both pointless disk churn and a wider window for a concurrent reader
+  // to catch this (non-atomic) write half-done.
+  if (JSON.stringify(f) !== before) writeFlags(f);
 }
 
 // ── Tesla ─────────────────────────────────────────────────────────────────

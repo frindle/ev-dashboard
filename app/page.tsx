@@ -191,10 +191,16 @@ function buildAlerts(data: DashboardData): AlertInputs {
     rivianWiper: flags.rivianWiperFluidLow ? 'low' : 'ok',
     rivianBrake: flags.rivianBrakeFluidLow ? 'low' : 'ok',
     rivianThermal: flags.rivianHvThermalEvent ? 'detected' : 'ok',
-    // Sticky reason text, not the live one — rivianDerateReason clears the
-    // instant isThrottled flips false, but the chip should persist (with
-    // its reason) for the whole plug-in cycle, per the user's actual ask.
-    rivianDerate: flags.rivianDerateStickyUntilUnplugged ? (flags.rivianDerateStickyReason ?? '') : '',
+    // Sticky reason text preferred over the live one — rivianDerateReason
+    // clears the instant isThrottled flips false, but the chip should persist
+    // (with its reason) for the whole plug-in cycle, per the user's actual ask.
+    // Live derate is OR'd in so an actively-throttled vehicle can never render
+    // without a throttle chip: the sticky flag rides on the rivian-state cache
+    // file, and a failed cache write there used to silently swallow the whole
+    // indicator even though the poll itself saw the derate.
+    rivianDerate: (flags.rivianDerateStickyUntilUnplugged || flags.rivianDerateActive)
+      ? (flags.rivianDerateStickyReason || flags.rivianDerateReason || 'ACTIVE')
+      : '',
     rivianPluggedIn: flags.rivianPluggedIn,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',

@@ -167,6 +167,16 @@ const RATE_LIMIT_COOLDOWN_MS = 15 * 60_000;
 let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 
+// A fresh OAuth callback invalidates everything the breaker was reacting to
+// (the run of 401s that opened it came from the dead token chain). Without
+// this, re-authenticating still left Fleet API calls skipped for up to the
+// full 5-minute cooldown, so no successful call could clear the reauth flag
+// and the banner sat there long after the user had already fixed it.
+export function resetCircuitBreaker(): void {
+  consecutiveFailures = 0;
+  circuitOpenUntil = 0;
+}
+
 // Exposed so the dashboard can show a "Tesla API paused, retrying in Nm"
 // banner instead of silently serving stale cache with no explanation.
 export function getCircuitBreakerRetryMinutes(): number | null {
@@ -215,6 +225,14 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       return null;
     }
     consecutiveFailures = 0;
+    // A 2xx from Fleet API is proof the credentials work — that is exactly
+    // what tesla_reauth_required claims is untrue, so clear it here rather
+    // than only inside refreshAccessToken(). Without this, the flag survived
+    // a successful re-login: a poll already in flight with the old token
+    // 401s *after* /auth/callback clears the flag and re-arms it, and the
+    // only other clear point is the next token refresh — up to ~8h away.
+    // That is the "banner kept showing long after re-login" report.
+    clearTeslaReauthRequired();
     const json = await res.json() as { response: T };
     return json.response ?? null;
   } catch (e) {
