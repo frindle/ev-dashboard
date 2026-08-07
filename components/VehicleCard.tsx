@@ -341,12 +341,18 @@ export type VehicleCardProps = {
   // an opt-in prop rather than by editing MapTile in place, specifically so
   // the design-locked main route keeps its exact current rendering.
   mapComponent?: React.ComponentType<{ lat: number; lon: number }>;
+
+  // False on the no-touch 12.3" kiosk route: every control below (lock, AC,
+  // charge start/stop, tap-to-set dial) still renders for its status value,
+  // just without the onClick wiring — a touchscreen isn't there to receive
+  // it anyway. Defaults true so the design-locked / route is unaffected.
+  interactive?: boolean;
 };
 
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
-          mapComponent: Map = MapTile } = props;
+          mapComponent: Map = MapTile, interactive = true } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -364,7 +370,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const chargingHome = v.charging && atHome;
   const a            = alloc(v);
   const etaMin       = etaFor(v, a.kw);
-  const canEditLimit = v.ctrl === 'full';   // only Tesla (Fleet API) can set a limit directly
+  const canEditLimit = v.ctrl === 'full' && interactive;   // only Tesla (Fleet API) can set a limit directly, and only when touch-wired
   const pluggedIn    = v.charging || (v.id === 'rivian' && alerts.rivianPluggedIn) || (v.id === 'tesla' && alerts.teslaPluggedIn);
 
   // status pill
@@ -471,7 +477,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               has no wired command path, so these must not render on that card
               (they used to render unconditionally and silently hit Tesla's
               command endpoint regardless of which card was tapped). */}
-          {v.ctrl === 'full' && (
+          {v.ctrl === 'full' && interactive && (
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onToggleLock(v)} title={v.locked ? 'Locked' : 'Unlocked'} style={{
               appearance: 'none', cursor: 'pointer', width: 42, height: 42,
@@ -502,8 +508,10 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           {/* Rivian has no command API, but lib/rivian.ts does read real
               isLocked/climateOn state via GraphQL — show it read-only
               (same icon/color scheme as the Tesla buttons, just no
-              cursor/onClick) instead of hiding the info entirely. */}
-          {v.ctrl !== 'full' && (
+              cursor/onClick) instead of hiding the info entirely. Also
+              used for Tesla itself on the non-interactive (12.3" kiosk)
+              route, where every control is a status indicator only. */}
+          {(v.ctrl !== 'full' || !interactive) && (
           <div style={{ display: 'flex', gap: 8 }}>
             <div title={v.locked ? 'Locked' : 'Unlocked'} style={{
               width: 42, height: 42, opacity: 0.7,
@@ -674,13 +682,25 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
         borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir }}>
-          {v.ctrl === 'full' && (v.charging || pluggedIn) && (
+          {v.ctrl === 'full' && interactive && (v.charging || pluggedIn) && (
             <button onClick={() => onToggleCharging(v)} style={{
               appearance: 'none', cursor: 'pointer', flex: 'none',
               padding: '10px 18px', borderRadius: 11,
               background: btnBg, border: btnBorder, color: btnColor,
               fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600
             }}>{btnLabel}</button>
+          )}
+          {/* 12.3" kiosk: charge start/stop becomes a status pill, not a
+              control — same "SCHEDULE ONLY"/"NOT PLUGGED IN" chip styling
+              as the states below, just reporting charging state instead. */}
+          {v.ctrl === 'full' && !interactive && (v.charging || pluggedIn) && (
+            <span style={{
+              flex: 'none', padding: '10px 14px', borderRadius: 11,
+              background: v.charging ? ACCENT_SOFT : '#1b232b',
+              border: v.charging ? '1px solid transparent' : '1px dashed rgba(255,255,255,0.12)',
+              color: v.charging ? ACCENT : '#a4afba', fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10.5, letterSpacing: '.04em'
+            }}>{v.charging ? 'CHARGING' : 'PLUGGED IN — NOT CHARGING'}</span>
           )}
           {v.ctrl === 'schedule' && (
             <span style={{
