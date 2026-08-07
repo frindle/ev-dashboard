@@ -690,19 +690,12 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600
             }}>{btnLabel}</button>
           )}
-          {/* 12.3" kiosk: charge start/stop becomes a status pill, not a
-              control — same "SCHEDULE ONLY"/"NOT PLUGGED IN" chip styling
-              as the states below, just reporting charging state instead. */}
-          {v.ctrl === 'full' && !interactive && (v.charging || pluggedIn) && (
-            <span style={{
-              flex: 'none', padding: '10px 14px', borderRadius: 11,
-              background: v.charging ? ACCENT_SOFT : '#1b232b',
-              border: v.charging ? '1px solid transparent' : '1px dashed rgba(255,255,255,0.12)',
-              color: v.charging ? ACCENT : '#a4afba', fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 10.5, letterSpacing: '.04em'
-            }}>{v.charging ? 'CHARGING' : 'PLUGGED IN — NOT CHARGING'}</span>
-          )}
-          {v.ctrl === 'schedule' && (
+          {/* 12.3" kiosk (interactive=false): no button, no replacement —
+              the status pill above and the eta line below already say
+              CHARGING / PLUGGED IN · NOT CHARGING, so a status-only chip
+              here would just repeat it. A control whose only job was the
+              click stops earning its place once the click is gone. */}
+          {v.ctrl === 'schedule' && interactive && (
             <span style={{
               flex: 'none', padding: '10px 14px', borderRadius: 11,
               background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)',

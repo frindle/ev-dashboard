@@ -502,6 +502,12 @@ function DashboardInner() {
   // "due-soon" banner honors it, and only for the current tab session.
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
+  // 12.3" mockup adds a SOLAR stat chip not present on the production
+  // dashboard — acPowerW is the only field it needs, from the existing
+  // SolarEdge live endpoint (which itself already reports enabled:false
+  // when no SolarEdge config is set, so a disabled/absent system doesn't
+  // need special-casing here beyond just not rendering the chip).
+  const [solarKw, setSolarKw] = useState<number | null>(null);
 
   // Checked once per load — this is a kiosk tab that stays open for days,
   // and /api/version caches the GitHub call for 5 min server-side anyway.
@@ -509,6 +515,16 @@ function DashboardInner() {
     fetch('/api/version').then(r => r.json()).then((d: { outdated?: boolean }) => {
       setAppUpdateAvailable(!!d.outdated);
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const poll = () => fetch('/api/solaredge/live').then(r => r.json())
+      .then((d: { enabled?: boolean; acPowerW?: number }) => {
+        setSolarKw(d.enabled ? (d.acPowerW ?? 0) / 1000 : null);
+      }).catch(() => setSolarKw(null));
+    poll();
+    const t = setInterval(poll, REFRESH_MS);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -653,7 +669,7 @@ function DashboardInner() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, flex: 'none' }}>
         {/* Left: title */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: '0.24em', color: '#7d8893' }}>HOME · ENERGY</span>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: '0.24em', color: '#7d8893' }}>HOME · GARAGE</span>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.01em' }}>Energy</h1>
           <span style={{ fontSize: 12, color: '#a4afba' }}>{dateStr} · {timeStr}</span>
         </div>
@@ -703,6 +719,7 @@ function DashboardInner() {
           {/* Stat chips */}
           <div style={{ display: 'flex', gap: 11 }}>
             <StatChip label="DRAWING" value={totalKw} unit="kW" />
+            {solarKw !== null && <StatChip label="SOLAR" value={solarKw.toFixed(1)} unit="kW" />}
             <StatChip label="CHARGERS" value={String(inUseCount)} unit="/ 2 in use" />
             <StatChip label="VEHICLES" value={String(vehiclesHome)} unit="home" />
           </div>
