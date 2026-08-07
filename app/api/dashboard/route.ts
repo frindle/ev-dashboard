@@ -15,6 +15,7 @@ import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
 import { appendChargeHistory, type ChargeHistoryRow } from '@/lib/chargeHistory';
+import { readGarageDoorState, type GarageDoorState } from '@/lib/ratgdo';
 
 export const dynamic = 'force-dynamic';
 
@@ -145,6 +146,10 @@ export interface DashboardData {
   teslaConnected: boolean;
   rivianConnected: boolean;
   flags: DashboardFlags;
+  // null when garageDoor isn't configured in admin (Ratgdo not installed
+  // yet) -- callers should hide the garage UI entirely in that case, not
+  // render an "unknown" state. See lib/ratgdo.ts.
+  garageDoorState: GarageDoorState | null;
 }
 
 export interface WeatherData {
@@ -661,13 +666,14 @@ async function handleGet(req: Request) {
   // reason to skip it just because Rivian might be away.
   const rivianProbablyHome = rivianLocalIp || !rivianConnected ? true : await peekRivianProbablyHome();
 
-  const [teslaState, rivianState, rivianWcVitals, weather] = await Promise.all([
+  const [teslaState, rivianState, rivianWcVitals, weather, garageDoorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
     rivianLocalIp || (rivianConnected && rivianSerial && rivianProbablyHome)
       ? fetchWallConnectorVitals(cfg.energySite.id, rivianSerial, rivianJustStartedCharging, rivianLocalIp)
       : Promise.resolve(null),
     fetchWeather(cfg),
+    readGarageDoorState(),
   ]);
 
   // Tesla's side is synthesized directly from its (telemetry-sourced) vehicle
@@ -879,6 +885,7 @@ async function handleGet(req: Request) {
     teslaConnected,
     rivianConnected,
     flags,
+    garageDoorState,
   };
 
   // Persist to disk so the client can show last-known state on restart

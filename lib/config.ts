@@ -51,7 +51,11 @@ export interface AppConfig {
     id: string;
     wallConnectors: WallConnectorConfig[];
   };
-  // MyQ removed — future garage door integration will use Ratgdo.
+  // MyQ removed (Chamberlain blocks third-party API access, 401.122).
+  // Ratgdo runs ESPHome with its Web Server API enabled — null until the
+  // device is actually installed, at which point set url to its local
+  // address (e.g. "http://10.0.x.x") in the admin panel. See lib/ratgdo.ts.
+  garageDoor: { url: string; entity: string } | null;
   camera: {
     streamUrl: string;
     type: 'mjpeg' | 'rtsp' | 'hls';
@@ -127,6 +131,7 @@ const DEFAULT_CONFIG: AppConfig = {
       { serial: 'E4A23172000137', deviceId: 'e4a053b8-66cd-457e-b2bc-bc41005fb45f', side: 'LEFT', vehicleName: 'Tesla', localIp: '' },
     ],
   },
+  garageDoor: null,
   camera: {
     streamUrl: '',
     type: 'mjpeg',

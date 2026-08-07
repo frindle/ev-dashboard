@@ -715,20 +715,52 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* ── Garage Door (planned: ratgdo) ── */}
+      {/* ── Garage Door (ratgdo) ── */}
       <div className="admin-section">
         <div className="admin-section-header">
           <div className="admin-section-title">
-            <div className="status-dot disconnected" />
+            <div className={`status-dot ${config.garageDoor?.url ? 'connected' : 'disconnected'}`} />
             Garage Door
           </div>
-          <span style={{ fontSize: 12, color: '#a4afba' }}>Planned: ratgdo</span>
+          <SectionSaveButton onClick={save} disabled={saving} />
         </div>
         <div className="admin-section-body">
+          <div className="form-row-2">
+            <div className="form-row">
+              <label className="form-label">Ratgdo URL</label>
+              <input
+                className="form-input"
+                value={config.garageDoor?.url ?? ''}
+                onChange={e => {
+                  const url = e.target.value;
+                  setConfig(prev => prev && {
+                    ...prev,
+                    garageDoor: url ? { url, entity: prev.garageDoor?.entity || 'garage_door' } : null,
+                  });
+                }}
+                placeholder="http://10.0.x.x"
+              />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Cover Entity</label>
+              <input
+                className="form-input"
+                value={config.garageDoor?.entity ?? ''}
+                onChange={e => setConfig(prev => prev && prev.garageDoor && {
+                  ...prev,
+                  garageDoor: { ...prev.garageDoor, entity: e.target.value },
+                })}
+                placeholder="garage_door"
+                disabled={!config.garageDoor?.url}
+              />
+            </div>
+          </div>
           <div className="form-hint">
             MyQ integration was removed — Chamberlain now blocks third-party API access (401.122).
-            Future support: <strong>ratgdo</strong> (local WiFi board, ~$30) for direct control.
-            Until installed, the dashboard hides the garage button.
+            <strong> ratgdo</strong> (local WiFi board, ~$30) reads door state directly over the LAN via
+            its ESPHome Web Server API, no cloud involved. Entity name is a guess (&quot;garage_door&quot;)
+            until it&apos;s installed and the real one is confirmed — a one-field fix here if it differs.
+            Until a URL is set, the dashboard hides the garage status entirely.
           </div>
         </div>
       </div>

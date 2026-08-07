@@ -698,6 +698,15 @@ function DashboardInner() {
                 {weather.temp}°F · {weather.condition}
               </span>
             )}
+            {/* Only rendered once garageDoor is actually configured in admin
+                (Ratgdo installed) — data.garageDoorState is null otherwise,
+                per lib/ratgdo.ts. No fake status without real hardware. */}
+            {data?.garageDoorState != null && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#d3dae1' }}>
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: data.garageDoorState === 'open' ? '#e0b53d' : ACCENT }}>garage</span>
+                GARAGE — {data.garageDoorState.toUpperCase()}
+              </span>
+            )}
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: feedBg, color: feedColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: feedColor, animation: feedPulse ? 'evpulse 1.8s ease-in-out infinite' : 'none', flexShrink: 0 }} />
               {feedLabel}
