@@ -4,9 +4,10 @@ services:
       context: .
       args:
         BUILD_SHA: "${BUILD_SHA:-unknown}"
-    ports:
-      - "3030:3000"
-      - "50051:50051"
+    networks:
+      br0:
+        ipv4_address: 10.0.6.56
+    mac_address: "02:E4:9B:17:2C:03"
     volumes:
       - /mnt/user/appdata/ev-dashboard/keys:/app/keys
     environment:
@@ -15,3 +16,7 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+
+networks:
+  br0:
+    external: true
