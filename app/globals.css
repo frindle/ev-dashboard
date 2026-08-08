@@ -511,6 +511,36 @@ html, body {
   text-decoration: none;
 }
 
+/* ── Leaflet map card, /12.3display only (components/MapTile12.tsx) ──
+   Full card-sized map (not a 128px tile), so the default attribution box
+   is left alone — just dark-toned to match the card chrome instead of
+   Leaflet's stock white. Vehicle name labels use a permanent tooltip;
+   Leaflet's default tooltip (white box, border, arrow) reads as a
+   giant flag against this dark UI, so it's restyled into a small pill
+   matching the dashboard's other chips, and the arrow is dropped. */
+.maptile-12 .leaflet-container .leaflet-control-attribution {
+  background: rgba(14, 18, 22, 0.7);
+  color: var(--text-dim);
+}
+.maptile-12 .leaflet-container .leaflet-control-attribution a {
+  color: var(--text-dim);
+}
+.maptile-12-label.leaflet-tooltip {
+  background: #161c22;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #e8edf2;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  box-shadow: none;
+}
+.maptile-12-label.leaflet-tooltip-top:before {
+  display: none;
+}
+
 /* ── Camera modal ── */
 .modal-backdrop {
   position: fixed;

@@ -18,7 +18,13 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useCallback, useMemo, useRef, Component, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
+import type { MapVehicle } from '@/components/MapTile12';
+
+// Leaflet touches window/document at import time -- ssr:false, same as
+// VehicleCard's own away-state MapTile.
+const MapTile12 = dynamic(() => import('@/components/MapTile12'), { ssr: false });
 import {
   AuthBanners,
   VehicleCard as DesignVehicleCard,
@@ -235,6 +241,12 @@ function buildAlerts(data: DashboardData): AlertInputs {
 }
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
+// 12.3" mockup: this panel (header + split bar + per-side caption line) is
+// the ONLY circuit UI -- no separate per-wall-connector detail cards below
+// it, unlike production /. Session-kWh-per-side (shown on those cards in
+// production) has no equivalent slot in this layout and is dropped here;
+// today's aggregate kWh and each side's live amps/charging-vehicle name
+// still render in the header/caption, so no real status info is lost.
 function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnected }: {
   wallConnectors: WallConnectorData[];
   vehicles: VehicleData[];
@@ -269,10 +281,8 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnec
   const leftPct  = `${Math.round((leftAmps  / CIRCUIT_AMPS) * 100)}%`;
   const rightPct = `${Math.round((rightAmps / CIRCUIT_AMPS) * 100)}%`;
 
-  // session + today kWh now come from server-side integration (Tesla stopped
-  // exposing session_energy_wh on the new live_status endpoint).
-  const leftSessionKwh  = left?.sessionKwh  ?? 0;
-  const rightSessionKwh = right?.sessionKwh ?? 0;
+  // today kWh comes from server-side integration (Tesla stopped exposing
+  // session_energy_wh on the new live_status endpoint).
   const leftTodayKwh    = left?.todayKwh    ?? 0;
   const rightTodayKwh   = right?.todayKwh   ?? 0;
   const todayKwh = leftTodayKwh + rightTodayKwh;
@@ -287,13 +297,9 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnec
   // RIGHT = Tesla (cool blue). When idle, both fall back to a dim grey.
   const LEFT_COLOR  = '#9aa5b1';
   const RIGHT_COLOR = '#5b8def';
-  const sides = [
-    { name: 'LEFT',  wc: left,  inUse: leftInUse,  amps: Math.round(leftAmps),  session: leftSessionKwh,  today: leftTodayKwh,  color: LEFT_COLOR,  vehicleConnected: (left?.vitals?.vehicleConnected ?? false)  || leftVehiclePluggedIn  },
-    { name: 'RIGHT', wc: right, inUse: rightInUse, amps: Math.round(rightAmps), session: rightSessionKwh, today: rightTodayKwh, color: RIGHT_COLOR, vehicleConnected: (right?.vitals?.vehicleConnected ?? false) || rightVehiclePluggedIn },
-  ];
 
   return (
-    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '12px 22px' }}>
+    <div style={{ position: 'relative', flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, background: '#12181e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, padding: '14px 22px' }}>
       {(wcDataUnavailable || !teslaConnected) && (
         <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'inline-flex', alignItems: 'center', gap: 7, background: 'rgba(224,181,61,0.15)', color: '#e0b53d', fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999, whiteSpace: 'nowrap' }}>
           <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 13, lineHeight: 1 }}>warning</span>
@@ -336,47 +342,6 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnec
         </div>
       </div>
 
-      {/* Wall connector sub-cards */}
-      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        {sides.map(side => {
-          const vitals = side.wc?.vitals;
-          const kwLabel = vitals ? kwFor(vitals.currentA).toFixed(1) : '0.0';
-          const kwColor = side.inUse ? side.color : '#5e6873';
-          const sc = side.inUse ? side.color : '#7d8893';
-          const dotAnim = side.inUse ? 'evpulse 1.8s ease-in-out infinite' : 'none';
-          const connectedLabel = side.inUse
-            ? (side.wc?.vehicleName ?? side.name) + ' charging'
-            : side.vehicleConnected ? 'Vehicle connected · not charging' : 'No vehicle connected';
-          return (
-            <div key={side.name} style={{ display: 'flex', flexDirection: 'column', gap: 10, background: '#161c22', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: '11px 16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, letterSpacing: '0.14em', color: '#7d8893' }}>WALL CONNECTOR · {side.name}</span>
-                  <span style={{ fontSize: 15, fontWeight: 600, color: '#d3dae1' }}>{connectedLabel}</span>
-                </div>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flex: 'none', fontFamily: "'JetBrains Mono',monospace", fontSize: 11, fontWeight: 600, color: sc }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc, animation: dotAnim }} />
-                  {side.inUse ? 'IN USE' : 'AVAILABLE'}
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-                <span style={{ fontSize: 30, fontWeight: 600, lineHeight: 0.9, letterSpacing: '-0.02em', color: kwColor }}>{kwLabel}</span>
-                <span style={{ fontSize: 13, color: '#a4afba', paddingBottom: 3 }}>kW · {side.amps} A</span>
-              </div>
-              <div style={{ display: 'flex', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 12, marginTop: 'auto' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>SESSION</span>
-                  <span style={{ fontSize: 15, fontWeight: 600 }}>{!teslaConnected ? '—' : side.session > 0 ? side.session.toFixed(1) + ' kWh' : '—'}</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: '0.14em', color: '#7d8893' }}>TODAY</span>
-                  <span style={{ fontSize: 15, fontWeight: 600 }}>{!teslaConnected ? '—' : side.today.toFixed(1) + ' kWh'}</span>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -643,6 +608,16 @@ function DashboardInner() {
   // MyQ removed — future garage door integration will use Ratgdo.
   const streamUrl = data?.streamUrl ?? '';
 
+  // Map card colors mirror CircuitPanel's LEFT/RIGHT scheme (grey/blue) so
+  // a marker and its wall-connector segment read as the same vehicle.
+  const mapVehicles: MapVehicle[] = vehicles.map(v => ({
+    id: v.id,
+    name: v.name,
+    lat: v.state?.lat ?? null,
+    lon: v.state?.lon ?? null,
+    color: v.id === 'tesla' ? '#5b8def' : '#9aa5b1',
+  }));
+
   const alerts = useMemo(() => {
     if (!data) {
       return {
@@ -689,84 +664,112 @@ function DashboardInner() {
             ]}
           />
         )}
-        {/* Right: controls + stat chips */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            {weather && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#d3dae1' }}>
-                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: ACCENT }}>{owmIcon(weather.icon)}</span>
-                {weather.temp}°F · {weather.condition}
-              </span>
-            )}
-            {/* Only rendered once garageDoor is actually configured in admin
-                (Ratgdo installed) — data.garageDoorState is null otherwise,
-                per lib/ratgdo.ts. No fake status without real hardware. */}
-            {data?.garageDoorState != null && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#d3dae1' }}>
-                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: data.garageDoorState === 'open' ? '#e0b53d' : ACCENT }}>garage</span>
-                GARAGE — {data.garageDoorState.toUpperCase()}
-              </span>
-            )}
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: feedBg, color: feedColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: feedColor, animation: feedPulse ? 'evpulse 1.8s ease-in-out infinite' : 'none', flexShrink: 0 }} />
-              {feedLabel}
+        {/* Right: stat chips + weather/status icons, all one row per the
+            12.3" mockup (production / stacks these in two rows instead —
+            this layout is deliberately different, not a bug). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+          <StatChip label="DRAWING" value={totalKw} unit="kW" />
+          {solarKw !== null && <StatChip label="SOLAR" value={solarKw.toFixed(1)} unit="kW" />}
+          <StatChip label="CHARGERS" value={String(inUseCount)} unit="/ 2 in use" />
+          <StatChip label="VEHICLES" value={String(vehiclesHome)} unit="home" />
+          <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.08)' }} />
+          {weather && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#d3dae1' }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: ACCENT }}>{owmIcon(weather.icon)}</span>
+              {weather.temp}°F · {weather.condition}
             </span>
-            {streamUrl && (
-              <button onClick={() => setShowCamera(true)} title="Garage camera"
-                style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#d3dae1', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: 0 }}>
-                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>videocam</span>
-              </button>
+          )}
+          {/* Only rendered once garageDoor is actually configured in admin
+              (Ratgdo installed) — data.garageDoorState is null otherwise,
+              per lib/ratgdo.ts. No fake status without real hardware. */}
+          {data?.garageDoorState != null && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#d3dae1' }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, color: data.garageDoorState === 'open' ? '#e0b53d' : ACCENT }}>garage</span>
+              GARAGE — {data.garageDoorState.toUpperCase()}
+            </span>
+          )}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: feedBg, color: feedColor, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', padding: '5px 11px', borderRadius: 999 }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: feedColor, animation: feedPulse ? 'evpulse 1.8s ease-in-out infinite' : 'none', flexShrink: 0 }} />
+            {feedLabel}
+          </span>
+          {streamUrl && (
+            <button onClick={() => setShowCamera(true)} title="Garage camera"
+              style={{ appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#d3dae1', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: 0 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>videocam</span>
+            </button>
+          )}
+          <a href="/admin" title={appUpdateAvailable ? 'Settings — update available' : 'Settings'}
+            style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#7d8893', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, textDecoration: 'none' }}>
+            <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>settings</span>
+            {appUpdateAvailable && (
+              <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: ACCENT, border: '2px solid #0e1216' }} />
             )}
-            <a href="/admin" title={appUpdateAvailable ? 'Settings — update available' : 'Settings'}
-              style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: '#161c22', color: '#7d8893', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, textDecoration: 'none' }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 18, lineHeight: 1 }}>settings</span>
-              {appUpdateAvailable && (
-                <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: ACCENT, border: '2px solid #0e1216' }} />
-              )}
-            </a>
-          </div>
-          {/* Stat chips */}
-          <div style={{ display: 'flex', gap: 11 }}>
-            <StatChip label="DRAWING" value={totalKw} unit="kW" />
-            {solarKw !== null && <StatChip label="SOLAR" value={solarKw.toFixed(1)} unit="kW" />}
-            <StatChip label="CHARGERS" value={String(inUseCount)} unit="/ 2 in use" />
-            <StatChip label="VEHICLES" value={String(vehiclesHome)} unit="home" />
-          </div>
+          </a>
         </div>
       </div>
 
-      {/* ── Vehicle Cards ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, flex: 'none' }}>
-        {vehicles.map((v, idx) => {
-          const wc = wallConnectors.find(w => w.side === v.chargerSide);
-          const dv = toDesignVehicle(v);
-          return (
+      {/* ── Circuit Panel — full width, above the vehicle cards per the mockup ── */}
+      <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} wcDataUnavailable={!!data?.flags.wcDataUnavailable} teslaConnected={data?.teslaConnected ?? false} />
+
+      {/* ── Rivian | Map | Tesla, three cards ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.15fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
+        {(() => {
+          const rivian = vehicles.find(v => v.id === 'rivian');
+          const wc = rivian ? wallConnectors.find(w => w.side === rivian.chargerSide) : undefined;
+          return rivian && (
             <DesignVehicleCard
-              key={v.id}
-              vehicle={dv}
-              side={idx === 0 ? 'left' : 'right'}
+              key={rivian.id}
+              vehicle={toDesignVehicle(rivian)}
+              side="left"
               alerts={alerts}
               interactive={false}
-              alloc={() => {
-                // Actual amps + kW pulled from the corresponding wall connector,
-                // not from the vehicle's own charge_state (which lies about
-                // "power flowing" when Tesla decides to under-report).
-                const amps = wc?.vitals?.currentA ?? 0;
-                const kw = (wc?.vitals?.powerW ?? 0) / 1000;
-                return { amps, kw };
-              }}
-              etaFor={(veh) => veh.charging ? (v.state?.minutesToFull ?? 0) : 0}
-              onToggleCharging={() => sendCommand(v.state?.isCharging ? 'charge_stop' : 'charge_start')}
-              onToggleLock={() => sendCommand(v.state?.isLocked ? 'unlock' : 'lock')}
-              onToggleAc={() => sendCommand(v.state?.climateOn ? 'climate_stop' : 'climate_start')}
+              alloc={() => ({ amps: wc?.vitals?.currentA ?? 0, kw: (wc?.vitals?.powerW ?? 0) / 1000 })}
+              etaFor={() => rivian.state?.minutesToFull ?? 0}
+              onToggleCharging={() => sendCommand(rivian.state?.isCharging ? 'charge_stop' : 'charge_start')}
+              onToggleLock={() => sendCommand(rivian.state?.isLocked ? 'unlock' : 'lock')}
+              onToggleAc={() => sendCommand(rivian.state?.climateOn ? 'climate_stop' : 'climate_start')}
               onSetLimit={(_veh, pct) => sendCommand('set_charge_limit', { percent: pct })}
             />
           );
-        })}
-      </div>
+        })()}
 
-      {/* ── Circuit Panel ── */}
-      <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} wcDataUnavailable={!!data?.flags.wcDataUnavailable} teslaConnected={data?.teslaConnected ?? false} />
+        {/* Map card — both vehicles at once, own card chrome matching the
+            other two. No reverse-geocoding integration exists (see
+            toDesignVehicle's `place` comment above), so this doesn't
+            fabricate a city label like the mockup's "LAS VEGAS, NV" —
+            a generic caption instead of an invented location. */}
+        <div style={{ position: 'relative', background: '#161c22', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 20, overflow: 'hidden' }}>
+          <span style={{ position: 'absolute', top: 14, left: 16, zIndex: 5, fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, letterSpacing: '0.14em', color: '#a4afba', background: 'rgba(14,18,22,0.7)', padding: '4px 9px', borderRadius: 999 }}>
+            VEHICLE MAP
+          </span>
+          <MapTile12 vehicles={mapVehicles} />
+          {mapVehicles.every(v => v.lat === null) && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5e6873', fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: '0.08em' }}>
+              NO GPS FIX
+            </div>
+          )}
+        </div>
+
+        {(() => {
+          const tesla = vehicles.find(v => v.id === 'tesla');
+          const wc = tesla ? wallConnectors.find(w => w.side === tesla.chargerSide) : undefined;
+          return tesla && (
+            <DesignVehicleCard
+              key={tesla.id}
+              vehicle={toDesignVehicle(tesla)}
+              side="right"
+              alerts={alerts}
+              interactive={false}
+              alloc={() => ({ amps: wc?.vitals?.currentA ?? 0, kw: (wc?.vitals?.powerW ?? 0) / 1000 })}
+              etaFor={() => tesla.state?.minutesToFull ?? 0}
+              onToggleCharging={() => sendCommand(tesla.state?.isCharging ? 'charge_stop' : 'charge_start')}
+              onToggleLock={() => sendCommand(tesla.state?.isLocked ? 'unlock' : 'lock')}
+              onToggleAc={() => sendCommand(tesla.state?.climateOn ? 'climate_stop' : 'climate_start')}
+              onSetLimit={(_veh, pct) => sendCommand('set_charge_limit', { percent: pct })}
+            />
+          );
+        })()}
+      </div>
 
       {/* ── Camera Modal ── */}
       {showCamera && (
