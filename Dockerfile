@@ -56,6 +56,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/server ./server
 COPY --from=builder --chown=nextjs:nodejs /app/protos ./protos
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=telemetry-deps --chown=nextjs:nodejs /app/node_modules ./server/node_modules
+# Same deps, also under scripts/ -- Node's ESM resolver only climbs parent
+# directories looking for node_modules (server/ and scripts/ are siblings,
+# not ancestors of each other), and NODE_PATH doesn't affect `import`
+# resolution at all (only CommonJS require()). Diagnostic scripts like
+# scripts/parallax-watch.mjs need their own copy to resolve `ws` etc.
+COPY --from=telemetry-deps --chown=nextjs:nodejs /app/node_modules ./scripts/node_modules
 
 # Tesla vehicle-command HTTP proxy binary
 COPY --from=proxy-builder /out/tesla-http-proxy /usr/local/bin/tesla-http-proxy
