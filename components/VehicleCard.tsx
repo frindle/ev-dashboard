@@ -356,6 +356,15 @@ export type VehicleCardProps = {
   // and /14display (neither has a shared map card) are unaffected.
   showAwayTile?: boolean;
 
+  // True on /12.3display only: the card stretches to match its taller
+  // sibling (the map card) in that route's 3-card grid row, but content
+  // stays top-packed by default, leaving a dead gap between the footer
+  // status line and the card's actual bottom edge. Pins the footer
+  // (status pill/button + eta line + source footnote) to the bottom via
+  // marginTop:auto instead. Defaults false -- / and /14display's 2-card
+  // rows don't have a same-row height mismatch to correct for.
+  pinFooterToBottom?: boolean;
+
   // False on /12.3display: the stats-grid TARGET tile duplicates the dial's
   // own "LIMIT X%" sub-label -- same v.limit value, rendered a few inches
   // apart. Present in the original design/mockup too, but only noticeable
@@ -368,7 +377,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
           mapComponent: Map = MapTile, interactive = true,
-          showTargetStat = true, showAwayTile = true } = props;
+          showTargetStat = true, showAwayTile = true, pinFooterToBottom = false } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -712,7 +721,8 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
       {/* ── FOOTER: start/stop + eta + source caption ── */}
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 11,
-        borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14
+        borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14,
+        ...(pinFooterToBottom ? { marginTop: 'auto' } : {})
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir }}>
           {v.ctrl === 'full' && interactive && (v.charging || pluggedIn) && (

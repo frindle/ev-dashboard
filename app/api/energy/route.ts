@@ -26,6 +26,13 @@ export interface EnergyVehicleSummary {
   comparable: string;          // e.g. "2026 Mazda 3 4-Door 2WD 2.5L"
   mpg: number;
   miPerKwh: number | null;     // null when we have no usable live state
+  // Running average kWh charged/day over up to the trailing 6 months. A
+  // TRUE running average, not a fixed 182-day divisor: while a vehicle has
+  // less than 6 months of charge-history rows, divides by the actual span
+  // since its earliest recorded session instead -- otherwise a car with 3
+  // weeks of data would read at ~1/8th its real daily average until the
+  // window fills up. null only when there's no charge history at all yet.
+  avgDailyKwh6mo: number | null;
 }
 
 export interface EnergySessionSummary {
@@ -138,6 +145,26 @@ export async function GET() {
   ]);
   const effFor: Record<VehicleId, number | null> = { rivian: rivianEff, tesla: teslaEff };
 
+  // ── running 6-month daily average ──
+  const SIX_MONTHS_MS = 182 * 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const sixMoCutoff = nowMs - SIX_MONTHS_MS;
+  const earliestMs: Record<VehicleId, number> = { rivian: Infinity, tesla: Infinity };
+  const sixMoKwh: Record<VehicleId, number> = { rivian: 0, tesla: 0 };
+  for (const r of rows) {
+    const id = idFor(r);
+    const t = new Date(r.startedAt).getTime();
+    if (t < earliestMs[id]) earliestMs[id] = t;
+    if (t >= sixMoCutoff) sixMoKwh[id] += r.energyKwh;
+  }
+  const avgDailyKwh6moFor: Record<VehicleId, number | null> = { rivian: null, tesla: null };
+  for (const id of ['rivian', 'tesla'] as const) {
+    if (!isFinite(earliestMs[id])) continue; // no charge history at all yet
+    const windowStartMs = Math.max(earliestMs[id], sixMoCutoff);
+    const windowDays = Math.max(1, (nowMs - windowStartMs) / (24 * 60 * 60 * 1000));
+    avgDailyKwh6moFor[id] = Math.round((sixMoKwh[id] / windowDays) * 100) / 100;
+  }
+
   const vehicles: EnergyVehicleSummary[] = (['rivian', 'tesla'] as const).map(id => ({
     id,
     name: cfg.vehicles[id].name,
@@ -145,6 +172,7 @@ export async function GET() {
     comparable: COMPARABLES[id].comparable,
     mpg: COMPARABLES[id].mpg,
     miPerKwh: effFor[id] === null ? null : Math.round(effFor[id]! * 100) / 100,
+    avgDailyKwh6mo: avgDailyKwh6moFor[id],
   }));
 
   // ── Savings, per session then totalled for the current calendar month ──
