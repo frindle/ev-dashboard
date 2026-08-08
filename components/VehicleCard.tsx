@@ -383,13 +383,21 @@ export type VehicleCardProps = {
   // the away-tile itself (speed/place text) still needs its own caller-side
   // gating if that's also considered sensitive. Defaults false.
   hideLocation?: boolean;
+
+  // 'lg' on /12.3display only: that route's cards are stretched wide/tall
+  // by the 3-card grid row, and text/dial sized for the compact / and
+  // /14display cards reads as small in the extra space. Scales the dial
+  // and the stat/header font sizes up; layout (grid columns, mirroring)
+  // is unchanged. Defaults 'md' so / and /14display are unaffected.
+  size?: 'md' | 'lg';
 };
 
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
           mapComponent: Map = MapTile, interactive = true,
-          showAwayTile = true, hideLocation = false } = props;
+          showAwayTile = true, hideLocation = false, size = 'md' } = props;
+  const lg = size === 'lg';
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -458,8 +466,8 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   return (
     <div style={{
       background: '#161c22', border: '1px solid rgba(255,255,255,0.06)',
-      borderRadius: 20, padding: '16px 22px',
-      display: 'flex', flexDirection: 'column', gap: 12,
+      borderRadius: 20, padding: lg ? '22px 28px' : '16px 22px',
+      display: 'flex', flexDirection: 'column', gap: lg ? 16 : 12,
       boxShadow: '0 18px 44px -30px rgba(0,0,0,.85)',
       position: 'relative'
     }}>
@@ -494,8 +502,8 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
         gap: 12, flexDirection: rowDir
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: nameAlign, flex: 'none' }}>
-          <span style={{ fontSize: 19, fontWeight: 600 }}>{v.name}</span>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#a4afba', letterSpacing: '.03em' }}>
+          <span style={{ fontSize: lg ? 24 : 19, fontWeight: 600 }}>{v.name}</span>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 13 : 10.5, color: '#a4afba', letterSpacing: '.03em' }}>
             {v.model}
           </span>
         </div>
@@ -504,9 +512,9 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 7,
             background: statusBg, color: statusColor,
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5,
+            fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 12.5 : 10.5,
             fontWeight: 600, letterSpacing: '.06em',
-            padding: '6px 12px', borderRadius: 999
+            padding: lg ? '7px 14px' : '6px 12px', borderRadius: 999
           }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: statusDot, animation: statusAnim }} />
             {statusLabel}
@@ -518,25 +526,25 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           {v.ctrl === 'full' && interactive && (
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onToggleLock(v)} title={v.locked ? 'Locked' : 'Unlocked'} style={{
-              appearance: 'none', cursor: 'pointer', width: 42, height: 42,
+              appearance: 'none', cursor: 'pointer', width: lg ? 50 : 42, height: lg ? 50 : 42,
               borderRadius: 12, background: v.locked ? '#1b232b' : 'rgba(226,104,95,0.16)',
               border: '1px solid rgba(255,255,255,0.06)',
               color: v.locked ? '#a4afba' : '#e2685f',
               display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
             }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 22, lineHeight: 1 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: lg ? 26 : 22, lineHeight: 1 }}>
                 {v.locked ? 'lock' : 'lock_open'}
               </span>
             </button>
             <button onClick={() => onToggleAc(v)} title={v.ac ? 'AC on' : 'AC off'} style={{
-              appearance: 'none', cursor: 'pointer', width: 42, height: 42,
+              appearance: 'none', cursor: 'pointer', width: lg ? 50 : 42, height: lg ? 50 : 42,
               borderRadius: 12, background: v.ac ? ACCENT_SOFT : '#1b232b',
               border: '1px solid rgba(255,255,255,0.06)',
               color: v.ac ? ACCENT : '#a4afba',
               display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
             }}>
               <span style={{
-                fontFamily: "'Material Symbols Rounded'", fontSize: 23, lineHeight: 1,
+                fontFamily: "'Material Symbols Rounded'", fontSize: lg ? 27 : 23, lineHeight: 1,
                 animation: 'acspin 2.4s linear infinite',
                 animationPlayState: v.ac ? 'running' : 'paused'
               }}>mode_fan</span>
@@ -552,24 +560,24 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           {(v.ctrl !== 'full' || !interactive) && (
           <div style={{ display: 'flex', gap: 8 }}>
             <div title={v.locked ? 'Locked' : 'Unlocked'} style={{
-              width: 42, height: 42, opacity: 0.7,
+              width: lg ? 50 : 42, height: lg ? 50 : 42, opacity: 0.7,
               borderRadius: 12, background: v.locked ? '#1b232b' : 'rgba(226,104,95,0.16)',
               border: '1px solid rgba(255,255,255,0.06)',
               color: v.locked ? '#a4afba' : '#e2685f',
               display: 'flex', alignItems: 'center', justifyContent: 'center'
             }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 22, lineHeight: 1 }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: lg ? 26 : 22, lineHeight: 1 }}>
                 {v.locked ? 'lock' : 'lock_open'}
               </span>
             </div>
             <div title={v.ac ? 'AC on' : 'AC off'} style={{
-              width: 42, height: 42, opacity: 0.7,
+              width: lg ? 50 : 42, height: lg ? 50 : 42, opacity: 0.7,
               borderRadius: 12, background: v.ac ? ACCENT_SOFT : '#1b232b',
               border: '1px solid rgba(255,255,255,0.06)',
               color: v.ac ? ACCENT : '#a4afba',
               display: 'flex', alignItems: 'center', justifyContent: 'center'
             }}>
-              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 23, lineHeight: 1 }}>mode_fan</span>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: lg ? 27 : 23, lineHeight: 1 }}>mode_fan</span>
             </div>
           </div>
           )}
@@ -581,7 +589,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           card height -- on /12.3display the card is stretched to match the
           taller map card in that route's 3-card row, and centering here
           spreads the slack evenly instead of leaving one dead gap. */}
-      <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir, flex: 1 }}>
+      <div style={{ display: 'flex', gap: lg ? 30 : 22, alignItems: 'center', flexDirection: rowDir, flex: 1 }}>
         {/* Driving/away tile — replaces the charge dial while the vehicle is
             away from home. Design's source used a placeholder image-slot
             for a live map -- that's a Claude Design editor-only element,
@@ -642,8 +650,8 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             the dial fills the slot unconditionally instead of leaving it
             blank while away. */}
         {(atHome || !showAwayTile) && (
-        <div style={{ position: 'relative', width: 128, height: 128, flex: 'none' }}>
-          <svg width={128} height={128} viewBox="0 0 120 120"
+        <div style={{ position: 'relative', width: lg ? 176 : 128, height: lg ? 176 : 128, flex: 'none' }}>
+          <svg width={lg ? 176 : 128} height={lg ? 176 : 128} viewBox="0 0 120 120"
                onClick={onDialTap}
                style={{ cursor: dialCursor, touchAction: 'none' }}>
             <circle cx={60} cy={60} r={52} fill="none" stroke="#222b34" strokeWidth={9} />
@@ -660,9 +668,9 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center', gap: 1, pointerEvents: 'none'
           }}>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, letterSpacing: '.22em', color: '#a4afba' }}>CHARGE</span>
-            <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 600, color: '#e8edf2', lineHeight: 1.1 }}>{v.soc}%</span>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, letterSpacing: '.18em', color: '#e2685f' }}>LIMIT {v.limit}%</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10 : 8, letterSpacing: '.22em', color: '#a4afba' }}>CHARGE</span>
+            <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: lg ? 34 : 26, fontWeight: 600, color: '#e8edf2', lineHeight: 1.1 }}>{v.soc}%</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10 : 8, letterSpacing: '.18em', color: '#e2685f' }}>LIMIT {v.limit}%</span>
           </div>
 
           {limitEditorOpen && (
@@ -710,15 +718,15 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
         <div style={{
           display: 'grid', gridTemplateColumns: '1fr 1fr',
           gridAutoFlow: 'dense',                          // required so mirrored columns fill row 1 correctly
-          gap: '13px 18px', flex: 1, textAlign: statsTextAlign
+          gap: lg ? '20px 26px' : '13px 18px', flex: 1, textAlign: statsTextAlign
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>RANGE LEFT</span>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>{v.range} <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}>mi</span></span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, letterSpacing: '.14em', color: '#7d8893' }}>RANGE LEFT</span>
+            <span style={{ fontSize: lg ? 22 : 17, fontWeight: 600 }}>{v.range} <span style={{ fontSize: lg ? 13 : 11, color: '#a4afba', fontWeight: 500 }}>mi</span></span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>ODOMETER</span>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>{v.odo.toLocaleString('en-US')} <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}>mi</span></span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, letterSpacing: '.14em', color: '#7d8893' }}>ODOMETER</span>
+            <span style={{ fontSize: lg ? 22 : 17, fontWeight: 600 }}>{v.odo.toLocaleString('en-US')} <span style={{ fontSize: lg ? 13 : 11, color: '#a4afba', fontWeight: 500 }}>mi</span></span>
           </div>
           {/* Redundant with the dial's own "LIMIT X%" sub-label whenever the
               dial is actually the thing rendering (same v.limit value, a
@@ -730,12 +738,12 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               unconditionally, so this stays suppressed in both states
               there -- not just at-home. */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>TARGET</span>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>{v.limit}%</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, letterSpacing: '.14em', color: '#7d8893' }}>TARGET</span>
+            <span style={{ fontSize: lg ? 22 : 17, fontWeight: 600 }}>{v.limit}%</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
+            <span style={{ fontSize: lg ? 22 : 17, fontWeight: 600 }}>
               {chargingHome ? (v.parallaxPowerKw ?? a.kw).toFixed(1) + ' kW' : (v.charging ? 'away' : '—')}
             </span>
           </div>
@@ -744,16 +752,16 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
 
       {/* ── FOOTER: start/stop + eta + source caption ── */}
       <div style={{
-        display: 'flex', flexDirection: 'column', gap: 11,
-        borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14
+        display: 'flex', flexDirection: 'column', gap: lg ? 13 : 11,
+        borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: lg ? 16 : 14
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir }}>
           {v.ctrl === 'full' && interactive && (v.charging || pluggedIn) && (
             <button onClick={() => onToggleCharging(v)} style={{
               appearance: 'none', cursor: 'pointer', flex: 'none',
-              padding: '10px 18px', borderRadius: 11,
+              padding: lg ? '12px 20px' : '10px 18px', borderRadius: 11,
               background: btnBg, border: btnBorder, color: btnColor,
-              fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600
+              fontFamily: "'Space Grotesk', sans-serif", fontSize: lg ? 15 : 13, fontWeight: 600
             }}>{btnLabel}</button>
           )}
           {/* Status-only (dashed border, no onClick) -- unlike the real
@@ -763,23 +771,23 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               an interactive gate). */}
           {v.ctrl === 'schedule' && (
             <span style={{
-              flex: 'none', padding: '10px 14px', borderRadius: 11,
+              flex: 'none', padding: lg ? '12px 16px' : '10px 14px', borderRadius: 11,
               background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)',
               color: '#a4afba', fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 10.5, letterSpacing: '.04em'
+              fontSize: lg ? 12 : 10.5, letterSpacing: '.04em'
             }}>SCHEDULE ONLY</span>
           )}
           {v.ctrl === 'full' && !v.charging && !pluggedIn && (
             <span style={{
-              flex: 'none', padding: '10px 14px', borderRadius: 11,
+              flex: 'none', padding: lg ? '12px 16px' : '10px 14px', borderRadius: 11,
               background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)',
               color: '#a4afba', fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 10.5, letterSpacing: '.04em'
+              fontSize: lg ? 12 : 10.5, letterSpacing: '.04em'
             }}>NOT PLUGGED IN</span>
           )}
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5,
+            fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 13 : 11.5,
             fontWeight: 600, letterSpacing: '.04em', color: etaColor
           }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: etaColor }} />
@@ -787,7 +795,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           </span>
         </div>
         <span style={{
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 8.5,
+          fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 9.5 : 8.5,
           letterSpacing: '.14em', color: '#5e6873', textAlign: sourceAlign
         }}>
           {v.ctrl === 'full' ? 'CHARGE LIMIT' : 'CHARGE LIMIT · VIA SCHEDULE'} · {canEditLimit ? 'TAP DIAL TO SET' : 'SET VIA RIVIAN APP'} · SOURCE {v.apiLabel}
