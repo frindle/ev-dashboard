@@ -22,19 +22,6 @@ type Severity = 'info' | 'neutral' | 'warning' | 'critical';
 const ACCENT = '#34e0c4';
 const ACCENT_SOFT = 'rgba(52,224,196,0.16)';
 
-// Same 240V split-phase assumption as app/page.tsx's own VOLTS constant
-// (kept local rather than shared -- this component doesn't otherwise know
-// about circuit voltage, and duplicating one constant beats a new shared
-// module for it). Charger current is set in 2A steps here, so this rounds
-// UP -- undershooting the amp setting would fail to add the full avg/day
-// amount in the 8h window, overshooting by up to 2A worth is the safe side.
-const CHARGE_VOLTS = 240;
-const CHARGE_WINDOW_HOURS = 8;
-function ampsToAddIn8h(kwh: number): number {
-  const amps = (kwh * 1000 / CHARGE_WINDOW_HOURS) / CHARGE_VOLTS;
-  return Math.ceil(amps / 2) * 2;
-}
-
 const SEV: Record<Severity, { color: string; bg: string; border: string }> = {
   info:     { color: ACCENT,    bg: 'rgba(52,224,196,0.10)', border: 'rgba(52,224,196,0.22)' },
   neutral:  { color: '#a4afba', bg: '#1b232b',               border: 'rgba(255,255,255,0.06)' },
@@ -398,13 +385,6 @@ export type VehicleCardProps = {
   // rows don't have a same-row height mismatch to correct for.
   pinFooterToBottom?: boolean;
 
-  // False on /12.3display: the stats-grid TARGET tile duplicates the dial's
-  // own "LIMIT X%" sub-label -- same v.limit value, rendered a few inches
-  // apart. Present in the original design/mockup too, but only noticeable
-  // once the card gets this compact. Defaults true so / and /14display keep
-  // their existing 4-tile grid unchanged.
-  showTargetStat?: boolean;
-
   // Privacy: true when the caller has determined EVERY vehicle is confirmed
   // away from home (not just this one) -- a kiosk-visible map showing
   // "nobody's home + exact location" is a real risk if anyone unauthorized
@@ -418,7 +398,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
           mapComponent: Map = MapTile, interactive = true,
-          showTargetStat = true, showAwayTile = true, pinFooterToBottom = false, hideLocation = false } = props;
+          showAwayTile = true, pinFooterToBottom = false, hideLocation = false } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -754,36 +734,11 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               where showAwayTile is false (12.3display), the dial renders
               unconditionally, so this stays suppressed in both states
               there -- not just at-home. */}
-          {(showTargetStat || (!atHome && showAwayTile)) ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>TARGET</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>{v.limit}%</span>
           </div>
-          ) : (
-          /* Fills the exact slot TARGET vacates on 12.3display -- see the
-             34992e5 commit message ("grid slot freed up by dropping the
-             redundant TARGET tile"), the intended next step that never got
-             wired up. null when there's no charge-history yet at all
-             (never shows "0.0" for a car with zero real data). */
-          v.avgDailyKwh6mo !== null && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>AVG/DAY</span>
-            <span style={{ fontSize: 17, fontWeight: 600 }}>{v.avgDailyKwh6mo.toFixed(1)} <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}>kWh</span></span>
-            {/* Amp setting (2A steps) that adds this much energy in an 8h
-                overnight window -- e.g. plan tonight's charge-current cap
-                off the car's own real recent usage instead of guessing. */}
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: '#7d8893' }}>→ {ampsToAddIn8h(v.avgDailyKwh6mo)}A/8H</span>
-          </div>
-          ))}
-          {/* When neither TARGET nor AVG/DAY renders above (12.3display,
-              no charge-history yet for this vehicle -- e.g. Tesla before
-              its first tracked session), that grid cell is empty and
-              leaves a dead gap next to this tile. Span the full row
-              instead of leaving it, so the card doesn't look sparse. */}
-          <div style={{
-            display: 'flex', flexDirection: 'column', gap: 2,
-            gridColumn: (showTargetStat || (!atHome && showAwayTile) || v.avgDailyKwh6mo !== null) ? colOutside : '1 / -1'
-          }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>
               {chargingHome ? (v.parallaxPowerKw ?? a.kw).toFixed(1) + ' kW' : (v.charging ? 'away' : '—')}

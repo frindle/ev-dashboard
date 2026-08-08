@@ -777,7 +777,6 @@ function DashboardInner() {
               interactive={false}
               showAwayTile={false}
               pinFooterToBottom={true}
-              showTargetStat={false}
               alloc={() => ({ amps: wc?.vitals?.currentA ?? 0, kw: (wc?.vitals?.powerW ?? 0) / 1000 })}
               etaFor={() => rivian.state?.minutesToFull ?? 0}
               onToggleCharging={() => sendCommand(rivian.state?.isCharging ? 'charge_stop' : 'charge_start')}
@@ -822,7 +821,6 @@ function DashboardInner() {
               interactive={false}
               showAwayTile={false}
               pinFooterToBottom={true}
-              showTargetStat={false}
               alloc={() => ({ amps: wc?.vitals?.currentA ?? 0, kw: (wc?.vitals?.powerW ?? 0) / 1000 })}
               etaFor={() => tesla.state?.minutesToFull ?? 0}
               onToggleCharging={() => sendCommand(tesla.state?.isCharging ? 'charge_stop' : 'charge_start')}
