@@ -182,6 +182,26 @@ function writeLoginDebug(entry: Record<string, unknown>): void {
   } catch { /* non-fatal */ }
 }
 
+function vehicleStateDebugPath(): string {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  return join(dir, 'rivian-state-debug.json');
+}
+
+// Full raw GetVehicleState response, overwritten every successful poll --
+// same reasoning as writeLoginDebug above. The trimmed RivianVehicleState
+// this module builds only carries fields it currently knows to check; when
+// something unexpected happens (an undocumented derate string, a field
+// that doesn't parse as assumed), this is the whole return to diff
+// against. Persisted to the keys volume so it survives a container
+// restart -- unlike stdout logs, which vanish the moment the container
+// does (confirmed the hard way 2026-08-08: a redeploy mid-investigation
+// erased the only record of the charge session being debugged).
+function writeVehicleStateDebug(vs: RawVehicleState): void {
+  try {
+    writeFileSync(vehicleStateDebugPath(), JSON.stringify({ ts: new Date().toISOString(), vehicleState: vs }, null, 2));
+  } catch { /* non-fatal */ }
+}
+
 export function readRivianTokens(): RivianTokens | null {
   const p = tokensPath();
   if (!existsSync(p)) return null;
@@ -510,6 +530,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
 
     resetBackoff();
     const vs = data.vehicleState;
+    writeVehicleStateDebug(vs);
     // String() on every enum-ish field: Rivian's gateway returns raw JSON
     // numbers on fields its own schema types as String (confirmed on the OTA
     // version fields), and any .trim()/.toLowerCase() on one of those throws
