@@ -226,6 +226,7 @@ function buildAlerts(data: DashboardData): AlertInputs {
     rivianDerate: (flags.rivianDerateStickyUntilUnplugged || flags.rivianDerateActive)
       ? (flags.rivianDerateStickyReason || flags.rivianDerateReason || 'ACTIVE')
       : '',
+    rivianChargeSlowedLastSession: flags.rivianChargeSlowedLastSession,
     rivianPluggedIn: flags.rivianPluggedIn,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',
@@ -665,7 +666,7 @@ function DashboardInner() {
         rivianOta: 'none', rivianOtaVersion: '',
         rivianTire: 'ok', rivianTireCorner: 'FL',
         rivianWiper: 'ok', rivianBrake: 'ok',
-        rivianThermal: 'ok', rivianDerate: '',
+        rivianThermal: 'ok', rivianDerate: '', rivianChargeSlowedLastSession: false,
         rivianPluggedIn: false,
         teslaLocationScope: 'granted',
         teslaOta: 'none', teslaOtaVersion: '', teslaOtaDownloading: false,

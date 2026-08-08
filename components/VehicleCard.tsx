@@ -97,6 +97,12 @@ export type AlertInputs = {
   rivianBrake:      'ok' | 'low';
   rivianThermal:    'ok' | 'detected';
   rivianDerate:     string;           // non-empty = fire; sticky until unplugged (see page.tsx)
+  // True when the most recently completed wall-connector charge session saw
+  // a derate at any point -- persists past unplug, until the NEXT session
+  // starts (see DashboardFlags.rivianChargeSlowedLastSession). Distinct
+  // window from rivianDerate above (which clears on unplug): this is the
+  // one that answers "was charging slowed last time", after the fact.
+  rivianChargeSlowedLastSession: boolean;
   rivianPluggedIn:  boolean;          // "PLUGGED IN" chip — shown only while NOT charging (redundant if charging)
 
   // tesla card
@@ -149,6 +155,12 @@ export function buildChipsFor(veh: Vehicle, a: AlertInputs): Chip[] {
     } else if (a.rivianDerate?.trim()) {
       chips.push(mkChip('warning', 'device_thermostat',
         'CHARGING THROTTLED — ' + a.rivianDerate.trim().toUpperCase()));
+    } else if (a.rivianChargeSlowedLastSession) {
+      // rivianDerate above already covers "currently throttled, still
+      // plugged in" -- this only fires once that's cleared (unplugged, or
+      // a fresh session started without a repeat derate), as the
+      // after-the-fact signal for the session that just ended.
+      chips.push(mkChip('warning', 'device_thermostat', 'CHARGE SLOWED LAST SESSION'));
     }
 
     if (a.rivianOta === 'available') {

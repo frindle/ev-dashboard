@@ -344,6 +344,7 @@ function buildAlerts(data: DashboardData): AlertInputs {
     // instant isThrottled flips false, but the chip should persist (with
     // its reason) for the whole plug-in cycle, per the user's actual ask.
     rivianDerate: flags.rivianDerateStickyUntilUnplugged ? (flags.rivianDerateStickyReason ?? '') : '',
+    rivianChargeSlowedLastSession: flags.rivianChargeSlowedLastSession,
     rivianPluggedIn: flags.rivianPluggedIn,
     // Placeholder — a real "scope missing" detector needs a server-side flag.
     teslaLocationScope: 'granted',
@@ -773,7 +774,7 @@ function DashboardInner() {
         rivianOta: 'none', rivianOtaVersion: '',
         rivianTire: 'ok', rivianTireCorner: 'FL',
         rivianWiper: 'ok', rivianBrake: 'ok',
-        rivianThermal: 'ok', rivianDerate: '',
+        rivianThermal: 'ok', rivianDerate: '', rivianChargeSlowedLastSession: false,
         rivianPluggedIn: false,
         teslaLocationScope: 'granted',
         teslaOta: 'none', teslaOtaVersion: '', teslaOtaDownloading: false,
