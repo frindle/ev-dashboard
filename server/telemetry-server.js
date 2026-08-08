@@ -169,7 +169,17 @@ function applyDatum(state, key, value) {
     case 'DetailedChargeState':
       state.isCharging = (v === 4);
       state.isPluggedIn = (v !== 0 && v !== 1);
-      state.chargingState = String(v); break;
+      state.chargingState = String(v);
+      // Per-field timestamp -- writeState() stamps ONE fetchedAt for the
+      // whole merged object regardless of which field actually changed, so
+      // "cache is recent" doesn't mean "this specific field is recent" (a
+      // Soc-only datum bumps fetchedAt without touching isPluggedIn at all).
+      // Confirmed 2026-08-08: this let a stale isPluggedIn=true survive
+      // indefinitely past when the car was actually unplugged and driven
+      // away, as long as SOME telemetry kept trickling in. route.ts gates
+      // isPluggedIn trust on this specifically now, not on fetchedAt.
+      state._chargeStateUpdatedAt = Date.now();
+      break;
 
     // Charging power / progress -- ChargeAmps is actual amps, NOT mph;
     // these used to share one field (bug, caught 2026-07-25 when both got
@@ -212,6 +222,12 @@ function applyDatum(state, key, value) {
       if (value.locationValue) {
         state.lat = value.locationValue.latitude;
         state.lon = value.locationValue.longitude;
+        // Per-field timestamp -- see the same comment on ChargeState above.
+        // This is the one route.ts's atHome detection now trusts instead
+        // of the whole-object fetchedAt (was letting a stale position read
+        // as "home" indefinitely once the car stopped sending Location but
+        // kept trickling other telemetry).
+        state._locationUpdatedAt = Date.now();
       }
       break;
     case 'GpsHeading':

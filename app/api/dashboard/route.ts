@@ -220,6 +220,15 @@ const TESLA_INTERVAL_IDLE_MS = 20 * 60_000;
 // 10min alongside the quota cut above; telemetry silence this long is still
 // almost always "nothing changed," not "connection dropped."
 const TELEMETRY_TRUST_WINDOW_MS = 30 * 60_000;
+// Per-field staleness bound for _locationUpdatedAt/_chargeStateUpdatedAt --
+// deliberately tighter than TELEMETRY_TRUST_WINDOW_MS above, which only
+// bounds "is the connection still alive at all," not "is this specific
+// field's value still true." Matches Rivian's GPS_STALE_MS convention.
+// Confirmed 2026-08-08: without a per-field bound, a car that went fully to
+// sleep (stopped sending Location/ChargeState) but kept trickling other
+// telemetry read as "home" and "plugged in" indefinitely, arbitrarily long
+// after it was actually driven away unplugged.
+const TESLA_FIELD_STALE_MS = 15 * 60_000;
 
 interface TeslaCache {
   state: TeslaVehicleState;
@@ -270,8 +279,25 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
       // lat/lon anyway (drive_state is dropped from the vehicle_data query
       // -- requesting the vehicle_location scope 403s the whole call), so
       // telemetry's Location field is the *only* real GPS source for Tesla.
-      const gpsFresh = cache.state.lat !== null && cache.state.lon !== null;
-      return { ...cache.state, _gpsFresh: gpsFresh, _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
+      //
+      // Gated on _locationUpdatedAt specifically now, not on `lat !== null`
+      // alone -- lat/lon stay non-null forever once ever set (nothing
+      // clears them), and the overall cache ageMs check above only proves
+      // SOME telemetry field arrived recently, not that Location did.
+      // Confirmed 2026-08-08: this let atHome read true long after the car
+      // actually left, as long as any other telemetry kept trickling in.
+      const locAge = cache.state._locationUpdatedAt ? Date.now() - cache.state._locationUpdatedAt : Infinity;
+      const gpsFresh = cache.state.lat !== null && cache.state.lon !== null && locAge < TESLA_FIELD_STALE_MS;
+
+      // Same reasoning for isPluggedIn/isCharging -- a stale ChargeState
+      // reads as confidently plugged in/charging otherwise. Past the
+      // staleness window we don't know, and "don't know" should not
+      // display as a confident true.
+      const chargeAge = cache.state._chargeStateUpdatedAt ? Date.now() - cache.state._chargeStateUpdatedAt : Infinity;
+      const chargeStateFresh = chargeAge < TESLA_FIELD_STALE_MS;
+      const state = chargeStateFresh ? cache.state : { ...cache.state, isPluggedIn: false, isCharging: false };
+
+      return { ...state, _gpsFresh: gpsFresh, _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
     }
     // Poll-sourced data: use the original cadence (30s active / 5min idle).
     // cache.source !== 'telemetry' here means we've fallen back to polling
@@ -299,17 +325,42 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     // real last-known values. Preserve cached values for slowly-changing
     // fields whenever the fresh poll reports the car as offline.
     if (cache?.state) {
-      if (fresh.lat === null && cache.state.lat !== null) fresh.lat = cache.state.lat;
-      if (fresh.lon === null && cache.state.lon !== null) fresh.lon = cache.state.lon;
+      // Only restore lat/lon (and below, isPluggedIn) from cache when that
+      // SPECIFIC field is still within its staleness window -- restoring
+      // unconditionally is what let a car that had been asleep/away for
+      // hours keep reading as "home" and "plugged in" indefinitely.
+      // Leaving them at fresh's default (null / whatever fetchVehicleState
+      // set) is the honest "we don't currently know" answer once stale.
+      const locAge = cache.state._locationUpdatedAt ? Date.now() - cache.state._locationUpdatedAt : Infinity;
+      if (fresh.lat === null && cache.state.lat !== null && locAge < TESLA_FIELD_STALE_MS) {
+        fresh.lat = cache.state.lat;
+        fresh.lon = cache.state.lon;
+        // Carry the real timestamp forward too, not just the value -- a
+        // 'poll'-sourced write (below) would otherwise drop it, making the
+        // NEXT read see it as stale immediately even though it's still
+        // genuinely within window right now.
+        fresh._locationUpdatedAt = cache.state._locationUpdatedAt;
+      }
       if (!fresh.online) {
-        // Asleep — Tesla's response is incomplete. Restore last-known good.
+        // Asleep — Tesla's response is incomplete. Restore last-known good
+        // for slowly-changing fields that have no staleness concern...
         fresh.chargePercent = cache.state.chargePercent;
         fresh.chargeLimit   = cache.state.chargeLimit;
         fresh.rangeMi       = cache.state.rangeMi;
         fresh.odometer      = cache.state.odometer || fresh.odometer;
         fresh.isLocked      = cache.state.isLocked;
-        fresh.isPluggedIn   = cache.state.isPluggedIn;
-        fresh.chargingState = cache.state.chargingState;
+        // ...but isPluggedIn/chargingState only within the freshness
+        // window -- past it, "don't know" must not read as a confident
+        // "plugged in". Confirmed 2026-08-08: this was showing plugged-in
+        // for a car that had actually been unplugged and driven away.
+        const chargeAge = cache.state._chargeStateUpdatedAt ? Date.now() - cache.state._chargeStateUpdatedAt : Infinity;
+        if (chargeAge < TESLA_FIELD_STALE_MS) {
+          fresh.isPluggedIn   = cache.state.isPluggedIn;
+          fresh.chargingState = cache.state.chargingState;
+          fresh._chargeStateUpdatedAt = cache.state._chargeStateUpdatedAt; // carry forward, same reasoning as location above
+        } else {
+          fresh.isPluggedIn = false;
+        }
       }
     }
     // Only persist when we got a real online response, OR when we

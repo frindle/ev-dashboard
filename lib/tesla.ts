@@ -38,6 +38,14 @@ export interface TeslaVehicleState {
   // in the UI yet, see server/telemetry-server.js for the raw values.
   speedMph?: number;
   gpsHeadingDeg?: number;
+  // When Location / ChargeState were actually last updated by a telemetry
+  // datum -- NOT when the cache file was last written (writeState() stamps
+  // one fetchedAt for the whole merged object on every message, regardless
+  // of which field it touched). route.ts uses these to gate atHome/
+  // isPluggedIn trust per-field instead of by overall cache age. See
+  // server/telemetry-server.js's applyDatum() comments.
+  _locationUpdatedAt?: number;
+  _chargeStateUpdatedAt?: number;
   gearStatus?: string;           // 'park' | 'reverse' | 'neutral' | 'drive' | '' -- mirrors RivianVehicleState.gearStatus
   gpsState?: number;
   locatedAtHome?: boolean;
