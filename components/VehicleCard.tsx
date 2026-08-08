@@ -22,6 +22,19 @@ type Severity = 'info' | 'neutral' | 'warning' | 'critical';
 const ACCENT = '#34e0c4';
 const ACCENT_SOFT = 'rgba(52,224,196,0.16)';
 
+// Same 240V split-phase assumption as app/page.tsx's own VOLTS constant
+// (kept local rather than shared -- this component doesn't otherwise know
+// about circuit voltage, and duplicating one constant beats a new shared
+// module for it). Charger current is set in 2A steps here, so this rounds
+// UP -- undershooting the amp setting would fail to add the full avg/day
+// amount in the 8h window, overshooting by up to 2A worth is the safe side.
+const CHARGE_VOLTS = 240;
+const CHARGE_WINDOW_HOURS = 8;
+function ampsToAddIn8h(kwh: number): number {
+  const amps = (kwh * 1000 / CHARGE_WINDOW_HOURS) / CHARGE_VOLTS;
+  return Math.ceil(amps / 2) * 2;
+}
+
 const SEV: Record<Severity, { color: string; bg: string; border: string }> = {
   info:     { color: ACCENT,    bg: 'rgba(52,224,196,0.10)', border: 'rgba(52,224,196,0.22)' },
   neutral:  { color: '#a4afba', bg: '#1b232b',               border: 'rgba(255,255,255,0.06)' },
@@ -66,6 +79,7 @@ export type Vehicle = {
   heading: number;          // degrees, 0-360 -- compass heading while driving
   lat: number | null;
   lon: number | null;
+  avgDailyKwh6mo: number | null; // running 6mo avg, see EnergyVehicleSummary in app/api/energy/route.ts
 };
 
 export type AlertInputs = {
@@ -703,12 +717,27 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               where showAwayTile is false (12.3display), the dial renders
               unconditionally, so this stays suppressed in both states
               there -- not just at-home. */}
-          {(showTargetStat || (!atHome && showAwayTile)) && (
+          {(showTargetStat || (!atHome && showAwayTile)) ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>TARGET</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>{v.limit}%</span>
           </div>
-          )}
+          ) : (
+          /* Fills the exact slot TARGET vacates on 12.3display -- see the
+             34992e5 commit message ("grid slot freed up by dropping the
+             redundant TARGET tile"), the intended next step that never got
+             wired up. null when there's no charge-history yet at all
+             (never shows "0.0" for a car with zero real data). */
+          v.avgDailyKwh6mo !== null && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>AVG/DAY</span>
+            <span style={{ fontSize: 17, fontWeight: 600 }}>{v.avgDailyKwh6mo.toFixed(1)} <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}>kWh</span></span>
+            {/* Amp setting (2A steps) that adds this much energy in an 8h
+                overnight window -- e.g. plan tonight's charge-current cap
+                off the car's own real recent usage instead of guessing. */}
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: '#7d8893' }}>→ {ampsToAddIn8h(v.avgDailyKwh6mo)}A/8H</span>
+          </div>
+          ))}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>

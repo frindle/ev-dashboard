@@ -17,6 +17,8 @@ export interface SessionFlags {
   tesla_ota_notified_version?: string;
 
   rivian_throttle_pushover_at?: number;
+
+  rivian_api_error_pushover_at?: number;
 }
 
 function flagsPath(): string {
@@ -141,5 +143,22 @@ export function shouldPushThrottleOnce(): boolean {
 export function clearRivianThrottleDedup(): void {
   mutate(f => {
     if (f.rivian_throttle_pushover_at) delete f.rivian_throttle_pushover_at;
+  });
+}
+
+// Rivian API-fetch error streak (consecutive failures, throttle or not) —
+// same one-push-per-lapse shape as the throttle dedup above: push once when
+// the streak crosses the threshold, caller clears the stamp on the next
+// success so the *next* streak pushes again too.
+export function shouldPushApiErrorOnce(): boolean {
+  const f = readFlags();
+  if (f.rivian_api_error_pushover_at) return false;
+  mutate(g => { g.rivian_api_error_pushover_at = Date.now(); });
+  return true;
+}
+
+export function clearRivianApiErrorDedup(): void {
+  mutate(f => {
+    if (f.rivian_api_error_pushover_at) delete f.rivian_api_error_pushover_at;
   });
 }

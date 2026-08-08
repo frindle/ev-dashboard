@@ -138,6 +138,9 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
     heading: Math.round(heading),
     lat: s?.lat ?? null,
     lon: s?.lon ?? null,
+    // Unused here -- this route never sets showTargetStat=false, so
+    // VehicleCard's AVG/DAY branch (12.3display only) is unreachable.
+    avgDailyKwh6mo: null,
   };
 }
 
@@ -653,6 +656,7 @@ function DashboardInner() {
             pills={[
               ...(data.flags.teslaPollingDisabled ? [{ key: 'polling-off', icon: 'sync_disabled', label: 'TESLA POLLING DISABLED' }] : []),
               ...(data.flags.teslaApiPaused ? [{ key: 'api-paused', icon: 'pause_circle', label: `TESLA API PAUSED · RETRYING IN ${data.flags.teslaApiRetryMinutes}m` }] : []),
+              ...(data.flags.rivianApiDegraded ? [{ key: 'rivian-api-degraded', icon: 'cloud_off', label: 'RIVIAN API DEGRADED' }] : []),
             ]}
           />
         )}

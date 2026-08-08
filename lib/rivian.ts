@@ -1,7 +1,11 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { markRivianReauthRequired, markRivianReauthDueSoon, clearRivianReauthFlags } from './sessionFlags';
+import {
+  markRivianReauthRequired, markRivianReauthDueSoon, clearRivianReauthFlags,
+  shouldPushApiErrorOnce, clearRivianApiErrorDedup,
+} from './sessionFlags';
 import { loggedFetch } from './apiLog';
+import { sendPush } from './pushover';
 
 const GATEWAY = 'https://rivian.com/api/gql/gateway/graphql';
 
@@ -30,11 +34,24 @@ export function noteRivianAuthRefreshed(): void {
 }
 
 // ── Exponential backoff on state-poll errors ─────────────────────────────
-// Community guidance: Rivian throttling is opaque. Back off 15/30/60/120/240 min
-// on consecutive errors and reset on the first success.
+// Only real rate-limiting (GraphQL extensions.code === "RATE_LIMIT", per
+// github.com/bretterer/rivian-python-client) gets this long ladder. A
+// generic transient failure (e.g. a one-off INTERNAL_SERVER_ERROR) is NOT
+// throttling and must not cost up to 15-30+ min of blindness -- confirmed
+// 2026-08-07 this exact gap silently ate a real garage-lights-on-arrival
+// trigger (car was 7km out, hit one 500, then sat on stale cache the rest
+// of the drive since backoff blocked every re-poll). Non-throttle errors
+// now just fall through to the normal poll-interval retry (see
+// RIVIAN_INTERVAL_*_MS in app/api/dashboard/route.ts) instead.
 const BACKOFF_STEPS_MIN = [15, 30, 60, 120, 240];
 let backoffAttempt = 0;
 let nextAllowedAt = 0;
+
+// Consecutive fetch failures regardless of type (throttle or not) -- purely
+// for the "alert if this keeps happening" signal below, separate from the
+// throttle-only backoff clock above.
+const API_ERROR_ALERT_THRESHOLD = 3;
+let consecutiveApiErrors = 0;
 
 function nextBackoffMs(): number {
   const idx = Math.min(backoffAttempt, BACKOFF_STEPS_MIN.length - 1);
@@ -46,9 +63,22 @@ function inBackoffWindow(): boolean {
 }
 
 function recordBackoffError(): void {
+  // nextBackoffMs() reads backoffAttempt BEFORE it's incremented, so the
+  // first-ever failure gets BACKOFF_STEPS_MIN[0] (15m) as documented above,
+  // not [1] (30m) -- incrementing first was skipping the 15m step entirely.
+  const appliedMs = nextBackoffMs();
+  nextAllowedAt = Date.now() + appliedMs;
   backoffAttempt = Math.min(backoffAttempt + 1, BACKOFF_STEPS_MIN.length);
-  nextAllowedAt = Date.now() + nextBackoffMs();
-  console.warn(`[rivian] backoff step ${backoffAttempt}, next attempt in ${nextBackoffMs() / 60000}m`);
+  console.warn(`[rivian] backoff step ${backoffAttempt}, next attempt in ${appliedMs / 60000}m`);
+}
+
+// Surfaced on the dashboard as a status pill (see rivianApiDegraded in
+// app/api/dashboard/route.ts) -- true while a real rate-limit backoff is
+// active OR failures have kept happening consecutively past the alert
+// threshold, so the display shows *something's* wrong even before it
+// crosses the Pushover threshold.
+export function rivianApiDegraded(): boolean {
+  return inBackoffWindow() || consecutiveApiErrors > 0;
 }
 
 function resetBackoff(): void {
@@ -57,6 +87,8 @@ function resetBackoff(): void {
   }
   backoffAttempt = 0;
   nextAllowedAt = 0;
+  consecutiveApiErrors = 0;
+  clearRivianApiErrorDedup();
 }
 
 const BASE_HEADERS = {
@@ -682,16 +714,28 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     if (/401|unauthori[sz]ed|invalid[_ ]session|expired/i.test(msg)) {
       try { markRivianReauthRequired('401 from vehicleState: ' + msg.slice(0, 200)); } catch {}
     }
-    recordBackoffError();
-    // Rivian's throttling is opaque — there's no documented status code or
-    // error shape for it. Flag anything that looks rate-limit-shaped with a
-    // distinct tag so it's visible at a glance in the logs, separate from
-    // generic network/API failures. Added when the driving poll interval
-    // dropped to 20s specifically to make this easy to spot if it happens.
-    if (/429|rate[_ ]?limit|too many requests|throttl/i.test(msg)) {
+    // Real rate-limiting carries extensions.code "RATE_LIMIT" (confirmed via
+    // github.com/bretterer/rivian-python-client's ERROR_CODE_CLASS_MAP) --
+    // this regex already happens to catch that string. Only THIS gets the
+    // long backoff ladder; a generic transient failure (e.g. one-off
+    // INTERNAL_SERVER_ERROR, confirmed 2026-08-07 to silently eat a real
+    // arrival event by blacking out polling for 30min on a single 500) just
+    // falls through to the normal poll-interval retry instead.
+    const isThrottle = /429|rate[_ ]?limit|too many requests|throttl/i.test(msg);
+    if (isThrottle) {
+      recordBackoffError();
       console.error('[rivian] THROTTLED:', msg.slice(0, 240));
     } else {
-      console.warn('[rivian] fetchRivianVehicleState failed:', msg.slice(0, 240));
+      console.warn('[rivian] fetchRivianVehicleState failed (non-throttle, retrying next cycle):', msg.slice(0, 240));
+    }
+
+    consecutiveApiErrors++;
+    if (consecutiveApiErrors >= API_ERROR_ALERT_THRESHOLD && shouldPushApiErrorOnce()) {
+      void sendPush(
+        'EV Dashboard — Rivian API errors persisting',
+        `${consecutiveApiErrors} consecutive Rivian API failures. Latest: ${msg.slice(0, 200)}`,
+        1,
+      );
     }
     return null;
   }

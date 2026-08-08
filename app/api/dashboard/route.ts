@@ -10,7 +10,7 @@ import {
   TeslaVehicleState,
   WallConnectorVitals,
 } from '@/lib/tesla';
-import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState } from '@/lib/rivian';
+import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded } from '@/lib/rivian';
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
@@ -135,6 +135,7 @@ export interface DashboardFlags {
   teslaOtaUpdateAvailable: boolean;
   teslaOtaInstalling: boolean;
   teslaTelemetryDegraded: boolean; // serving poll-fallback data, not live telemetry (see smartFetchTesla)
+  rivianApiDegraded: boolean; // rate-limit backoff active, or consecutive fetch failures -- see lib/rivian.ts
 }
 
 export interface DashboardData {
@@ -853,6 +854,7 @@ async function handleGet(req: Request) {
     teslaOtaUpdateAvailable: !!teslaState?.otaUpdateAvailable,
     teslaOtaInstalling: !!teslaState?.otaInstalling,
     teslaTelemetryDegraded: !!(teslaState as (TeslaVehicleState & { _telemetryDegraded?: boolean }) | null)?._telemetryDegraded,
+    rivianApiDegraded: rivianApiDegraded(),
   };
 
   // Fire-and-forget Pushover notifications for newly raised flags

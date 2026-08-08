@@ -34,6 +34,7 @@ import {
 } from '@/components/VehicleCard';
 import type { RivianVehicleState } from '@/lib/rivian';
 import type { TeslaVehicleState } from '@/lib/tesla';
+import type { EnergySummary } from '@/app/api/energy/route';
 
 const REFRESH_MS = 30_000;
 const CIRCUIT_AMPS = 48;
@@ -124,7 +125,7 @@ function StatChip({ label, value, unit, icon }: {
 }
 
 // ── Data mappers (server VehicleData → design Vehicle + AlertInputs) ─────────
-function toDesignVehicle(v: VehicleData): DesignVehicle {
+function toDesignVehicle(v: VehicleData, avgDailyKwh6mo: number | null): DesignVehicle {
   const s = v.state;
   const isTesla = v.id === 'tesla';
   const t = isTesla ? (s as TeslaVehicleState | null) : null;
@@ -161,6 +162,7 @@ function toDesignVehicle(v: VehicleData): DesignVehicle {
     heading: Math.round(heading),
     lat: s?.lat ?? null,
     lon: s?.lon ?? null,
+    avgDailyKwh6mo,
   };
 }
 
@@ -496,6 +498,11 @@ function DashboardInner() {
   // when no SolarEdge config is set, so a disabled/absent system doesn't
   // need special-casing here beyond just not rendering the chip).
   const [solarKw, setSolarKw] = useState<number | null>(null);
+  // Keyed by vehicle id -- feeds VehicleCard's AVG/DAY tile (see
+  // toDesignVehicle below). /api/energy only changes when a charging
+  // session ends, same slow-moving data /14display already polls on this
+  // cadence, so no dedicated faster interval is warranted.
+  const [avgDailyKwh6mo, setAvgDailyKwh6mo] = useState<Record<string, number | null>>({});
 
   // Checked once per load — this is a kiosk tab that stays open for days,
   // and /api/version caches the GitHub call for 5 min server-side anyway.
@@ -510,6 +517,16 @@ function DashboardInner() {
       .then((d: { enabled?: boolean; acPowerW?: number }) => {
         setSolarKw(d.enabled ? (d.acPowerW ?? 0) / 1000 : null);
       }).catch(() => setSolarKw(null));
+    poll();
+    const t = setInterval(poll, REFRESH_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const poll = () => fetch('/api/energy', { cache: 'no-store' }).then(r => r.json())
+      .then((d: EnergySummary) => {
+        setAvgDailyKwh6mo(Object.fromEntries(d.vehicles.map(v => [v.id, v.avgDailyKwh6mo])));
+      }).catch(() => {});
     poll();
     const t = setInterval(poll, REFRESH_MS);
     return () => clearInterval(t);
@@ -685,6 +702,7 @@ function DashboardInner() {
             pills={[
               ...(data.flags.teslaPollingDisabled ? [{ key: 'polling-off', icon: 'sync_disabled', label: 'TESLA POLLING DISABLED' }] : []),
               ...(data.flags.teslaApiPaused ? [{ key: 'api-paused', icon: 'pause_circle', label: `TESLA API PAUSED · RETRYING IN ${data.flags.teslaApiRetryMinutes}m` }] : []),
+              ...(data.flags.rivianApiDegraded ? [{ key: 'rivian-api-degraded', icon: 'cloud_off', label: 'RIVIAN API DEGRADED' }] : []),
             ]}
           />
         )}
@@ -743,7 +761,7 @@ function DashboardInner() {
           return rivian && (
             <DesignVehicleCard
               key={rivian.id}
-              vehicle={toDesignVehicle(rivian)}
+              vehicle={toDesignVehicle(rivian, avgDailyKwh6mo['rivian'] ?? null)}
               side="left"
               alerts={alerts}
               interactive={false}
@@ -783,7 +801,7 @@ function DashboardInner() {
           return tesla && (
             <DesignVehicleCard
               key={tesla.id}
-              vehicle={toDesignVehicle(tesla)}
+              vehicle={toDesignVehicle(tesla, avgDailyKwh6mo['tesla'] ?? null)}
               side="right"
               alerts={alerts}
               interactive={false}
