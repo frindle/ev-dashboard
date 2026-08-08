@@ -376,15 +376,6 @@ export type VehicleCardProps = {
   // and /14display (neither has a shared map card) are unaffected.
   showAwayTile?: boolean;
 
-  // True on /12.3display only: the card stretches to match its taller
-  // sibling (the map card) in that route's 3-card grid row, but content
-  // stays top-packed by default, leaving a dead gap between the footer
-  // status line and the card's actual bottom edge. Pins the footer
-  // (status pill/button + eta line + source footnote) to the bottom via
-  // marginTop:auto instead. Defaults false -- / and /14display's 2-card
-  // rows don't have a same-row height mismatch to correct for.
-  pinFooterToBottom?: boolean;
-
   // Privacy: true when the caller has determined EVERY vehicle is confirmed
   // away from home (not just this one) -- a kiosk-visible map showing
   // "nobody's home + exact location" is a real risk if anyone unauthorized
@@ -398,7 +389,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
           mapComponent: Map = MapTile, interactive = true,
-          showAwayTile = true, pinFooterToBottom = false, hideLocation = false } = props;
+          showAwayTile = true, hideLocation = false } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -586,7 +577,11 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
       </div>
 
       {/* ── MIDDLE: dial + mirrored 2x2 stats ── */}
-      <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir }}>
+      {/* flex:1 so this block (not a footer margin hack) absorbs any extra
+          card height -- on /12.3display the card is stretched to match the
+          taller map card in that route's 3-card row, and centering here
+          spreads the slack evenly instead of leaving one dead gap. */}
+      <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexDirection: rowDir, flex: 1 }}>
         {/* Driving/away tile — replaces the charge dial while the vehicle is
             away from home. Design's source used a placeholder image-slot
             for a live map -- that's a Claude Design editor-only element,
@@ -750,8 +745,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
       {/* ── FOOTER: start/stop + eta + source caption ── */}
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 11,
-        borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14,
-        ...(pinFooterToBottom ? { marginTop: 'auto' } : {})
+        borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 14
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexDirection: footerDir }}>
           {v.ctrl === 'full' && interactive && (v.charging || pluggedIn) && (
@@ -762,12 +756,12 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600
             }}>{btnLabel}</button>
           )}
-          {/* 12.3" kiosk (interactive=false): no button, no replacement —
-              the status pill above and the eta line below already say
-              CHARGING / PLUGGED IN · NOT CHARGING, so a status-only chip
-              here would just repeat it. A control whose only job was the
-              click stops earning its place once the click is gone. */}
-          {v.ctrl === 'schedule' && interactive && (
+          {/* Status-only (dashed border, no onClick) -- unlike the real
+              start/stop button above, this isn't a control that loses its
+              reason to exist when interactive=false, so it renders on the
+              12.3" kiosk too (matches NOT PLUGGED IN below, which never had
+              an interactive gate). */}
+          {v.ctrl === 'schedule' && (
             <span style={{
               flex: 'none', padding: '10px 14px', borderRadius: 11,
               background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)',
