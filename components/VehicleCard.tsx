@@ -80,6 +80,13 @@ export type Vehicle = {
   lat: number | null;
   lon: number | null;
   avgDailyKwh6mo: number | null; // running 6mo avg, see EnergyVehicleSummary in app/api/energy/route.ts
+  // Rivian only, from the separate Parallax service (server/parallax-monitor.js)
+  // -- vehicleState has no power field at all, and Wall-Connector-reported
+  // current can diverge from what the car is actually drawing (confirmed
+  // 2026-08-08: WC read ~11.5kW while the car was genuinely accepting
+  // ~5.5kW mid-throttle). null when unavailable/stale -- falls back to the
+  // Wall-Connector-derived number in that case.
+  parallaxPowerKw: number | null;
 };
 
 export type AlertInputs = {
@@ -753,7 +760,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>
-              {chargingHome ? a.kw.toFixed(1) + ' kW' : (v.charging ? 'away' : '—')}
+              {chargingHome ? (v.parallaxPowerKw ?? a.kw).toFixed(1) + ' kW' : (v.charging ? 'away' : '—')}
             </span>
           </div>
         </div>

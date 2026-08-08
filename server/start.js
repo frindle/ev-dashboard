@@ -34,6 +34,13 @@ launch('nextjs', 'node', ['server.js']);
 // 2. Telemetry receiver
 launch('telemetry', 'node', [path.join(__dirname, 'telemetry-server.js')]);
 
+// 2b. Rivian Parallax monitor -- separate websocket service, only place
+// live Rivian charging power/current exists (vehicleState has none).
+// Non-critical: no rivian-tokens.json yet (fresh install, not logged in)
+// shouldn't crash-loop the whole container; it self-retries once tokens
+// appear (see parallax-monitor.js).
+launch('parallax', 'node', [path.join(__dirname, 'parallax-monitor.js')], { critical: false });
+
 // 3. Tesla vehicle-command HTTP proxy — only if the partner private key exists.
 //    If not, skip silently so the container can still come up for non-Tesla
 //    setup steps.

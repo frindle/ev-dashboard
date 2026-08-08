@@ -10,7 +10,7 @@ import {
   TeslaVehicleState,
   WallConnectorVitals,
 } from '@/lib/tesla';
-import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded } from '@/lib/rivian';
+import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded, readRivianParallaxState } from '@/lib/rivian';
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
@@ -27,6 +27,10 @@ export interface VehicleData {
   state: TeslaVehicleState | RivianVehicleState | null;
   connected: boolean;
   atHome: boolean | null; // true/false when GPS known, null when unknown
+  // Rivian only -- vehicleState has no power/current field at all, this
+  // comes from the separate Parallax service (server/parallax-monitor.js).
+  // null when never received or stale (see readRivianParallaxState).
+  parallaxPowerKw: number | null;
 }
 
 // Fires once per arrival: when a vehicle enters the home radius. For Rivian,
@@ -529,6 +533,7 @@ interface RivianCache {
   fetchedAt?: number;
   parkedAt?: number; // when gearStatus last transitioned away from 'drive'
   chargeStartedAt?: number; // when isCharging last transitioned false -> true
+  chargeStoppedAt?: number; // when isCharging last transitioned true -> false
   // Sticky per plug-in cycle (not per charging session): true once a derate
   // is seen while plugged in, stays true even if the derate condition
   // itself clears mid-session, only resets when fully unplugged. Different
@@ -562,6 +567,24 @@ async function peekRivianJustStartedCharging(): Promise<boolean> {
   try {
     const cache = JSON.parse(await readFile(path, 'utf-8')) as RivianCache;
     return cache.chargeStartedAt != null && (Date.now() - cache.chargeStartedAt) < RIVIAN_CHARGE_START_GRACE_MS;
+  } catch {
+    return false;
+  }
+}
+
+// Mirror of the above for the stop transition -- was missing entirely.
+// Confirmed 2026-08-08: without this, the Wall Connector's stale
+// still-charging reading (live_status is cached up to LIVE_STATUS_IDLE_MS =
+// 20min) could keep showing real amps/kW for up to 20 minutes after Rivian
+// itself confirmed charging_complete, since only the START transition ever
+// forced a fast repoll.
+async function peekRivianJustStoppedCharging(): Promise<boolean> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, 'rivian-state.json');
+  if (!existsSync(path)) return false;
+  try {
+    const cache = JSON.parse(await readFile(path, 'utf-8')) as RivianCache;
+    return cache.chargeStoppedAt != null && (Date.now() - cache.chargeStoppedAt) < RIVIAN_CHARGE_START_GRACE_MS;
   } catch {
     return false;
   }
@@ -674,6 +697,11 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   const chargeStartedAt = justStartedCharging ? Date.now()
     : !fresh.isCharging ? undefined
     : cache.chargeStartedAt;
+  // Mirror of the above for stop -- see peekRivianJustStoppedCharging.
+  const justStoppedCharging = !!cache.state?.isCharging && !fresh.isCharging;
+  const chargeStoppedAt = justStoppedCharging ? Date.now()
+    : fresh.isCharging ? undefined
+    : cache.chargeStoppedAt;
   // Sticky until unplugged, not until charging stops -- see RivianCache's
   // throttledSincePluggedIn comment.
   const throttledSincePluggedIn = !fresh.isPluggedIn ? false
@@ -681,7 +709,7 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   const lastDerateReason = !fresh.isPluggedIn ? undefined
     : (fresh.isThrottled ? fresh.derateReason : cache.lastDerateReason);
   try {
-    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt, chargeStartedAt, throttledSincePluggedIn, lastDerateReason } satisfies RivianCache));
+    await writeFile(path, JSON.stringify({ state: fresh, fetchedAt: Date.now(), parkedAt, chargeStartedAt, chargeStoppedAt, throttledSincePluggedIn, lastDerateReason } satisfies RivianCache));
   } catch { /* non-fatal */ }
   (fresh as RivianVehicleState & { _gpsFresh?: boolean; _throttledSincePluggedIn?: boolean })._gpsFresh = freshGpsFromPoll;
   (fresh as RivianVehicleState & { _throttledSincePluggedIn?: boolean })._throttledSincePluggedIn = throttledSincePluggedIn;
@@ -724,6 +752,7 @@ async function handleGet(req: Request) {
   const rivianSerial  = rivianSide === 'LEFT' ? leftSerial  : rightSerial;
   const rivianLocalIp = rivianSide === 'LEFT' ? leftLocalIp : rightLocalIp;
   const rivianJustStartedCharging = rivianConnected ? await peekRivianJustStartedCharging() : false;
+  const rivianJustStoppedCharging = rivianConnected ? await peekRivianJustStoppedCharging() : false;
   // Only gates the cloud path -- the local Wall Connector API is free, no
   // reason to skip it just because Rivian might be away.
   const rivianProbablyHome = rivianLocalIp || !rivianConnected ? true : await peekRivianProbablyHome();
@@ -732,7 +761,7 @@ async function handleGet(req: Request) {
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
     rivianLocalIp || (rivianConnected && rivianSerial && rivianProbablyHome)
-      ? fetchWallConnectorVitals(cfg.energySite.id, rivianSerial, rivianJustStartedCharging, rivianLocalIp)
+      ? fetchWallConnectorVitals(cfg.energySite.id, rivianSerial, rivianJustStartedCharging || rivianJustStoppedCharging, rivianLocalIp)
       : Promise.resolve(null),
     fetchWeather(cfg),
     readGarageDoorState(),
@@ -819,6 +848,10 @@ async function handleGet(req: Request) {
     void logApiCall({ provider: 'map-tile', endpoint: 'tesla', status: 200, durationMs: 0, ok: true });
   }
 
+  // Sync file read, not a network call -- server/parallax-monitor.js is
+  // the thing that actually talks to Rivian; this just reads its cache.
+  const parallax = readRivianParallaxState();
+
   const vehicles: VehicleData[] = [
     {
       id: 'rivian',
@@ -828,6 +861,7 @@ async function handleGet(req: Request) {
       state: rivianState,
       connected: rivianConnected,
       atHome: rivianAtHome,
+      parallaxPowerKw: (parallax?.fresh && parallax.powerKw !== null) ? parallax.powerKw : null,
     },
     {
       id: 'tesla',
@@ -837,6 +871,7 @@ async function handleGet(req: Request) {
       state: teslaState,
       connected: teslaConnected,
       atHome: teslaAtHome,
+      parallaxPowerKw: null,
     },
   ];
 

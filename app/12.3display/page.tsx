@@ -163,6 +163,7 @@ function toDesignVehicle(v: VehicleData, avgDailyKwh6mo: number | null): DesignV
     lat: s?.lat ?? null,
     lon: s?.lon ?? null,
     avgDailyKwh6mo,
+    parallaxPowerKw: v.parallaxPowerKw,
   };
 }
 
@@ -600,8 +601,8 @@ function DashboardInner() {
   }
 
   const vehicles: VehicleData[] = data?.vehicles ?? [
-    { id: 'rivian', name: 'Midknight', model: 'Rivian R1S',  chargerSide: 'LEFT',  state: null, connected: false, atHome: null },
-    { id: 'tesla',  name: 'Tesla',     model: 'Model 3',     chargerSide: 'RIGHT', state: null, connected: false, atHome: null },
+    { id: 'rivian', name: 'Midknight', model: 'Rivian R1S',  chargerSide: 'LEFT',  state: null, connected: false, atHome: null, parallaxPowerKw: null },
+    { id: 'tesla',  name: 'Tesla',     model: 'Model 3',     chargerSide: 'RIGHT', state: null, connected: false, atHome: null, parallaxPowerKw: null },
   ];
   const wallConnectors: WallConnectorData[] = data?.wallConnectors ?? [
     { side: 'LEFT',  vehicleName: 'Midknight', vitals: null, sessionKwh: 0, todayKwh: 0 },

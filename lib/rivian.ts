@@ -8,6 +8,14 @@ import { loggedFetch } from './apiLog';
 import { sendPush } from './pushover';
 
 const GATEWAY = 'https://rivian.com/api/gql/gateway/graphql';
+// vehicleState (via GATEWAY above) has no power/current field at all --
+// confirmed 2026-08-08. The classic chrg/user/graphql GraphQL service
+// (getLiveSessionData/getLiveSessionHistory/getNonRivianUserSession) turned
+// out to be a dead end for home AC charging (all stale/removed or returned
+// empty data, see Claude/API-Docs/Rivian.md in the vault for the full
+// investigation). Live power actually comes from Rivian's Parallax
+// websocket service instead -- see server/parallax-monitor.js and
+// readRivianParallaxState() below.
 
 // Rivian sessions appear to last on the order of 90 days with no documented
 // refresh mutation. Track from savedAt so we can warn the user at day 83
@@ -172,6 +180,47 @@ function loginDebugPath(): string {
   return join(dir, 'rivian-login-debug.json');
 }
 
+// ── Parallax charging power (separate service, see server/parallax-monitor.js) ──
+// vehicleState has no power/current field at all -- confirmed 2026-08-08.
+// Rivian's own app sources live charging power from this genuinely
+// separate websocket service instead; the monitor process persists the
+// latest decoded values here so this read stays a plain file read, no
+// websocket client on the request path.
+const PARALLAX_STALE_MS = 5 * 60_000; // monitor pushes every ~15-60s while charging
+
+export interface RivianParallaxState {
+  powerKw: number | null;
+  totalChargedEnergyKwh: number | null;
+  timeToEndOfChargeSec: number | null;
+  chargingStateEnum: number | null;
+  plugConnectionStatus: number | null;
+  displayStatus: number | null;
+  evseType: number | null;
+  fresh: boolean; // false = no update within PARALLAX_STALE_MS, don't trust powerKw
+}
+
+export function readRivianParallaxState(): RivianParallaxState | null {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, 'rivian-parallax.json');
+  if (!existsSync(path)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    const updatedAt = typeof raw.updatedAt === 'number' ? raw.updatedAt : 0;
+    return {
+      powerKw: typeof raw.powerKw === 'number' ? raw.powerKw : null,
+      totalChargedEnergyKwh: typeof raw.totalChargedEnergyKwh === 'number' ? raw.totalChargedEnergyKwh : null,
+      timeToEndOfChargeSec: typeof raw.timeToEndOfChargeSec === 'number' ? raw.timeToEndOfChargeSec : null,
+      chargingStateEnum: typeof raw.chargingStateEnum === 'number' ? raw.chargingStateEnum : null,
+      plugConnectionStatus: typeof raw.plugConnectionStatus === 'number' ? raw.plugConnectionStatus : null,
+      displayStatus: typeof raw.displayStatus === 'number' ? raw.displayStatus : null,
+      evseType: typeof raw.evseType === 'number' ? raw.evseType : null,
+      fresh: Date.now() - updatedAt < PARALLAX_STALE_MS,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Rivian's mobile API is unofficial/reverse-engineered and known to change
 // without notice. Persist the full raw GetCurrentUser response (success or
 // failure, every login attempt — overwritten each time) so there's always a
@@ -230,8 +279,9 @@ async function gql<T>(
   query: string,
   variables: Record<string, unknown> = {},
   extraHeaders: Record<string, string> = {},
+  url: string = GATEWAY,
 ): Promise<T> {
-  const res = await loggedFetch('rivian', opName(query), GATEWAY, {
+  const res = await loggedFetch('rivian', opName(query), url, {
     method: 'POST',
     headers: { ...BASE_HEADERS, ...extraHeaders },
     body: JSON.stringify({ query, variables }),
