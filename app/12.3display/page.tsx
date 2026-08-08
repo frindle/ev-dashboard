@@ -453,7 +453,30 @@ export default function Dashboard() {
   );
 }
 
+// Fixed canvas size matching the 12.3" panel's real native resolution
+// (2.67:1 ultra-wide). The kiosk Chromium launch already pins the browser
+// window to exactly this via --window-size (see scripts/kiosk-setup.sh),
+// so in production the scale factor should always land on ~1 -- this is a
+// safety net for anything else that loads this route (a dev preview, a
+// differently-sized secondary monitor, the panel negotiating a slightly
+// different EDID resolution than expected) so it degrades to a centered,
+// correctly-proportioned letterboxed rectangle instead of looking broken.
+const PANEL_W = 1920;
+const PANEL_H = 720;
+
+function useScaleToFit(w: number, h: number) {
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const update = () => setScale(Math.min(window.innerWidth / w, window.innerHeight / h));
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [w, h]);
+  return scale;
+}
+
 function DashboardInner() {
+  const scale = useScaleToFit(PANEL_W, PANEL_H);
   const [data, setData] = useState<DashboardData | null>(null);
   const [feedState, setFeedState] = useState<'live' | 'stale' | 'error'>('stale');
   const [showCamera, setShowCamera] = useState(false);
@@ -638,7 +661,8 @@ function DashboardInner() {
   }, [data]);
 
   return (
-    <div style={{ position: 'relative', width: 1180, height: 820, overflow: 'hidden', background: 'radial-gradient(1000px 600px at 78% -16%, #1a2530 0%, #0e1216 56%)', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif", padding: '18px 28px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+    <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: PANEL_W, height: PANEL_H, flex: 'none', transform: `scale(${scale})`, overflow: 'hidden', background: 'radial-gradient(1000px 600px at 78% -16%, #1a2530 0%, #0e1216 56%)', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif", padding: '18px 28px', display: 'flex', flexDirection: 'column', gap: 7 }}>
 
       {/* ── Header ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, flex: 'none' }}>
@@ -780,6 +804,7 @@ function DashboardInner() {
           onClose={() => setShowCamera(false)}
         />
       )}
+    </div>
     </div>
   );
 }
