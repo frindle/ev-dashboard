@@ -25,11 +25,31 @@ import { WebSocket } from 'ws';
 const WS_URL = 'wss://api.rivian.com/gql-consumer-subscriptions/graphql';
 const APOLLO_CLIENT_NAME = 'com.rivian.ios.consumer-apollo-ios';
 
+// Full recommended charging subscribe list per RivDocs
+// (kaedenbrinkman/rivian-api, app/parallax/domains/charging.md) -- their
+// own decompiled-APK-sourced reference, more complete than what
+// bretterer/rivian-python-client's schema file happened to implement.
+// Confirmed 2026-08-08: only 4 of these 12 had a real field-number mapping
+// anywhere we could find (charging.session.status/time_estimation,
+// energy_edge_compute.graphs.charging_graph_global/charge_session_breakdown)
+// -- the rest fall through to the generic byte-dump decoder below.
 const RVMS = [
   'charging.session.status',
   'charging.session.time_estimation',
   'energy_edge_compute.graphs.charging_graph_global',
   'energy_edge_compute.graphs.charge_session_breakdown',
+  // charging.session.notification is the most promising undecoded one --
+  // the name suggests it could carry an actual human-readable reason/
+  // event, which would beat inferring a throttle from a power-drop
+  // threshold.
+  'charging.session.notification',
+  'charging.session.remote_command',
+  'charging.session.trip_target',
+  'charging.schedule.time_window',
+  'energy_edge_compute.graphs.cold_weather_soc',
+  'energy.high_voltage.battery_state',
+  'energy.high_voltage.battery_characteristics',
+  'charging.session.soc_slider',
 ];
 
 const SUBSCRIBE_QUERY = `subscription ParallaxMessages($vehicleId: String!, $rvms: [String!]) {
@@ -128,6 +148,27 @@ function decodeTimeEstimation(payload) {
   return result;
 }
 
+// Generic fallback for RVMs with no known field mapping -- shows every
+// top-level field's number/wire-type/value, and for length-delimited
+// (wire type 2) fields, BOTH a hex dump and a UTF-8 decode attempt, since
+// that field kind covers everything from nested messages to plain text
+// (a real notification string would land here).
+function decodeGeneric(payload) {
+  const buf = Buffer.from(payload, 'base64');
+  return decodeFields(buf).map(([num, wt, val]) => {
+    if (wt === 2) {
+      const asUtf8 = val.toString('utf-8');
+      const looksLikeText = /^[\x20-\x7e\s]*$/.test(asUtf8) && asUtf8.length > 0;
+      return {
+        field: num, wireType: 'length-delimited', byteLength: val.length,
+        hex: val.toString('hex'),
+        utf8: looksLikeText ? asUtf8 : '(not printable ASCII -- likely a nested submessage, see hex)',
+      };
+    }
+    return { field: num, wireType: wt, value: val };
+  });
+}
+
 const DECODERS = {
   'charging.session.status': decodeChargingSessionStatus,
   'charging.session.time_estimation': decodeTimeEstimation,
@@ -187,7 +228,7 @@ ws.on('message', (raw) => {
   const decoder = DECODERS[data.rvm];
   let decoded;
   try {
-    decoded = decoder ? decoder(data.payload) : { _raw_base64_len: (data.payload ?? '').length };
+    decoded = decoder ? decoder(data.payload) : decodeGeneric(data.payload);
   } catch (e) {
     decoded = { _decode_error: String(e) };
   }
