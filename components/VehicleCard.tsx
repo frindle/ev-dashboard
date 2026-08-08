@@ -347,12 +347,19 @@ export type VehicleCardProps = {
   // just without the onClick wiring — a touchscreen isn't there to receive
   // it anyway. Defaults true so the design-locked / route is unaffected.
   interactive?: boolean;
+
+  // False on /12.3display: that route has its own shared MapTile12 card
+  // showing every vehicle's location already, so the away-tile's embedded
+  // per-card map would just duplicate it. The arrow/speed/place-name status
+  // still renders, just without the redundant map layer underneath. Defaults
+  // true so / and /14display (neither has a shared map card) are unaffected.
+  awayMapEnabled?: boolean;
 };
 
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
-          mapComponent: Map = MapTile, interactive = true } = props;
+          mapComponent: Map = MapTile, interactive = true, awayMapEnabled = true } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -396,11 +403,12 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const tickY2 = (60 - 61 * Math.cos(ang)).toFixed(2);
 
   // footer eta line
+  const placeSuffix = v.place ? ' · ' + v.place : '';
   const etaLabel = chargingHome ? fmtEta(etaMin)
-    : (!atHome && v.charging) ? 'CHARGING AWAY · ' + v.place
+    : (!atHome && v.charging) ? 'CHARGING AWAY' + placeSuffix
     : !atHome                 ? (v.speed > 0
-                                  ? 'DRIVING ' + v.speed + ' mph · ' + v.place
-                                  : 'PARKED · ' + v.place)
+                                  ? 'DRIVING ' + v.speed + ' mph' + placeSuffix
+                                  : 'PARKED' + placeSuffix)
     :                           (v.soc >= v.limit ? 'AT TARGET' : (pluggedIn ? 'PLUGGED IN · NOT CHARGING' : 'IDLE · NOT PLUGGED IN'));
   const etaColor = v.charging ? ACCENT : '#7d8893';
 
@@ -552,7 +560,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             borderRadius: 18, overflow: 'hidden', background: '#161c22',
             border: '1px solid rgba(255,255,255,0.06)'
           }}>
-            {v.lat !== null && v.lon !== null && (
+            {awayMapEnabled && v.lat !== null && v.lon !== null && (
               <Map lat={v.lat} lon={v.lon} />
             )}
             <div style={{
