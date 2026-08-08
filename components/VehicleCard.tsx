@@ -404,13 +404,21 @@ export type VehicleCardProps = {
   // once the card gets this compact. Defaults true so / and /14display keep
   // their existing 4-tile grid unchanged.
   showTargetStat?: boolean;
+
+  // Privacy: true when the caller has determined EVERY vehicle is confirmed
+  // away from home (not just this one) -- a kiosk-visible map showing
+  // "nobody's home + exact location" is a real risk if anyone unauthorized
+  // can see the screen. Suppresses the map layer inside the away-tile only;
+  // the away-tile itself (speed/place text) still needs its own caller-side
+  // gating if that's also considered sensitive. Defaults false.
+  hideLocation?: boolean;
 };
 
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
           mapComponent: Map = MapTile, interactive = true,
-          showTargetStat = true, showAwayTile = true, pinFooterToBottom = false } = props;
+          showTargetStat = true, showAwayTile = true, pinFooterToBottom = false, hideLocation = false } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -611,6 +619,15 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             borderRadius: 18, overflow: 'hidden', background: '#161c22',
             border: '1px solid rgba(255,255,255,0.06)'
           }}>
+            {hideLocation ? (
+              <div style={{
+                position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: 4, color: '#5e6873', textAlign: 'center', padding: 8
+              }}>
+                <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 20, color: '#3d454e' }}>visibility_off</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, letterSpacing: '.1em' }}>HIDDEN — VEHICLE LOCATION</span>
+              </div>
+            ) : (<>
             {v.lat !== null && v.lon !== null && (
               <Map lat={v.lat} lon={v.lon} />
             )}
@@ -637,6 +654,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
                 }}>{v.place}</span>
               </div>
             </div>
+            </>)}
           </div>
         )}
         {/* Dial wrapper — position:relative anchor for the SOC/limit text
@@ -757,7 +775,15 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: '#7d8893' }}>→ {ampsToAddIn8h(v.avgDailyKwh6mo)}A/8H</span>
           </div>
           ))}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
+          {/* When neither TARGET nor AVG/DAY renders above (12.3display,
+              no charge-history yet for this vehicle -- e.g. Tesla before
+              its first tracked session), that grid cell is empty and
+              leaves a dead gap next to this tile. Span the full row
+              instead of leaving it, so the card doesn't look sparse. */}
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 2,
+            gridColumn: (showTargetStat || (!atHome && showAwayTile) || v.avgDailyKwh6mo !== null) ? colOutside : '1 / -1'
+          }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>
               {chargingHome ? (v.parallaxPowerKw ?? a.kw).toFixed(1) + ' kW' : (v.charging ? 'away' : '—')}

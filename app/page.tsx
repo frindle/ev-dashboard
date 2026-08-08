@@ -703,12 +703,17 @@ function DashboardInner() {
         {vehicles.map((v, idx) => {
           const wc = wallConnectors.find(w => w.side === v.chargerSide);
           const dv = toDesignVehicle(v);
+          // Privacy: strict on `=== false` (not null/unknown) so a flaky GPS
+          // reading never falsely hides the map -- only a confirmed "every
+          // vehicle away" case is a real "nobody's home" leak.
+          const bothAway = vehicles.length > 0 && vehicles.every(veh => veh.atHome === false);
           return (
             <DesignVehicleCard
               key={v.id}
               vehicle={dv}
               side={idx === 0 ? 'left' : 'right'}
               alerts={alerts}
+              hideLocation={bothAway}
               alloc={() => {
                 // Actual amps + kW pulled from the corresponding wall connector,
                 // not from the vehicle's own charge_state (which lies about

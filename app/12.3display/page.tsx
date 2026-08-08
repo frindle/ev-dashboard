@@ -652,7 +652,15 @@ function DashboardInner() {
 
   // Map card colors mirror CircuitPanel's LEFT/RIGHT scheme (grey/blue) so
   // a marker and its wall-connector segment read as the same vehicle.
-  const mapVehicles: MapVehicle[] = vehicles.map(v => ({
+  // Privacy: when every vehicle is confirmed (not just unknown) away from
+  // home, a kiosk-visible live map showing "nobody's home + exact current
+  // location" is a real risk if anyone unauthorized can see this screen.
+  // Strict on `=== false` (not null/unknown) so a flaky GPS reading never
+  // falsely triggers the hide — coords are withheld from MapTile12 entirely
+  // (not just visually covered) so nothing leaks to the Leaflet layer either.
+  const bothAway = vehicles.length > 0 && vehicles.every(v => v.atHome === false);
+
+  const mapVehicles: MapVehicle[] = bothAway ? [] : vehicles.map(v => ({
     id: v.id,
     name: v.name,
     lat: v.state?.lat ?? null,
@@ -789,8 +797,13 @@ function DashboardInner() {
           <span style={{ position: 'absolute', top: 14, left: 16, zIndex: 5, fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, letterSpacing: '0.14em', color: '#a4afba', background: 'rgba(14,18,22,0.7)', padding: '4px 9px', borderRadius: 999 }}>
             VEHICLE MAP
           </span>
-          <MapTile12 vehicles={mapVehicles} />
-          {mapVehicles.every(v => v.lat === null) && (
+          {!bothAway && <MapTile12 vehicles={mapVehicles} />}
+          {bothAway ? (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, color: '#5e6873', fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: '0.08em', textAlign: 'center' }}>
+              <span style={{ fontFamily: "'Material Symbols Rounded'", fontSize: 22, color: '#3d454e' }}>visibility_off</span>
+              HIDDEN — VEHICLE LOCATION
+            </div>
+          ) : mapVehicles.every(v => v.lat === null) && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5e6873', fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: '0.08em' }}>
               NO GPS FIX
             </div>
