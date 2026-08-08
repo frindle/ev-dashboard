@@ -354,12 +354,20 @@ export type VehicleCardProps = {
   // still renders, just without the redundant map layer underneath. Defaults
   // true so / and /14display (neither has a shared map card) are unaffected.
   awayMapEnabled?: boolean;
+
+  // False on /12.3display: the stats-grid TARGET tile duplicates the dial's
+  // own "LIMIT X%" sub-label -- same v.limit value, rendered a few inches
+  // apart. Present in the original design/mockup too, but only noticeable
+  // once the card gets this compact. Defaults true so / and /14display keep
+  // their existing 4-tile grid unchanged.
+  showTargetStat?: boolean;
 };
 
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
-          mapComponent: Map = MapTile, interactive = true, awayMapEnabled = true } = props;
+          mapComponent: Map = MapTile, interactive = true, awayMapEnabled = true,
+          showTargetStat = true } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -671,10 +679,18 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>ODOMETER</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>{v.odo.toLocaleString('en-US')} <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}>mi</span></span>
           </div>
+          {/* Redundant with the dial's own "LIMIT X%" sub-label while the
+              vehicle is home (same v.limit value, a few inches apart) --
+              but while away the dial is replaced entirely by the
+              driving/away tile, which has no limit text at all, so this
+              is the ONLY place that value shows then. Suppress only the
+              at-home duplicate, never the away case. */}
+          {(showTargetStat || !atHome) && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>TARGET</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>{v.limit}%</span>
           </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>
