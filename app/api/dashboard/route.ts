@@ -247,6 +247,19 @@ function warnNoHomeOnce(): true {
   return true;
 }
 
+// Shared by every path that might serve a cached/stale TeslaVehicleState
+// (the kill-switch return and the telemetry-cached-serving branch below) --
+// gates GPS/plug-state trust on the per-field timestamps telemetry-server.js
+// stamps, not on whether SOME field arrived recently. See TESLA_FIELD_STALE_MS.
+function applyTeslaFieldFreshness(state: TeslaVehicleState): TeslaVehicleState & { _gpsFresh: boolean } {
+  const locAge = state._locationUpdatedAt ? Date.now() - state._locationUpdatedAt : Infinity;
+  const gpsFresh = state.lat !== null && state.lon !== null && locAge < TESLA_FIELD_STALE_MS;
+  const chargeAge = state._chargeStateUpdatedAt ? Date.now() - state._chargeStateUpdatedAt : Infinity;
+  const chargeStateFresh = chargeAge < TESLA_FIELD_STALE_MS;
+  const out = chargeStateFresh ? state : { ...state, isPluggedIn: false, isCharging: false };
+  return { ...out, _gpsFresh: gpsFresh };
+}
+
 async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicleState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, TESLA_CACHE_FILE);
@@ -262,8 +275,16 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
   // polling bug. Overrides ?fresh=1 too, deliberately -- the whole point is
   // zero further API usage while this is on, no exceptions. Unset the env
   // var (and redeploy) to go back to normal smart-poll behavior.
+  //
+  // Still applies the same per-field staleness gate as the branches below
+  // -- "don't call the API" and "don't validate staleness" are different
+  // concerns that used to be conflated here. Confirmed 2026-08-08: with
+  // this switch on, raw cache.state was returned completely ungated, so
+  // isPluggedIn/atHome read as confidently true indefinitely with this
+  // flag set, regardless of the freshness fixes below (they were never
+  // even reached).
   if (process.env.TESLA_DISABLE_POLLING === '1') {
-    return cache?.state ?? null;
+    return cache?.state ? applyTeslaFieldFreshness(cache.state) : null;
   }
 
   if (!force && cache) {
@@ -286,18 +307,7 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
       // SOME telemetry field arrived recently, not that Location did.
       // Confirmed 2026-08-08: this let atHome read true long after the car
       // actually left, as long as any other telemetry kept trickling in.
-      const locAge = cache.state._locationUpdatedAt ? Date.now() - cache.state._locationUpdatedAt : Infinity;
-      const gpsFresh = cache.state.lat !== null && cache.state.lon !== null && locAge < TESLA_FIELD_STALE_MS;
-
-      // Same reasoning for isPluggedIn/isCharging -- a stale ChargeState
-      // reads as confidently plugged in/charging otherwise. Past the
-      // staleness window we don't know, and "don't know" should not
-      // display as a confident true.
-      const chargeAge = cache.state._chargeStateUpdatedAt ? Date.now() - cache.state._chargeStateUpdatedAt : Infinity;
-      const chargeStateFresh = chargeAge < TESLA_FIELD_STALE_MS;
-      const state = chargeStateFresh ? cache.state : { ...cache.state, isPluggedIn: false, isCharging: false };
-
-      return { ...state, _gpsFresh: gpsFresh, _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
+      return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
     }
     // Poll-sourced data: use the original cadence (30s active / 5min idle).
     // cache.source !== 'telemetry' here means we've fallen back to polling
