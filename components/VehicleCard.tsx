@@ -349,11 +349,12 @@ export type VehicleCardProps = {
   interactive?: boolean;
 
   // False on /12.3display: that route has its own shared MapTile12 card
-  // showing every vehicle's location already, so the away-tile's embedded
-  // per-card map would just duplicate it. The arrow/speed/place-name status
-  // still renders, just without the redundant map layer underneath. Defaults
-  // true so / and /14display (neither has a shared map card) are unaffected.
-  awayMapEnabled?: boolean;
+  // showing every vehicle's location already, so the away-tile is a second
+  // "where is this vehicle" indicator duplicating it. Suppresses the whole
+  // tile (map, icon/arrow, speed, place), not just the map layer inside
+  // it -- the stats grid takes the freed row width. Defaults true so /
+  // and /14display (neither has a shared map card) are unaffected.
+  showAwayTile?: boolean;
 
   // False on /12.3display: the stats-grid TARGET tile duplicates the dial's
   // own "LIMIT X%" sub-label -- same v.limit value, rendered a few inches
@@ -366,8 +367,8 @@ export type VehicleCardProps = {
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
-          mapComponent: Map = MapTile, interactive = true, awayMapEnabled = true,
-          showTargetStat = true } = props;
+          mapComponent: Map = MapTile, interactive = true,
+          showTargetStat = true, showAwayTile = true } = props;
 
   // side vars — mirror everything from one flag
   const isLeft = side === 'left';
@@ -562,13 +563,13 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             not usable directly, so this renders a real Leaflet + OpenStreetMap
             map (free, no API key) when we have coordinates, with the
             heading-arrow/place-pin + speed/place text overlaid on top. */}
-        {!atHome && (
+        {!atHome && showAwayTile && (
           <div style={{
             position: 'relative', flex: 'none', width: 128, height: 128,
             borderRadius: 18, overflow: 'hidden', background: '#161c22',
             border: '1px solid rgba(255,255,255,0.06)'
           }}>
-            {awayMapEnabled && v.lat !== null && v.lon !== null && (
+            {v.lat !== null && v.lon !== null && (
               <Map lat={v.lat} lon={v.lon} />
             )}
             <div style={{
@@ -599,8 +600,13 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
         {/* Dial wrapper — position:relative anchor for the SOC/limit text
             overlay and the limit-editor popup below. Without this, their
             position:absolute would anchor to the outer card instead of the
-            128x128 dial (the card is the nearest OTHER positioned ancestor). */}
-        {atHome && (
+            128x128 dial (the card is the nearest OTHER positioned ancestor).
+            Normally home-only (away swaps in the driving/away tile above),
+            but when showAwayTile is false (12.3display) that tile never
+            renders at all -- the shared map card covers "where is it" -- so
+            the dial fills the slot unconditionally instead of leaving it
+            blank while away. */}
+        {(atHome || !showAwayTile) && (
         <div style={{ position: 'relative', width: 128, height: 128, flex: 'none' }}>
           <svg width={128} height={128} viewBox="0 0 120 120"
                onClick={onDialTap}
@@ -679,13 +685,16 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>ODOMETER</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>{v.odo.toLocaleString('en-US')} <span style={{ fontSize: 11, color: '#a4afba', fontWeight: 500 }}>mi</span></span>
           </div>
-          {/* Redundant with the dial's own "LIMIT X%" sub-label while the
-              vehicle is home (same v.limit value, a few inches apart) --
-              but while away the dial is replaced entirely by the
-              driving/away tile, which has no limit text at all, so this
-              is the ONLY place that value shows then. Suppress only the
-              at-home duplicate, never the away case. */}
-          {(showTargetStat || !atHome) && (
+          {/* Redundant with the dial's own "LIMIT X%" sub-label whenever the
+              dial is actually the thing rendering (same v.limit value, a
+              few inches apart) -- mirrors the dial's own render condition
+              exactly: the dial is hidden only when away AND the route still
+              uses the old away-tile pattern (showAwayTile true), in which
+              case this tile is the ONLY place the value shows. On routes
+              where showAwayTile is false (12.3display), the dial renders
+              unconditionally, so this stays suppressed in both states
+              there -- not just at-home. */}
+          {(showTargetStat || (!atHome && showAwayTile)) && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '.14em', color: '#7d8893' }}>TARGET</span>
             <span style={{ fontSize: 17, fontWeight: 600 }}>{v.limit}%</span>
