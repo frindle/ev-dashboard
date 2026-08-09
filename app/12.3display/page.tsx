@@ -776,6 +776,7 @@ function DashboardInner() {
               alerts={alerts}
               interactive={false}
               showAwayTile={false}
+              showTargetStat={false}
               size="lg"
               alloc={() => ({ amps: wc?.vitals?.currentA ?? 0, kw: (wc?.vitals?.powerW ?? 0) / 1000 })}
               etaFor={() => rivian.state?.minutesToFull ?? 0}
@@ -820,6 +821,7 @@ function DashboardInner() {
               alerts={alerts}
               interactive={false}
               showAwayTile={false}
+              showTargetStat={false}
               size="lg"
               alloc={() => ({ amps: wc?.vitals?.currentA ?? 0, kw: (wc?.vitals?.powerW ?? 0) / 1000 })}
               etaFor={() => tesla.state?.minutesToFull ?? 0}

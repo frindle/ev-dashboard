@@ -22,6 +22,19 @@ type Severity = 'info' | 'neutral' | 'warning' | 'critical';
 const ACCENT = '#34e0c4';
 const ACCENT_SOFT = 'rgba(52,224,196,0.16)';
 
+// Same 240V split-phase assumption as app/page.tsx's own VOLTS constant
+// (kept local rather than shared -- this component doesn't otherwise know
+// about circuit voltage, and duplicating one constant beats a new shared
+// module for it). Charger current is set in 2A steps here, so this rounds
+// UP -- undershooting the amp setting would fail to add the full avg/day
+// amount in the 8h window, overshooting by up to 2A worth is the safe side.
+const CHARGE_VOLTS = 240;
+const CHARGE_WINDOW_HOURS = 8;
+function ampsToAddIn8h(kwh: number): number {
+  const amps = (kwh * 1000 / CHARGE_WINDOW_HOURS) / CHARGE_VOLTS;
+  return Math.ceil(amps / 2) * 2;
+}
+
 const SEV: Record<Severity, { color: string; bg: string; border: string }> = {
   info:     { color: ACCENT,    bg: 'rgba(52,224,196,0.10)', border: 'rgba(52,224,196,0.22)' },
   neutral:  { color: '#a4afba', bg: '#1b232b',               border: 'rgba(255,255,255,0.06)' },
@@ -390,13 +403,23 @@ export type VehicleCardProps = {
   // and the stat/header font sizes up; layout (grid columns, mirroring)
   // is unchanged. Defaults 'md' so / and /14display are unaffected.
   size?: 'md' | 'lg';
+
+  // False on /12.3display: the stats-grid TARGET tile duplicates the dial's
+  // own "LIMIT X%" sub-label -- same v.limit value, rendered a few inches
+  // apart. Present in the original design/mockup too, but only noticeable
+  // once the card gets this compact. When false, the AVG/DAY + 8h-amp-plan
+  // tile takes TARGET's grid slot instead (once real charge history
+  // exists). Defaults true so / and /14display keep their existing 4-tile
+  // grid unchanged.
+  showTargetStat?: boolean;
 };
 
 export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
   const { vehicle: v, side, alerts, alloc, etaFor,
           onToggleCharging, onToggleLock, onToggleAc, onSetLimit,
           mapComponent: Map = MapTile, interactive = true,
-          showAwayTile = true, hideLocation = false, size = 'md' } = props;
+          showAwayTile = true, hideLocation = false, size = 'md',
+          showTargetStat = true } = props;
   const lg = size === 'lg';
 
   // side vars — mirror everything from one flag
@@ -737,10 +760,25 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               where showAwayTile is false (12.3display), the dial renders
               unconditionally, so this stays suppressed in both states
               there -- not just at-home. */}
+          {(showTargetStat || v.avgDailyKwh6mo === null) ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, letterSpacing: '.14em', color: '#7d8893' }}>TARGET</span>
             <span style={{ fontSize: lg ? 22 : 17, fontWeight: 600 }}>{v.limit}%</span>
           </div>
+          ) : (
+          /* Fills the slot TARGET vacates when showTargetStat is false --
+             null-checked above so a car with no charge-history yet (e.g.
+             Tesla before its first tracked session) shows TARGET instead
+             of a dead "0.0 kWh" tile. */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colInside }}>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, letterSpacing: '.14em', color: '#7d8893' }}>AVG/DAY</span>
+            <span style={{ fontSize: lg ? 22 : 17, fontWeight: 600 }}>{v.avgDailyKwh6mo.toFixed(1)} <span style={{ fontSize: lg ? 13 : 11, color: '#a4afba', fontWeight: 500 }}>kWh</span></span>
+            {/* Amp setting (2A steps) that adds this much energy in an 8h
+                overnight window -- e.g. plan tonight's charge-current cap
+                off the car's own real recent usage instead of guessing. */}
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, color: '#7d8893' }}>→ {ampsToAddIn8h(v.avgDailyKwh6mo)}A/8H</span>
+          </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, letterSpacing: '.14em', color: '#7d8893' }}>CHARGE RATE</span>
             <span style={{ fontSize: lg ? 22 : 17, fontWeight: 600 }}>
