@@ -273,12 +273,14 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     try { cache = JSON.parse(await readFile(path, 'utf-8')) as TeslaCache; } catch { /* fall through */ }
   }
 
-  // Temporary kill switch (TESLA_DISABLE_POLLING=1): never call the Fleet
-  // API at all, rely entirely on telemetry -- set while verifying telemetry
-  // actually works, after the account got rate-limited/suspended from a
-  // polling bug. Overrides ?fresh=1 too, deliberately -- the whole point is
-  // zero further API usage while this is on, no exceptions. Unset the env
-  // var (and redeploy) to go back to normal smart-poll behavior.
+  // Kill switch: never call the Fleet API at all, rely entirely on
+  // telemetry. Single source of truth is cfg.vehicles.tesla.pollingEnabled
+  // (the admin panel toggle) -- this used to also be gateable via a
+  // TESLA_DISABLE_POLLING env var, which silently overrode the admin panel
+  // and left it showing "enabled" while polling was actually off. Removed
+  // 2026-08-13 in favor of the one real switch. Overrides ?fresh=1 too,
+  // deliberately -- the whole point is zero further API usage while this
+  // is off, no exceptions.
   //
   // Still applies the same per-field staleness gate as the branches below
   // -- "don't call the API" and "don't validate staleness" are different
@@ -287,7 +289,7 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
   // isPluggedIn/atHome read as confidently true indefinitely with this
   // flag set, regardless of the freshness fixes below (they were never
   // even reached).
-  if (process.env.TESLA_DISABLE_POLLING === '1') {
+  if (!readConfig().vehicles.tesla.pollingEnabled) {
     return cache?.state ? applyTeslaFieldFreshness(cache.state) : null;
   }
 
