@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-DASHBOARD_URL="${1:-https://10.0.6/56:3000/12.3display}"
+DASHBOARD_URL="${1:-https://10.0.6.56:3000/12.3display}"
 RES_W=1920
 RES_H=720
 
