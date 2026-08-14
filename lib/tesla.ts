@@ -507,9 +507,13 @@ export async function fetchWallConnectorVitals(siteId: string, serial: string, f
   const wc = data?.wall_connectors?.find(w => w.din?.endsWith(`--${serial}`));
   if (!wc) return null;
 
-  // Temporary: this is charger-side, so it's the one place a thermal/handle
-  // fault would show up (wall_connector_fault_state) even while the vehicle
-  // itself reports asleep. Remove alongside the vehicle_data raw dump above.
+  // Temporary: Rivian's API never exposes a throttle/derate signal
+  // (chargerDerateStatus is always null), so the charger itself is the only
+  // place a fault/thermal state could show (wall_connector_fault_state).
+  // This fires for whichever serial is passed in -- including Rivian's
+  // existing wall-connector call above -- so it catches Rivian's sessions
+  // without any Tesla-side changes. Remove once the throttling question
+  // is resolved.
   if (process.env.TESLA_LOG_RAW_CHARGE === '1' && (wc.wall_connector_state === 1 || (wc.wall_connector_power ?? 0) > 100)) {
     console.log(`[tesla-raw-wc] ${serial}: ${JSON.stringify(wc)}`);
   }
