@@ -175,6 +175,23 @@ const RATE_LIMIT_COOLDOWN_MS = 15 * 60_000;
 let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 
+// A 408 on /vehicle_data is normal for a briefly-napping car and never
+// trips the failure breaker above -- but nothing ever actually tried to
+// WAKE the vehicle either, so a car that's genuinely unreachable (dead
+// virtual key pairing, connectivity loss, stuck asleep) just 408s forever
+// with no escalation. Confirmed live 2026-08-14: 4145/4145 vehicle_data
+// calls failed over 18+ straight hours, sustained through a period the
+// wall connector's OWN telemetry (a separate, healthy API) shows the car
+// was actively drawing 26+ kWh -- a charging car should be reachable, so
+// this isn't ordinary sleep. Escalate to an explicit wake_up call after a
+// sustained run, with its own cooldown so a real nap (a few failed polls)
+// never triggers one and Tesla's wake_up endpoint (itself rate-limited)
+// never gets hammered.
+const VEHICLE_DATA_WAKE_AFTER_MS = 20 * 60_000; // sustained failure duration before trying a wake
+const VEHICLE_DATA_WAKE_COOLDOWN_MS = 20 * 60_000; // minimum gap between wake attempts
+let vehicleDataFailingSince = 0;
+let lastWakeAttemptAt = 0;
+
 // A fresh OAuth callback invalidates everything the breaker was reacting to
 // (the run of 401s that opened it came from the dead token chain). Without
 // this, re-authenticating still left Fleet API calls skipped for up to the
@@ -230,9 +247,23 @@ async function fleetGet<T>(path: string): Promise<T | null> {
           circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
           console.warn(`[tesla] ${consecutiveFailures} consecutive failures — opening circuit breaker for ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s`);
         }
+      } else if (res.status === 408 && path.includes('/vehicle_data')) {
+        const now = Date.now();
+        if (!vehicleDataFailingSince) vehicleDataFailingSince = now;
+        const failingForMs = now - vehicleDataFailingSince;
+        const vin = path.match(/\/vehicles\/([^/]+)\//)?.[1];
+        if (failingForMs >= VEHICLE_DATA_WAKE_AFTER_MS && vin && now - lastWakeAttemptAt >= VEHICLE_DATA_WAKE_COOLDOWN_MS) {
+          lastWakeAttemptAt = now;
+          console.warn(`[tesla] vehicle_data failing for ${Math.round(failingForMs / 60_000)}min straight — attempting explicit wake_up`);
+          void wakeVehicle(vin).then(
+            (ok) => console.log(`[tesla] wake_up attempt ${ok ? 'accepted' : 'returned no result'}`),
+            (e) => console.warn('[tesla] wake_up attempt failed:', String(e).slice(0, 160)),
+          );
+        }
       }
       return null;
     }
+    if (path.includes('/vehicle_data')) vehicleDataFailingSince = 0;
     consecutiveFailures = 0;
     // A 2xx from Fleet API is proof the credentials work — that is exactly
     // what tesla_reauth_required claims is untrue, so clear it here rather
