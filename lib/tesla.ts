@@ -90,6 +90,14 @@ export interface WallConnectorVitals {
   sessionEnergyWh: number;
   powerW: number;
   online: boolean;
+  // Only populated on the cloud (live_status) path -- see LiveStatusWC.
+  // Added 2026-08-14: these were already being parsed off Tesla's raw
+  // response and then silently discarded before ever reaching the
+  // dashboard, so a below-max charge rate had no diagnostic to point to.
+  // Values are undocumented by Tesla (no official field meaning), so
+  // surfaced as raw numbers rather than guessed-at labels.
+  faultState?: number;
+  ocppStatus?: number;
 }
 
 // route.ts's Promise.all fans out to 4+ Tesla call sites (vehicle_data,
@@ -514,6 +522,8 @@ export async function fetchWallConnectorVitals(siteId: string, serial: string, f
     sessionEnergyWh: 0,
     powerW,
     online: true,
+    faultState: wc.wall_connector_fault_state,
+    ocppStatus: wc.ocpp_status,
   };
 }
 
