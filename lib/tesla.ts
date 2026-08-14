@@ -304,6 +304,14 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
   const data = await fleetGet<VehicleData>(`/api/1/vehicles/${vin}/vehicle_data?endpoints=charge_state%3Bvehicle_state%3Bclimate_state`);
   if (!data) return null;
 
+  // Temporary: dump the full raw response while charging so any
+  // undocumented field (e.g. a thermal/handle-derate signal Tesla doesn't
+  // expose in the typed interface below) is visible in docker logs. Remove
+  // once the overnight hot-handle check is done.
+  if (process.env.TESLA_LOG_RAW_CHARGE === '1' && data.charge_state?.charging_state === 'Charging') {
+    console.log(`[tesla-raw] ${vin} vehicle_data: ${JSON.stringify(data)}`);
+  }
+
   const cs = data.charge_state ?? {};
   const vs = data.vehicle_state ?? {};
   const cls = data.climate_state ?? {};
