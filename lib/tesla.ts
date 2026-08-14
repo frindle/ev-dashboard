@@ -215,7 +215,7 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       // missing scope; 429 means rate-limited; 5xx means Tesla side.
       const body = await res.text().catch(() => '');
       console.log(`[tesla] ${path}: HTTP ${res.status} ${body.slice(0, 160).replace(/\s+/g, ' ')}`);
-      void logApiBody(path, { error: true, status: res.status, body });
+      if (path.includes('/live_status')) void logApiBody(path, { error: true, status: res.status, body });
       if (res.status === 401) {
         markTeslaReauthRequired(`401 from ${path}`);
       }
@@ -243,7 +243,7 @@ async function fleetGet<T>(path: string): Promise<T | null> {
     // That is the "banner kept showing long after re-login" report.
     clearTeslaReauthRequired();
     const json = await res.json() as { response: T };
-    void logApiBody(path, json);
+    if (path.includes('/live_status')) void logApiBody(path, json);
     return json.response ?? null;
   } catch (e) {
     console.log(`[tesla] ${path}: fetch error ${String(e).slice(0, 160)}`);
@@ -267,7 +267,6 @@ async function fleetPost<T>(path: string, body: unknown): Promise<T | null> {
     });
     if (!res.ok) return null;
     const json = await res.json() as { response: T };
-    void logApiBody(path, json);
     return json.response ?? null;
   } catch {
     return null;
