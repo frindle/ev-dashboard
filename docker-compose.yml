@@ -13,7 +13,7 @@ services:
     environment:
       - KEYS_DIR=/app/keys
       - TELEMETRY_PORT=50051
-      - TESLA_LOG_RAW_CHARGE=1
+      - TESLA_LOG_API_BODIES=1
     env_file:
       - .env
     restart: unless-stopped

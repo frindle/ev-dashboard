@@ -1,6 +1,6 @@
 import { readTokens, writeTokens, TeslaTokens, readConfig, writeConfig } from './config';
 import { markTeslaReauthRequired, clearTeslaReauthRequired } from './sessionFlags';
-import { loggedFetch } from './apiLog';
+import { loggedFetch, logApiBody } from './apiLog';
 
 const FLEET_BASE = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
 const TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
@@ -215,6 +215,7 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       // missing scope; 429 means rate-limited; 5xx means Tesla side.
       const body = await res.text().catch(() => '');
       console.log(`[tesla] ${path}: HTTP ${res.status} ${body.slice(0, 160).replace(/\s+/g, ' ')}`);
+      void logApiBody(path, { error: true, status: res.status, body });
       if (res.status === 401) {
         markTeslaReauthRequired(`401 from ${path}`);
       }
@@ -242,6 +243,7 @@ async function fleetGet<T>(path: string): Promise<T | null> {
     // That is the "banner kept showing long after re-login" report.
     clearTeslaReauthRequired();
     const json = await res.json() as { response: T };
+    void logApiBody(path, json);
     return json.response ?? null;
   } catch (e) {
     console.log(`[tesla] ${path}: fetch error ${String(e).slice(0, 160)}`);
@@ -265,6 +267,7 @@ async function fleetPost<T>(path: string, body: unknown): Promise<T | null> {
     });
     if (!res.ok) return null;
     const json = await res.json() as { response: T };
+    void logApiBody(path, json);
     return json.response ?? null;
   } catch {
     return null;
@@ -303,14 +306,6 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
   // scope ticket clears and BLE pairing is done at the car.
   const data = await fleetGet<VehicleData>(`/api/1/vehicles/${vin}/vehicle_data?endpoints=charge_state%3Bvehicle_state%3Bclimate_state`);
   if (!data) return null;
-
-  // Temporary: dump the full raw response while charging so any
-  // undocumented field (e.g. a thermal/handle-derate signal Tesla doesn't
-  // expose in the typed interface below) is visible in docker logs. Remove
-  // once the overnight hot-handle check is done.
-  if (process.env.TESLA_LOG_RAW_CHARGE === '1' && data.charge_state?.charging_state === 'Charging') {
-    console.log(`[tesla-raw] ${vin} vehicle_data: ${JSON.stringify(data)}`);
-  }
 
   const cs = data.charge_state ?? {};
   const vs = data.vehicle_state ?? {};
@@ -506,17 +501,6 @@ export async function fetchWallConnectorVitals(siteId: string, serial: string, f
   const data = await getLiveStatus(siteId, forceFastPoll);
   const wc = data?.wall_connectors?.find(w => w.din?.endsWith(`--${serial}`));
   if (!wc) return null;
-
-  // Temporary: Rivian's API never exposes a throttle/derate signal
-  // (chargerDerateStatus is always null), so the charger itself is the only
-  // place a fault/thermal state could show (wall_connector_fault_state).
-  // This fires for whichever serial is passed in -- including Rivian's
-  // existing wall-connector call above -- so it catches Rivian's sessions
-  // without any Tesla-side changes. Remove once the throttling question
-  // is resolved.
-  if (process.env.TESLA_LOG_RAW_CHARGE === '1' && (wc.wall_connector_state === 1 || (wc.wall_connector_power ?? 0) > 100)) {
-    console.log(`[tesla-raw-wc] ${serial}: ${JSON.stringify(wc)}`);
-  }
 
   const powerW = wc.wall_connector_power ?? 0;
   const voltageV = 240; // US split-phase assumption

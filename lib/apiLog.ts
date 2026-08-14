@@ -41,6 +41,31 @@ export async function logApiCall(rec: Omit<ApiCallRecord, 'ts'>): Promise<void> 
   catch (e) { console.error('[apiLog] write failed:', e); }
 }
 
+// Separate opt-in file for full response bodies (api-calls.jsonl above never
+// carries the body -- it's written before the caller reads/parses the
+// response). Same mounted dir, same rotation strategy, higher size cap
+// since bodies are much bigger than status lines. Gated behind
+// TESLA_LOG_API_BODIES so it's off by default; meant to run for a few days
+// while troubleshooting Rivian charge throttling, then be turned back off.
+const BODIES_MAX_BYTES = 20 * 1024 * 1024; // rotate at 20 MB
+
+function bodiesPath(): string {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  return join(dir, 'tesla-api-bodies.jsonl');
+}
+
+export async function logApiBody(endpoint: string, body: unknown): Promise<void> {
+  if (process.env.TESLA_LOG_API_BODIES !== '1') return;
+  const path = bodiesPath();
+  try {
+    const s = await stat(path);
+    if (s.size > BODIES_MAX_BYTES) await rename(path, path + '.1');
+  } catch { /* file may not exist yet */ }
+  const line = JSON.stringify({ ts: new Date().toISOString(), endpoint, body }) + '\n';
+  try { await appendFile(path, line); }
+  catch (e) { console.error('[apiLog] body write failed:', e); }
+}
+
 // Wrap a fetch call with automatic logging. Returns the raw Response so the
 // caller can .json()/.text() it as normal. On network/timeout errors, records
 // the failure then re-throws so caller-side handling (backoff, retries) still
