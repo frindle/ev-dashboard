@@ -507,6 +507,13 @@ export async function fetchWallConnectorVitals(siteId: string, serial: string, f
   const wc = data?.wall_connectors?.find(w => w.din?.endsWith(`--${serial}`));
   if (!wc) return null;
 
+  // Temporary: this is charger-side, so it's the one place a thermal/handle
+  // fault would show up (wall_connector_fault_state) even while the vehicle
+  // itself reports asleep. Remove alongside the vehicle_data raw dump above.
+  if (process.env.TESLA_LOG_RAW_CHARGE === '1' && (wc.wall_connector_state === 1 || (wc.wall_connector_power ?? 0) > 100)) {
+    console.log(`[tesla-raw-wc] ${serial}: ${JSON.stringify(wc)}`);
+  }
+
   const powerW = wc.wall_connector_power ?? 0;
   const voltageV = 240; // US split-phase assumption
   const currentA = powerW > 0 ? powerW / voltageV : 0;
