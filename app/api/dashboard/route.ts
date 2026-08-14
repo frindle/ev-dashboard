@@ -15,6 +15,7 @@ import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
 import { appendChargeHistory, type ChargeHistoryRow } from '@/lib/chargeHistory';
+import { logWcDiagnostic } from '@/lib/wcDiagnostics';
 import { readGarageDoorState, type GarageDoorState } from '@/lib/ratgdo';
 
 export const dynamic = 'force-dynamic';
@@ -930,6 +931,22 @@ async function handleGet(req: Request) {
       todayKwh:   sessions.right.todayKwh,
     },
   ];
+
+  // Observational log for the undocumented faultState/ocppStatus fields --
+  // see lib/wcDiagnostics.ts. Fire-and-forget, never blocks the response.
+  for (const wc of wallConnectors) {
+    if (!wc.vitals) continue;
+    void logWcDiagnostic({
+      side: wc.side,
+      vehicleName: wc.vehicleName,
+      faultState: wc.vitals.faultState,
+      ocppStatus: wc.vitals.ocppStatus,
+      vehicleConnected: wc.vitals.vehicleConnected,
+      vehicleCharging: wc.vitals.vehicleCharging,
+      currentA: wc.vitals.currentA,
+      powerW: wc.vitals.powerW,
+    });
+  }
 
   const flagsPersisted = readFlags();
   const rivState = rivianState as RivianVehicleState | null;
