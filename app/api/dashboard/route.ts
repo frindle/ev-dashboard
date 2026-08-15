@@ -755,35 +755,25 @@ async function handleGet(req: Request) {
   const rivianSerial  = rivianSide === 'LEFT' ? leftSerial  : rightSerial;
   const rivianLocalIp = rivianSide === 'LEFT' ? leftLocalIp : rightLocalIp;
   const teslaSide = rivianSide === 'LEFT' ? 'RIGHT' : 'LEFT';
-  const teslaSerial = teslaSide === 'LEFT' ? leftSerial : rightSerial;
   const rivianJustStartedCharging = rivianConnected ? await peekRivianJustStartedCharging() : false;
   const rivianJustStoppedCharging = rivianConnected ? await peekRivianJustStoppedCharging() : false;
   // Only gates the cloud path -- the local Wall Connector API is free, no
   // reason to skip it just because Rivian might be away.
   const rivianProbablyHome = rivianLocalIp || !rivianConnected ? true : await peekRivianProbablyHome();
 
-  const [teslaState, rivianState, rivianWcVitals, teslaWcVitalsCloud, weather, garageDoorState] = await Promise.all([
+  const [teslaState, rivianState, rivianWcVitals, weather, garageDoorState] = await Promise.all([
     teslaConnected ? smartFetchTesla(cfg.vehicles.tesla.vin, force) : Promise.resolve(null),
     rivianConnected ? fetchRivianWithGpsCache(force) : Promise.resolve(null),
     rivianLocalIp || (rivianConnected && rivianSerial && rivianProbablyHome)
       ? fetchWallConnectorVitals(cfg.energySite.id, rivianSerial, rivianJustStartedCharging || rivianJustStoppedCharging, rivianLocalIp)
       : Promise.resolve(null),
-    // Backup only -- telemetry is the primary source for Tesla's side (see
-    // below). This covers the gap when the car reports asleep to Fleet API
-    // but is actually charging (confirmed 2026-08-14: 408 all night during a
-    // real, physically-observed charge). Shares the same live_status cache
-    // as Rivian's call above, so this is free once either side has fetched
-    // it this tick.
-    teslaConnected && teslaSerial ? fetchWallConnectorVitals(cfg.energySite.id, teslaSerial, false, '') : Promise.resolve(null),
     fetchWeather(cfg),
     readGarageDoorState(),
   ]);
 
   // Tesla's side is synthesized directly from its (telemetry-sourced) vehicle
-  // state by default -- zero additional API/network calls, cloud or local.
-  // Fall back to the charger-side reading only when telemetry shows no
-  // power draw (asleep/stale) but the wall connector itself reports one.
-  const teslaWcVitalsFromTelemetry: WallConnectorVitals | null = teslaState ? {
+  // state -- zero additional API/network calls, cloud or local.
+  const teslaWcVitals: WallConnectorVitals | null = teslaState ? {
     vehicleConnected: teslaState.isPluggedIn,
     vehicleCharging: teslaState.isCharging,
     currentA: teslaState.chargerActualCurrentA,
@@ -792,10 +782,6 @@ async function handleGet(req: Request) {
     powerW: teslaState.chargerPowerKw * 1000,
     online: teslaState.online,
   } : null;
-  const teslaWcVitals: WallConnectorVitals | null =
-    (teslaWcVitalsFromTelemetry && teslaWcVitalsFromTelemetry.powerW > 0)
-      ? teslaWcVitalsFromTelemetry
-      : (teslaWcVitalsCloud ?? teslaWcVitalsFromTelemetry);
   const wcLeft  = teslaSide === 'LEFT'  ? teslaWcVitals : rivianWcVitals;
   const wcRight = teslaSide === 'RIGHT' ? teslaWcVitals : rivianWcVitals;
 
