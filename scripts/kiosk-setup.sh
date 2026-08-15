@@ -80,12 +80,16 @@ if ! command -v cloudflared &>/dev/null; then
   read -r -s -p "Cloudflare Tunnel token (blank to skip cloudflared setup): " CF_TUNNEL_TOKEN
   echo
   if [ -n "$CF_TUNNEL_TOKEN" ]; then
-    sudo mkdir -p --mode=0755 /usr/share/keyrings
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" \
-      | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
-    sudo apt-get update
-    sudo apt-get install -y cloudflared
+    # Cloudflare's apt repo (pkg.cloudflare.com) doesn't have a component
+    # for every Debian codename (e.g. trixie, as of 2026) -- apt-get update
+    # silently skips the unmatched source instead of erroring, then install
+    # fails with "Unable to locate package". Grabbing the .deb release
+    # directly sidesteps that entirely, works on any codename.
+    DEB_ARCH=$(dpkg --print-architecture)  # arm64 or armhf
+    curl -fsSL --output /tmp/cloudflared.deb \
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${DEB_ARCH}.deb"
+    sudo dpkg -i /tmp/cloudflared.deb
+    rm -f /tmp/cloudflared.deb
     sudo cloudflared service install "$CF_TUNNEL_TOKEN"
     echo "cloudflared connector installed as a systemd service."
   else
