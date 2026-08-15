@@ -70,6 +70,31 @@ fi
 EOF
 fi
 
+echo "=== cloudflared connector (tunnel redundancy) ==="
+# Adds this Pi as an additional connector for the existing "Halton Place"
+# tunnel -- same pattern as the Firewalla box's connector (see
+# homelab-database services.md). If Unraid's own connector drops, this one
+# keeps the tunnel's hostnames reachable. Skippable: leave the token blank
+# to skip this section entirely (e.g. re-running just to change the URL).
+if ! command -v cloudflared &>/dev/null; then
+  read -r -s -p "Cloudflare Tunnel token (blank to skip cloudflared setup): " CF_TUNNEL_TOKEN
+  echo
+  if [ -n "$CF_TUNNEL_TOKEN" ]; then
+    sudo mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" \
+      | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+    sudo apt-get update
+    sudo apt-get install -y cloudflared
+    sudo cloudflared service install "$CF_TUNNEL_TOKEN"
+    echo "cloudflared connector installed as a systemd service."
+  else
+    echo "Skipped -- re-run this script later to add it."
+  fi
+else
+  echo "cloudflared already installed, skipping."
+fi
+
 echo
 echo "=== done ==="
 echo "Reboot to test: sudo reboot"

@@ -40,6 +40,18 @@ sudo reboot
 
 After reboot it should come up straight into the fullscreen dashboard, no login screen, no cursor, screen never sleeps.
 
+## Tunnel redundancy (optional)
+
+The setup script also offers to install `cloudflared` as an additional
+connector for the existing "Halton Place" Cloudflare Tunnel — same pattern
+as the Firewalla box's connector. If Unraid's own connector ever drops,
+this Pi keeps the tunnel's hostnames reachable. It'll prompt for a tunnel
+token during setup; leave it blank to skip (safe to add later by re-running
+the script). Get a fresh token from the Cloudflare dashboard → Zero Trust →
+Networks → Tunnels → Halton Place → Configure, or via the API — don't reuse
+a token from chat/notes, tokens are meant to be regenerated per install
+if there's any doubt about exposure.
+
 ## Changing the URL later
 
 ```
