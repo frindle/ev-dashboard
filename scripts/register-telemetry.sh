@@ -121,7 +121,13 @@ PAYLOAD=$(jq -n \
         SoftwareUpdateScheduledStartTime: { interval_seconds: 300 },
         ScheduledChargingPending: { interval_seconds: 300 },
         ScheduledChargingStartTime: { interval_seconds: 300 },
-        ScheduledDepartureTime: { interval_seconds: 300 },
+        # ScheduledDepartureTime removed 2026-08-15 -- Tesla rejects it as
+        # unsupported for this vehicle, and the backend appears to stall the
+        # entire data stream (sending only "unsupported_field" error
+        # diagnostics instead of real Datum payloads) while any field in the
+        # subscription is invalid. Confirmed via a raw error payload dump:
+        # {"errors":[{"field_name":"ScheduledDepartureTime"}]} repeating on
+        # every connection, zero real telemetry landing the whole time.
         ScheduledChargingMode: { interval_seconds: 300 },
         MilesSinceReset:     { interval_seconds: 600 }
       }
