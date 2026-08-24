@@ -822,3 +822,326 @@ export function noteRivianLoginSuccess(): void {
 export function hasRivianTokens(): boolean {
   return readRivianTokens() !== null;
 }
+
+// ── Service / "in service" state — SHIPPED DORMANT ───────────────────────────
+//
+// WHY THIS IS DORMANT (do not wire it up without re-reading this):
+// Rivian's service data is OWNER-SCOPED. Confirmed 2026-08-24 by logging the
+// same app into Penn's owner account and into the ev-dashboard's SHARED
+// (invited-user) account against the same VIN:
+//
+//   op                        | owner acct | dashboard (shared) acct
+//   CommsListDiscussions      | 16 threads | 0
+//   GetAsyncMessageThreadList | 16 threads | 0
+//   GetActiveRequests         |  5 items   | 0
+//
+// ev-dashboard logs in with the SHARED account, so every one of the calls
+// below returns EMPTY for it today. Turning this on would just add API traffic
+// and a permanently-false "in service" answer, so it is gated off and is NOT
+// called from the poll loop (app/api/dashboard/route.ts) or any UI path.
+//
+// WHAT FLIPS IT LIVE — exactly two things, in order:
+//   1. Penn's PENDING TEST resolves positive: the ev-dashboard account is
+//      provisioned as a CREDENTIALED driver WITH A PHONE KEY on the R1S, and a
+//      re-capture shows these three ops returning non-empty data for it.
+//      (Hypothesis basis: GetVehicle.invitedUsers[] carries `isCredentialed`
+//      + `roles[]`, so access may be gated on being keyed, not strictly on
+//      being the owner.) If it resolves negative, the only path is the OWNER
+//      account's credentials — a separate security decision, not a code change.
+//   2. Set env RIVIAN_SERVICE_MODE=1 on the container, then have a caller
+//      invoke fetchRivianServiceState(). Nothing else references it.
+//
+// ALSO UNVERIFIED until (1): the GraphQL *variable* signatures below were not
+// captured from the app traffic (only the op names, the gateways and the
+// response shapes were). Expect to correct the `query ...($x: T!)` headers
+// against a live capture the first time this is enabled.
+//
+// AND: THERE IS NO ETA / ESTIMATED-READY FIELD. Verified 2026-08-24 across
+// every datetime field on all five service ops — zero future-dated values.
+// appointmentStartAtIso/appointmentEndAtIso are the DROP-OFF window and sit in
+// the PAST while the car is still being worked on. Do not present either as a
+// "ready by" time and do not compute one. `completedAt` going null → timestamp
+// is the only completion signal Rivian gives.
+
+// Separate vehicle-service gateway — NOT the GATEWAY constant at the top of
+// this file. Same session auth headers, different host path.
+const VS_GATEWAY = 'https://rivian.com/api/vs/gql-gateway';
+
+/**
+ * Master kill switch. Disabled by default; only an explicit truthy
+ * RIVIAN_SERVICE_MODE env var enables the calls below.
+ */
+export function rivianServiceModeEnabled(): boolean {
+  const v = String(process.env.RIVIAN_SERVICE_MODE ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+export type RivianWorkOrderType = 'SERVICE_CENTER' | 'MOBILE_SERVICE' | string;
+export type RivianWorkOrderStatus = 'IN_PROGRESS' | 'DELIVERED' | string;
+/** OPEN_SCHEDULED → OPEN_IN_PROGRESS → CLOSED_WORK_COMPLETE */
+export type RivianServiceItemStatus =
+  | 'OPEN_SCHEDULED'
+  | 'OPEN_IN_PROGRESS'
+  | 'CLOSED_WORK_COMPLETE'
+  | string;
+
+export interface RivianServiceThread {
+  workOrderId: string | null;
+  workOrderType: RivianWorkOrderType | null;
+  workOrderStatus: RivianWorkOrderStatus | null;
+  threadStatus: string | null;
+  appointmentDate: string | null;
+}
+
+export interface RivianServiceLineItem {
+  title: string | null;
+  status: RivianServiceItemStatus | null;
+  concern: string | null;
+  requestType: string | null;
+  referenceId: string | null;
+  createdAt: string | null;
+  /** Convenience flags derived from `status`; null when status is absent. */
+  isComplete: boolean | null;
+  isInProgress: boolean | null;
+}
+
+export interface RivianWorkOrderTiming {
+  workOrderId: string;
+  /** Start of the DROP-OFF window. Not an ETA. */
+  appointmentStartAtIso: string | null;
+  /** End of the DROP-OFF window. NOT a "ready by" time — see notes above. */
+  appointmentEndAtIso: string | null;
+  /** null while work is in progress; real timestamp once finished. */
+  completedAt: string | null;
+}
+
+export interface RivianServiceState {
+  inService: boolean;
+  workOrderId: string | null;
+  appointmentDate: string | null;
+  threads: RivianServiceThread[];
+  lineItems: RivianServiceLineItem[];
+  timing: RivianWorkOrderTiming | null;
+  /** e.g. 2 of 5 line items at CLOSED_WORK_COMPLETE. */
+  itemsComplete: number;
+  itemsTotal: number;
+}
+
+// Variable signatures UNVERIFIED — see the dormancy note above.
+const GET_ASYNC_MESSAGE_THREAD_LIST = `
+query GetAsyncMessageThreadList {
+  commsListDiscussions {
+    workOrderId
+    workOrderType
+    workOrderStatus
+    threadStatus
+    appointmentDate
+  }
+}`;
+
+const GET_ACTIVE_REQUESTS = `
+query GetActiveRequests($vehicleId: String!) {
+  consumerServiceRequests(vehicleId: $vehicleId) {
+    result {
+      title
+      status
+      concern
+      requestType
+      referenceId
+      createdAt
+      expiresAt
+    }
+  }
+}`;
+
+const QUERY_BY_WORK_ORDER_ID = `
+query QueryByWorkOrderId($workOrderId: String!) {
+  queryByWorkOrderId(workOrderId: $workOrderId) {
+    workOrderId
+    appointmentStartAtIso
+    appointmentEndAtIso
+    visitStartAtIso
+    visitEndAtIso
+    completedAt
+  }
+}`;
+
+// Rivian's gateway is loose about String-typed fields (it has returned bare
+// JSON numbers where its own schema says String — see the 2026-08-06 gotchas
+// above), and service payloads mix "field is null" with "field is absent".
+// Everything below goes through these two coercions rather than trusting
+// either the declared type or the field's presence.
+function svcStr(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+}
+
+function svcArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
+interface RawServiceThread {
+  workOrderId?: unknown;
+  workOrderType?: unknown;
+  workOrderStatus?: unknown;
+  threadStatus?: unknown;
+  appointmentDate?: unknown;
+}
+
+interface RawServiceRequest {
+  title?: unknown;
+  status?: unknown;
+  concern?: unknown;
+  requestType?: unknown;
+  referenceId?: unknown;
+  createdAt?: unknown;
+}
+
+interface RawWorkOrderTiming {
+  workOrderId?: unknown;
+  appointmentStartAtIso?: unknown;
+  appointmentEndAtIso?: unknown;
+  completedAt?: unknown;
+}
+
+function mapServiceThread(raw: RawServiceThread): RivianServiceThread {
+  return {
+    workOrderId: svcStr(raw?.workOrderId),
+    workOrderType: svcStr(raw?.workOrderType),
+    workOrderStatus: svcStr(raw?.workOrderStatus),
+    threadStatus: svcStr(raw?.threadStatus),
+    appointmentDate: svcStr(raw?.appointmentDate),
+  };
+}
+
+function mapServiceLineItem(raw: RawServiceRequest): RivianServiceLineItem {
+  const status = svcStr(raw?.status);
+  return {
+    title: svcStr(raw?.title),
+    status,
+    concern: svcStr(raw?.concern),
+    requestType: svcStr(raw?.requestType),
+    referenceId: svcStr(raw?.referenceId),
+    createdAt: svcStr(raw?.createdAt),
+    isComplete: status === null ? null : status === 'CLOSED_WORK_COMPLETE',
+    isInProgress: status === null ? null : status === 'OPEN_IN_PROGRESS',
+  };
+}
+
+/**
+ * DORMANT. In-service detection via the main gateway.
+ * Returns [] when the flag is off, when there are no tokens, or on error —
+ * an empty list is indistinguishable from "shared account can't see it", so
+ * callers must not treat [] as proof the car is not in service.
+ */
+export async function fetchRivianServiceThreads(): Promise<RivianServiceThread[]> {
+  if (!rivianServiceModeEnabled()) return [];
+  const tokens = readRivianTokens();
+  if (!tokens) return [];
+  if (inBackoffWindow()) return [];
+
+  try {
+    const data = await gql<{ commsListDiscussions?: RawServiceThread[] | null }>(
+      GET_ASYNC_MESSAGE_THREAD_LIST,
+      {},
+      authHeaders(tokens),
+    );
+    return svcArray<RawServiceThread>(data?.commsListDiscussions).map(mapServiceThread);
+  } catch (e) {
+    // Deliberately does NOT touch the shared backoff/alert counters: this is
+    // an opt-in side channel and must never degrade the vehicleState poll.
+    console.warn('[rivian] fetchRivianServiceThreads failed:', String(e).slice(0, 240));
+    return [];
+  }
+}
+
+/**
+ * DORMANT. Per-line-item service checklist, from the SEPARATE vs gateway.
+ * Same caveat as above: [] does not mean "no work items".
+ */
+export async function fetchRivianServiceLineItems(vehicleId?: string): Promise<RivianServiceLineItem[]> {
+  if (!rivianServiceModeEnabled()) return [];
+  const tokens = readRivianTokens();
+  if (!tokens) return [];
+  const vid = vehicleId ?? tokens.vehicleId;
+  if (!vid) return [];
+  if (inBackoffWindow()) return [];
+
+  try {
+    const data = await gql<{ consumerServiceRequests?: { result?: RawServiceRequest[] | null } | null }>(
+      GET_ACTIVE_REQUESTS,
+      { vehicleId: vid },
+      authHeaders(tokens),
+      VS_GATEWAY,
+    );
+    return svcArray<RawServiceRequest>(data?.consumerServiceRequests?.result).map(mapServiceLineItem);
+  } catch (e) {
+    console.warn('[rivian] fetchRivianServiceLineItems failed:', String(e).slice(0, 240));
+    return [];
+  }
+}
+
+/**
+ * DORMANT. Drop-off window + completion stamp for one work order.
+ * `appointmentEndAtIso` is NOT an ETA — see the dormancy note above.
+ */
+export async function fetchRivianWorkOrderTiming(workOrderId: string): Promise<RivianWorkOrderTiming | null> {
+  if (!rivianServiceModeEnabled()) return null;
+  const wo = svcStr(workOrderId);
+  if (!wo) return null;
+  const tokens = readRivianTokens();
+  if (!tokens) return null;
+  if (inBackoffWindow()) return null;
+
+  try {
+    const data = await gql<{ queryByWorkOrderId?: RawWorkOrderTiming | null }>(
+      QUERY_BY_WORK_ORDER_ID,
+      { workOrderId: wo },
+      authHeaders(tokens),
+      VS_GATEWAY,
+    );
+    const raw = data?.queryByWorkOrderId;
+    if (!raw) return null;
+    return {
+      workOrderId: svcStr(raw.workOrderId) ?? wo,
+      appointmentStartAtIso: svcStr(raw.appointmentStartAtIso),
+      appointmentEndAtIso: svcStr(raw.appointmentEndAtIso),
+      completedAt: svcStr(raw.completedAt),
+    };
+  } catch (e) {
+    console.warn('[rivian] fetchRivianWorkOrderTiming failed:', String(e).slice(0, 240));
+    return null;
+  }
+}
+
+/**
+ * DORMANT aggregate: the single entry point a future caller would use.
+ * Returns null unless RIVIAN_SERVICE_MODE is explicitly enabled. Nothing in
+ * the app calls this today — see the dormancy note above for what flips it on.
+ */
+export async function fetchRivianServiceState(vehicleId?: string): Promise<RivianServiceState | null> {
+  if (!rivianServiceModeEnabled()) return null;
+
+  const threads = await fetchRivianServiceThreads();
+  // In service iff ANY thread is IN_PROGRESS (SERVICE_CENTER or MOBILE_SERVICE).
+  const active = threads.find((t) => t.workOrderStatus === 'IN_PROGRESS') ?? null;
+  const inService = active !== null;
+
+  const lineItems = inService ? await fetchRivianServiceLineItems(vehicleId) : [];
+  const timing = active?.workOrderId ? await fetchRivianWorkOrderTiming(active.workOrderId) : null;
+
+  const itemsTotal = lineItems.length;
+  const itemsComplete = lineItems.filter((i) => i.isComplete === true).length;
+
+  return {
+    inService,
+    workOrderId: active?.workOrderId ?? null,
+    appointmentDate: active?.appointmentDate ?? null,
+    threads,
+    lineItems,
+    timing,
+    itemsComplete,
+    itemsTotal,
+  };
+}
