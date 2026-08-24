@@ -89,6 +89,14 @@ launch('telemetry', 'node', [path.join(__dirname, 'telemetry-server.js')]);
 // appear (see parallax-monitor.js).
 launch('parallax', 'node', [path.join(__dirname, 'parallax-monitor.js')], { critical: false });
 
+// 2c. Rivian vehicleState push monitor -- persistent graphql-ws subscription
+// that replaces the *latency* of the REST poll (the poll itself stays as the
+// fallback, see getRivianVehicleState() in lib/rivian.ts). Non-critical for
+// the same reason as parallax: no tokens yet must not crash-loop the
+// container, and if this dies the dashboard degrades to polling rather than
+// going dark.
+launch('rivian-ws', 'node', [path.join(__dirname, 'rivian-state-monitor.js')], { critical: false });
+
 // 3. Tesla vehicle-command HTTP proxy — only if the partner private key exists.
 //    If not, skip silently so the container can still come up for non-Tesla
 //    setup steps.
