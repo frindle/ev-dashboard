@@ -10,7 +10,7 @@ import {
   TeslaVehicleState,
   WallConnectorVitals,
 } from '@/lib/tesla';
-import { fetchRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded, readRivianParallaxState } from '@/lib/rivian';
+import { getRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded, readRivianParallaxState, rivianPushFresh } from '@/lib/rivian';
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
@@ -638,7 +638,17 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   };
 
   // Fresh-enough cache → don't touch the Rivian API at all this cycle.
-  if (!force && cache.state && cache.fetchedAt) {
+  //
+  // ...unless the websocket subscription is live. The whole point of the
+  // poll-interval tiers below is to avoid hammering Rivian's opaquely
+  // throttled gateway; when state is arriving by push,
+  // getRivianVehicleState() answers from a local file with zero network
+  // calls, so there is nothing to ration and every reason to take the newer
+  // reading. Serving a 5-minute-old idle-tier snapshot while a real-time one
+  // sits on disk would keep the exact staleness this migration exists to
+  // remove.
+  const pushLive = rivianPushFresh();
+  if (!force && !pushLive && cache.state && cache.fetchedAt) {
     const ageMs = Date.now() - cache.fetchedAt;
     // Plugged-in-but-not-yet-charging (e.g. waiting for a TOU window) must
     // use the faster tier too, not idle — otherwise a fresh plug-in event
@@ -663,7 +673,9 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
     }
   }
 
-  const fresh = await fetchRivianVehicleState();
+  // Websocket push when it's delivering, REST poll (backoff ladder and all)
+  // when it isn't — the switch lives in lib/rivian.ts.
+  const fresh = await getRivianVehicleState();
   if (!fresh) {
     // Backoff window or fetch failure — serve last-known so the card
     // doesn't blank out. atHome stays neutral (_gpsFresh=false).

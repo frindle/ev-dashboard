@@ -6,6 +6,7 @@ import {
 } from './sessionFlags';
 import { loggedFetch } from './apiLog';
 import { sendPush } from './pushover';
+import { VEHICLE_STATE_FIELDS } from '../server/rivian-vehicle-state-fields.js';
 
 const GATEWAY = 'https://rivian.com/api/gql/gateway/graphql';
 // vehicleState (via GATEWAY above) has no power/current field at all --
@@ -86,6 +87,11 @@ function recordBackoffError(): void {
 // threshold, so the display shows *something's* wrong even before it
 // crosses the Pushover threshold.
 export function rivianApiDegraded(): boolean {
+  // A live websocket subscription means the data is current regardless of
+  // what the poll path is doing -- poll backoff while pushes are arriving is
+  // not a degradation, it's the fallback correctly standing down. Only call
+  // it degraded when the push path ISN'T covering for it.
+  if (rivianPushFresh()) return false;
   return inBackoffWindow() || consecutiveApiErrors > 0;
 }
 
@@ -457,47 +463,13 @@ export async function reresolveVehicleId(): Promise<{ ok: boolean; vehicleId: st
 
 // ── Vehicle state ─────────────────────────────────────────────────────────────
 
+// Field selection lives in server/rivian-vehicle-state-fields.js so the
+// polled query here and the pushed subscription in
+// server/rivian-state-monitor.js can never drift apart -- both feed
+// mapRawVehicleState() below, which assumes one field set.
 const GET_VEHICLE_STATE = `
 query GetVehicleState($vehicleID: String!) {
-  vehicleState(id: $vehicleID) {
-    cloudConnection { lastSync isOnline }
-    batteryLevel { timeStamp value }
-    distanceToEmpty { timeStamp value }
-    batteryLimit { timeStamp value }
-    timeToEndOfCharge { timeStamp value }
-    chargerState { timeStamp value }
-    chargerStatus { timeStamp value }
-    chargerDerateStatus { timeStamp value }
-    powerState { timeStamp value }
-    gearStatus { timeStamp value }
-    vehicleMileage { timeStamp value }
-    doorFrontLeftLocked { timeStamp value }
-    doorFrontLeftClosed { timeStamp value }
-    doorFrontRightLocked { timeStamp value }
-    doorFrontRightClosed { timeStamp value }
-    doorRearLeftLocked { timeStamp value }
-    doorRearLeftClosed { timeStamp value }
-    doorRearRightLocked { timeStamp value }
-    doorRearRightClosed { timeStamp value }
-    twelveVoltBatteryHealth { timeStamp value }
-    cabinPreconditioningStatus { timeStamp value }
-    chargePortState { timeStamp value }
-    gnssLocation { timeStamp latitude longitude }
-    gnssSpeed { timeStamp value }
-    gnssAltitude { timeStamp value }
-    gnssError { timeStamp positionHorizontal positionVertical speed bearing }
-    wiperFluidState { timeStamp value }
-    brakeFluidLow { timeStamp value }
-    tirePressureStatusFrontLeft { timeStamp value }
-    tirePressureStatusFrontRight { timeStamp value }
-    tirePressureStatusRearLeft { timeStamp value }
-    tirePressureStatusRearRight { timeStamp value }
-    batteryHvThermalEvent { timeStamp value }
-    batteryHvThermalEventPropagation { timeStamp value }
-    otaCurrentVersionNumber { timeStamp value }
-    otaAvailableVersionNumber { timeStamp value }
-    otaStatus { timeStamp value }
-    otaCurrentStatus { timeStamp value }
+  vehicleState(id: $vehicleID) {${VEHICLE_STATE_FIELDS}
   }
 }`;
 
@@ -550,6 +522,220 @@ function authHeaders(t: RivianTokens): Record<string, string> {
   };
 }
 
+// ── Raw -> RivianVehicleState mapping ─────────────────────────────────────
+// Deliberately pulled out of fetchRivianVehicleState so BOTH ingest paths --
+// the REST poll below and the pushed websocket subscription
+// (server/rivian-state-monitor.js -> readRivianPushState()) -- go through
+// exactly one set of derivations. Every quirk documented in here (Rivian
+// sending JSON numbers on String-typed fields, chargerState's timeStamp
+// being last-*changed*, the idle-vs-active enum sets) applies identically to
+// pushed frames, and duplicating it per path is how they'd silently drift.
+//
+// Null-tolerant by construction: every read is `vs.field?.value ?? <default>`,
+// so a payload where most fields are null or absent -- which is exactly what
+// both paths return while the vehicle is asleep or in service -- degrades to
+// defaults instead of throwing.
+export function mapRawVehicleState(vs: RawVehicleState, source: 'poll' | 'push' = 'poll'): RivianVehicleState {
+  const src = source === 'push' ? 'rivian-ws' : 'rivian';
+  // String() on every enum-ish field: Rivian's gateway returns raw JSON
+  // numbers on fields its own schema types as String (confirmed on the OTA
+  // version fields), and any .trim()/.toLowerCase() on one of those throws
+  // out of this whole function — which the caller then reads as a poll
+  // failure and answers with a stale-cache serve.
+  const chargingStateRaw = String(vs.chargerState?.value ?? 'disconnected');
+  const chargerStateTs = vs.chargerState?.timeStamp;
+  const chargerStatusRaw = String(vs.chargerStatus?.value ?? '');
+  const chargerStatusTs = vs.chargerStatus?.timeStamp;
+  const chargePortRaw = vs.chargePortState?.value ?? '';
+  const chargePortTs = vs.chargePortState?.timeStamp;
+  const powerStateRaw = vs.powerState?.value ?? '';
+  const powerStateTs = vs.powerState?.timeStamp;
+  // Log-only for now — observing real values to confirm the "driving" vs
+  // "parked" strings before building the garage-light-on-arrival automation
+  // off of it. Not read anywhere else yet.
+  const gearStatusRaw = vs.gearStatus?.value ?? '';
+  const gearStatusTs = vs.gearStatus?.timeStamp;
+
+  const derateRawEarly = vs.chargerDerateStatus?.value ?? '';
+  const hvThermalRaw = String(vs.batteryHvThermalEvent?.value ?? '');
+  const hvThermalPropRaw = String(vs.batteryHvThermalEventPropagation?.value ?? '');
+  const wiperFluidRaw = vs.wiperFluidState?.value ?? '';
+  const brakeFluidRaw = vs.brakeFluidLow?.value;
+  const tpFL = vs.tirePressureStatusFrontLeft?.value ?? '';
+  const tpFR = vs.tirePressureStatusFrontRight?.value ?? '';
+  const tpRL = vs.tirePressureStatusRearLeft?.value ?? '';
+  const tpRR = vs.tirePressureStatusRearRight?.value ?? '';
+  const gnssErrH = vs.gnssError?.positionHorizontal;
+  console.log(
+    `[${src}] chargerState="${chargingStateRaw}"@${chargerStateTs ?? '?'} ` +
+    `chargerStatus="${chargerStatusRaw}"@${chargerStatusTs ?? '?'} ` +
+    `chargePortState="${chargePortRaw}"@${chargePortTs ?? '?'} ` +
+    `powerState="${powerStateRaw}"@${powerStateTs ?? '?'} ` +
+    `gearStatus="${gearStatusRaw}"@${gearStatusTs ?? '?'} ` +
+    `derate="${derateRawEarly}" hvThermal="${hvThermalRaw}" hvProp="${hvThermalPropRaw}" ` +
+    `tires=FL:${tpFL}/FR:${tpFR}/RL:${tpRL}/RR:${tpRR} ` +
+    `wiper="${wiperFluidRaw}" brakeLow=${brakeFluidRaw} ` +
+    `gnssErrH=${gnssErrH ?? '?'} online=${vs.cloudConnection?.isOnline ?? '?'}`
+  );
+
+  // Resolve plug status from chargerStatus alone — matches the proven
+  // approach in Home Assistant's Rivian integration (bretterer/home-assistant-rivian,
+  // coordinator.py): `chargerStatus.value != "chrgr_sts_not_connected"`.
+  //
+  // chargePortState is NOT a plug signal despite the name — HA's own
+  // integration maps it to a separate DOOR-class sensor (open/closed
+  // charge port door), unrelated to whether a cable is connected.
+  // Earlier logic here treated door-closed as unplugged and overrode a
+  // correctly-connected chargerStatus, which is why the dashboard could
+  // show "not plugged in" while the car was actually charging.
+  const isPluggedIn = chargerStatusRaw !== '' && chargerStatusRaw !== 'chrgr_sts_not_connected';
+
+  // The old rule was `!chargerStateStale && CHARGING_ACTIVE.has(chargerState)`,
+  // where "stale" meant chargerState.timeStamp older than 15 min. That
+  // timestamp is a last-*changed* stamp, so a steady multi-hour charge ages
+  // out of the window and the veto flipped isCharging to false while the
+  // car was demonstrably still charging — the reported "IDLE · PLUGGED IN ·
+  // NOT CHARGING". isPluggedIn had no such veto, which is exactly why the
+  // plug state stayed right while the charging state went wrong.
+  //
+  // Age was always a proxy for the real question the veto existed to ask:
+  // "is this chargerState value still describing reality?" isPluggedIn
+  // answers that directly and doesn't decay — an unplugged car can't be
+  // charging no matter what a stale chargerState still says. So veto on
+  // the plug state instead of on the clock.
+  const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active', 'charging_ac_1ph', 'charging_ac_3ph']);
+  // chargerStatus, if it reports charging at all, is the more direct signal
+  // (it's the same field isPluggedIn trusts). Only `chrgr_sts_not_connected`
+  // is confirmed from primary sources — the "connected and charging" literal
+  // is NOT, so match it tolerantly and fall through to chargerState when it
+  // doesn't hit rather than hard-coding a guessed enum value. Confirm the
+  // real string from the `[rivian] ... chargerStatus="…"` log line above
+  // during a live charge, then tighten this.
+  const statusSaysCharging = /charging/.test(chargerStatusRaw)
+    && !/not_charging|no_chrg/.test(chargerStatusRaw);
+  const isCharging = statusSaysCharging
+    || (isPluggedIn && CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase()));
+
+  // Rivian charger derate (throttling). Treat anything that's not empty
+  // / "no_derate" / "none" / "inactive" as throttled. Specific reason
+  // strings are surfaced verbatim — we don't have a documented enum.
+  // String() because Rivian does send raw JSON numbers on fields its own
+  // schema types as String (already confirmed for the OTA version fields
+  // below). A numeric value here made .trim() throw, and the outer catch
+  // turned that into a backoff step + stale-cache serve — i.e. the entire
+  // Rivian card silently frozen on its last good poll, throttle included.
+  const derateRaw = String(vs.chargerDerateStatus?.value ?? '').trim();
+  const derateLower = derateRaw.toLowerCase();
+  // '0'/'false' are here because of the String() above: a numeric-0 "not
+  // derated" must not read as a throttle reason now that it survives to
+  // this comparison instead of throwing.
+  const DERATE_IDLE = new Set(['', 'no_derate', 'none', 'inactive', 'normal', '0', 'false']);
+  const isThrottled = !DERATE_IDLE.has(derateLower);
+
+  // HV thermal event/propagation: same shape as derate above — Rivian
+  // returns a non-empty idle string ("off" / "nominal", confirmed from
+  // container logs 2026-07-18) even with no active excursion, so "not
+  // empty" alone false-positives on every poll. Only flag genuine values.
+  const HV_IDLE = new Set(['', 'off', 'none', 'no_event', 'inactive', 'normal', 'nominal', '0', 'false']);
+  const hvThermalActive =
+    !HV_IDLE.has(hvThermalRaw.toLowerCase()) || !HV_IDLE.has(hvThermalPropRaw.toLowerCase());
+
+  // Only show climate as on for explicitly active states; 'system_idle', 'not_available', etc. → off
+  const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
+  const climateVal = String(vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
+
+  // Rivian sends these as raw JSON numbers despite the GraphQL schema
+  // typing them as strings — confirmed from a real poll (otaCurrent=1,
+  // otaAvailable=0). String(...) normalizes both sides so the comparison
+  // below can't false-positive on a `0 !== ''` type mismatch, and "0" is
+  // treated as "no update queued" the same as an empty value.
+  const otaCurrent = String(vs.otaCurrentVersionNumber?.value ?? '');
+  const otaAvailable = String(vs.otaAvailableVersionNumber?.value ?? '');
+  const otaStatusRaw = (vs.otaStatus?.value ?? vs.otaCurrentStatus?.value ?? '').toString();
+  const otaStatusLower = otaStatusRaw.toLowerCase();
+  const otaInstalling = /install|download|apply|updating/.test(otaStatusLower);
+  const otaUpdateAvailable = otaAvailable !== '' && otaAvailable !== '0' && otaAvailable !== otaCurrent;
+  console.log(
+    `[${src}-ota] current="${otaCurrent}" available="${otaAvailable}" ` +
+    `status="${otaStatusRaw}" updateAvailable=${otaUpdateAvailable}`
+  );
+
+  const brakeLowBool = brakeFluidRaw === true || brakeFluidRaw === 'low' || brakeFluidRaw === 'true';
+
+  // Door open/locked value semantics confirmed against Home Assistant's
+  // Rivian integration (bretterer/home-assistant-rivian, const.py):
+  // *Closed field value "open" means open; *Locked field value "unlocked" means unlocked.
+  const doorFrontLeftOpen = vs.doorFrontLeftClosed?.value === 'open';
+  const doorFrontLeftLockedBool = vs.doorFrontLeftLocked?.value === 'locked';
+  const doorFrontRightOpen = vs.doorFrontRightClosed?.value === 'open';
+  const doorFrontRightLockedBool = vs.doorFrontRightLocked?.value === 'locked';
+  const doorRearLeftOpen = vs.doorRearLeftClosed?.value === 'open';
+  const doorRearLeftLockedBool = vs.doorRearLeftLocked?.value === 'locked';
+  const doorRearRightOpen = vs.doorRearRightClosed?.value === 'open';
+  const doorRearRightLockedBool = vs.doorRearRightLocked?.value === 'locked';
+  const anyDoorOpen = doorFrontLeftOpen || doorFrontRightOpen || doorRearLeftOpen || doorRearRightOpen;
+  const anyDoorUnlocked = !doorFrontLeftLockedBool || !doorFrontRightLockedBool || !doorRearLeftLockedBool || !doorRearRightLockedBool;
+
+  // 12V battery health — HA exposes this as a plain diagnostic sensor with
+  // no documented enum. Logging the raw value until we see real readings
+  // to know what "unhealthy" looks like, same pattern used for gearStatus.
+  const twelveVoltRaw = vs.twelveVoltBatteryHealth?.value ?? '';
+  if (twelveVoltRaw !== '') console.log(`[${src}] twelveVoltBatteryHealth="${twelveVoltRaw}"`);
+
+  return {
+    chargePercent: vs.batteryLevel?.value ?? 0,
+    chargeLimit: vs.batteryLimit?.value ?? 80,
+    isCharging,
+    isPluggedIn,
+    isThrottled,
+    derateReason: derateRaw,
+    chargingState: chargingStateRaw,
+    isLocked: doorFrontLeftLockedBool && doorFrontRightLockedBool && doorRearLeftLockedBool && doorRearRightLockedBool,
+    doorFrontLeftOpen,
+    doorFrontLeftLocked: doorFrontLeftLockedBool,
+    doorFrontRightOpen,
+    doorFrontRightLocked: doorFrontRightLockedBool,
+    doorRearLeftOpen,
+    doorRearLeftLocked: doorRearLeftLockedBool,
+    doorRearRightOpen,
+    doorRearRightLocked: doorRearRightLockedBool,
+    anyDoorOpen,
+    anyDoorUnlocked,
+    twelveVoltBatteryHealth: twelveVoltRaw,
+    climateOn: CLIMATE_ACTIVE.has(climateVal),
+    rangeMi: vs.distanceToEmpty?.value ?? 0,
+    // vehicleMileage is returned in meters; convert to miles
+    odometer: Math.round((vs.vehicleMileage?.value ?? 0) / 1609.344),
+    minutesToFull: vs.timeToEndOfCharge?.value ?? 0,
+    chargeRateMph: 0,
+    addedRangeMi: 0,
+    online: vs.cloudConnection?.isOnline ?? false,
+    lat: vs.gnssLocation?.latitude ?? null,
+    lon: vs.gnssLocation?.longitude ?? null,
+    gnssTimeStamp: vs.gnssLocation?.timeStamp ?? null,
+    gnssSpeedMph: vs.gnssSpeed?.value != null ? vs.gnssSpeed.value * 2.23694 : null,
+    gnssAltitudeM: vs.gnssAltitude?.value ?? null,
+    gnssErrorM: vs.gnssError?.positionHorizontal ?? null,
+    gnssBearingDeg: vs.gnssError?.bearing ?? null,
+    powerState: powerStateRaw,
+    hvThermalEvent: hvThermalRaw,
+    hvThermalPropagation: hvThermalPropRaw,
+    hvThermalActive,
+    wiperFluidState: wiperFluidRaw,
+    brakeFluidLow: brakeLowBool,
+    tirePressureFL: tpFL,
+    tirePressureFR: tpFR,
+    tirePressureRL: tpRL,
+    tirePressureRR: tpRR,
+    otaCurrentVersion: otaCurrent,
+    otaAvailableVersion: otaAvailable,
+    otaStatus: otaStatusRaw,
+    otaUpdateAvailable,
+    otaInstalling,
+    gearStatus: gearStatusRaw,
+  };
+}
+
 export async function fetchRivianVehicleState(vehicleId?: string): Promise<RivianVehicleState | null> {
   const tokens = readRivianTokens();
   if (!tokens) return null;
@@ -581,203 +767,7 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     resetBackoff();
     const vs = data.vehicleState;
     writeVehicleStateDebug(vs);
-    // String() on every enum-ish field: Rivian's gateway returns raw JSON
-    // numbers on fields its own schema types as String (confirmed on the OTA
-    // version fields), and any .trim()/.toLowerCase() on one of those throws
-    // out of this whole function — which the caller then reads as a poll
-    // failure and answers with a stale-cache serve.
-    const chargingStateRaw = String(vs.chargerState?.value ?? 'disconnected');
-    const chargerStateTs = vs.chargerState?.timeStamp;
-    const chargerStatusRaw = String(vs.chargerStatus?.value ?? '');
-    const chargerStatusTs = vs.chargerStatus?.timeStamp;
-    const chargePortRaw = vs.chargePortState?.value ?? '';
-    const chargePortTs = vs.chargePortState?.timeStamp;
-    const powerStateRaw = vs.powerState?.value ?? '';
-    const powerStateTs = vs.powerState?.timeStamp;
-    // Log-only for now — observing real values to confirm the "driving" vs
-    // "parked" strings before building the garage-light-on-arrival automation
-    // off of it. Not read anywhere else yet.
-    const gearStatusRaw = vs.gearStatus?.value ?? '';
-    const gearStatusTs = vs.gearStatus?.timeStamp;
-
-    const derateRawEarly = vs.chargerDerateStatus?.value ?? '';
-    const hvThermalRaw = String(vs.batteryHvThermalEvent?.value ?? '');
-    const hvThermalPropRaw = String(vs.batteryHvThermalEventPropagation?.value ?? '');
-    const wiperFluidRaw = vs.wiperFluidState?.value ?? '';
-    const brakeFluidRaw = vs.brakeFluidLow?.value;
-    const tpFL = vs.tirePressureStatusFrontLeft?.value ?? '';
-    const tpFR = vs.tirePressureStatusFrontRight?.value ?? '';
-    const tpRL = vs.tirePressureStatusRearLeft?.value ?? '';
-    const tpRR = vs.tirePressureStatusRearRight?.value ?? '';
-    const gnssErrH = vs.gnssError?.positionHorizontal;
-    console.log(
-      `[rivian] chargerState="${chargingStateRaw}"@${chargerStateTs ?? '?'} ` +
-      `chargerStatus="${chargerStatusRaw}"@${chargerStatusTs ?? '?'} ` +
-      `chargePortState="${chargePortRaw}"@${chargePortTs ?? '?'} ` +
-      `powerState="${powerStateRaw}"@${powerStateTs ?? '?'} ` +
-      `gearStatus="${gearStatusRaw}"@${gearStatusTs ?? '?'} ` +
-      `derate="${derateRawEarly}" hvThermal="${hvThermalRaw}" hvProp="${hvThermalPropRaw}" ` +
-      `tires=FL:${tpFL}/FR:${tpFR}/RL:${tpRL}/RR:${tpRR} ` +
-      `wiper="${wiperFluidRaw}" brakeLow=${brakeFluidRaw} ` +
-      `gnssErrH=${gnssErrH ?? '?'} online=${vs.cloudConnection?.isOnline ?? '?'}`
-    );
-
-    // Resolve plug status from chargerStatus alone — matches the proven
-    // approach in Home Assistant's Rivian integration (bretterer/home-assistant-rivian,
-    // coordinator.py): `chargerStatus.value != "chrgr_sts_not_connected"`.
-    //
-    // chargePortState is NOT a plug signal despite the name — HA's own
-    // integration maps it to a separate DOOR-class sensor (open/closed
-    // charge port door), unrelated to whether a cable is connected.
-    // Earlier logic here treated door-closed as unplugged and overrode a
-    // correctly-connected chargerStatus, which is why the dashboard could
-    // show "not plugged in" while the car was actually charging.
-    const isPluggedIn = chargerStatusRaw !== '' && chargerStatusRaw !== 'chrgr_sts_not_connected';
-
-    // The old rule was `!chargerStateStale && CHARGING_ACTIVE.has(chargerState)`,
-    // where "stale" meant chargerState.timeStamp older than 15 min. That
-    // timestamp is a last-*changed* stamp, so a steady multi-hour charge ages
-    // out of the window and the veto flipped isCharging to false while the
-    // car was demonstrably still charging — the reported "IDLE · PLUGGED IN ·
-    // NOT CHARGING". isPluggedIn had no such veto, which is exactly why the
-    // plug state stayed right while the charging state went wrong.
-    //
-    // Age was always a proxy for the real question the veto existed to ask:
-    // "is this chargerState value still describing reality?" isPluggedIn
-    // answers that directly and doesn't decay — an unplugged car can't be
-    // charging no matter what a stale chargerState still says. So veto on
-    // the plug state instead of on the clock.
-    const CHARGING_ACTIVE = new Set(['charging', 'charging_active', 'charge_starting', 'charge_active', 'charging_ac_1ph', 'charging_ac_3ph']);
-    // chargerStatus, if it reports charging at all, is the more direct signal
-    // (it's the same field isPluggedIn trusts). Only `chrgr_sts_not_connected`
-    // is confirmed from primary sources — the "connected and charging" literal
-    // is NOT, so match it tolerantly and fall through to chargerState when it
-    // doesn't hit rather than hard-coding a guessed enum value. Confirm the
-    // real string from the `[rivian] ... chargerStatus="…"` log line above
-    // during a live charge, then tighten this.
-    const statusSaysCharging = /charging/.test(chargerStatusRaw)
-      && !/not_charging|no_chrg/.test(chargerStatusRaw);
-    const isCharging = statusSaysCharging
-      || (isPluggedIn && CHARGING_ACTIVE.has(chargingStateRaw.toLowerCase()));
-
-    // Rivian charger derate (throttling). Treat anything that's not empty
-    // / "no_derate" / "none" / "inactive" as throttled. Specific reason
-    // strings are surfaced verbatim — we don't have a documented enum.
-    // String() because Rivian does send raw JSON numbers on fields its own
-    // schema types as String (already confirmed for the OTA version fields
-    // below). A numeric value here made .trim() throw, and the outer catch
-    // turned that into a backoff step + stale-cache serve — i.e. the entire
-    // Rivian card silently frozen on its last good poll, throttle included.
-    const derateRaw = String(vs.chargerDerateStatus?.value ?? '').trim();
-    const derateLower = derateRaw.toLowerCase();
-    // '0'/'false' are here because of the String() above: a numeric-0 "not
-    // derated" must not read as a throttle reason now that it survives to
-    // this comparison instead of throwing.
-    const DERATE_IDLE = new Set(['', 'no_derate', 'none', 'inactive', 'normal', '0', 'false']);
-    const isThrottled = !DERATE_IDLE.has(derateLower);
-
-    // HV thermal event/propagation: same shape as derate above — Rivian
-    // returns a non-empty idle string ("off" / "nominal", confirmed from
-    // container logs 2026-07-18) even with no active excursion, so "not
-    // empty" alone false-positives on every poll. Only flag genuine values.
-    const HV_IDLE = new Set(['', 'off', 'none', 'no_event', 'inactive', 'normal', 'nominal', '0', 'false']);
-    const hvThermalActive =
-      !HV_IDLE.has(hvThermalRaw.toLowerCase()) || !HV_IDLE.has(hvThermalPropRaw.toLowerCase());
-
-    // Only show climate as on for explicitly active states; 'system_idle', 'not_available', etc. → off
-    const CLIMATE_ACTIVE = new Set(['cooling', 'heating', 'defrost', 'ventilation', 'preconditioning', 'hvac_conditioning']);
-    const climateVal = String(vs.cabinPreconditioningStatus?.value ?? '').toLowerCase();
-
-    // Rivian sends these as raw JSON numbers despite the GraphQL schema
-    // typing them as strings — confirmed from a real poll (otaCurrent=1,
-    // otaAvailable=0). String(...) normalizes both sides so the comparison
-    // below can't false-positive on a `0 !== ''` type mismatch, and "0" is
-    // treated as "no update queued" the same as an empty value.
-    const otaCurrent = String(vs.otaCurrentVersionNumber?.value ?? '');
-    const otaAvailable = String(vs.otaAvailableVersionNumber?.value ?? '');
-    const otaStatusRaw = (vs.otaStatus?.value ?? vs.otaCurrentStatus?.value ?? '').toString();
-    const otaStatusLower = otaStatusRaw.toLowerCase();
-    const otaInstalling = /install|download|apply|updating/.test(otaStatusLower);
-    const otaUpdateAvailable = otaAvailable !== '' && otaAvailable !== '0' && otaAvailable !== otaCurrent;
-    console.log(
-      `[rivian-ota] current="${otaCurrent}" available="${otaAvailable}" ` +
-      `status="${otaStatusRaw}" updateAvailable=${otaUpdateAvailable}`
-    );
-
-    const brakeLowBool = brakeFluidRaw === true || brakeFluidRaw === 'low' || brakeFluidRaw === 'true';
-
-    // Door open/locked value semantics confirmed against Home Assistant's
-    // Rivian integration (bretterer/home-assistant-rivian, const.py):
-    // *Closed field value "open" means open; *Locked field value "unlocked" means unlocked.
-    const doorFrontLeftOpen = vs.doorFrontLeftClosed?.value === 'open';
-    const doorFrontLeftLockedBool = vs.doorFrontLeftLocked?.value === 'locked';
-    const doorFrontRightOpen = vs.doorFrontRightClosed?.value === 'open';
-    const doorFrontRightLockedBool = vs.doorFrontRightLocked?.value === 'locked';
-    const doorRearLeftOpen = vs.doorRearLeftClosed?.value === 'open';
-    const doorRearLeftLockedBool = vs.doorRearLeftLocked?.value === 'locked';
-    const doorRearRightOpen = vs.doorRearRightClosed?.value === 'open';
-    const doorRearRightLockedBool = vs.doorRearRightLocked?.value === 'locked';
-    const anyDoorOpen = doorFrontLeftOpen || doorFrontRightOpen || doorRearLeftOpen || doorRearRightOpen;
-    const anyDoorUnlocked = !doorFrontLeftLockedBool || !doorFrontRightLockedBool || !doorRearLeftLockedBool || !doorRearRightLockedBool;
-
-    // 12V battery health — HA exposes this as a plain diagnostic sensor with
-    // no documented enum. Logging the raw value until we see real readings
-    // to know what "unhealthy" looks like, same pattern used for gearStatus.
-    const twelveVoltRaw = vs.twelveVoltBatteryHealth?.value ?? '';
-    if (twelveVoltRaw !== '') console.log(`[rivian] twelveVoltBatteryHealth="${twelveVoltRaw}"`);
-
-    return {
-      chargePercent: vs.batteryLevel?.value ?? 0,
-      chargeLimit: vs.batteryLimit?.value ?? 80,
-      isCharging,
-      isPluggedIn,
-      isThrottled,
-      derateReason: derateRaw,
-      chargingState: chargingStateRaw,
-      isLocked: doorFrontLeftLockedBool && doorFrontRightLockedBool && doorRearLeftLockedBool && doorRearRightLockedBool,
-      doorFrontLeftOpen,
-      doorFrontLeftLocked: doorFrontLeftLockedBool,
-      doorFrontRightOpen,
-      doorFrontRightLocked: doorFrontRightLockedBool,
-      doorRearLeftOpen,
-      doorRearLeftLocked: doorRearLeftLockedBool,
-      doorRearRightOpen,
-      doorRearRightLocked: doorRearRightLockedBool,
-      anyDoorOpen,
-      anyDoorUnlocked,
-      twelveVoltBatteryHealth: twelveVoltRaw,
-      climateOn: CLIMATE_ACTIVE.has(climateVal),
-      rangeMi: vs.distanceToEmpty?.value ?? 0,
-      // vehicleMileage is returned in meters; convert to miles
-      odometer: Math.round((vs.vehicleMileage?.value ?? 0) / 1609.344),
-      minutesToFull: vs.timeToEndOfCharge?.value ?? 0,
-      chargeRateMph: 0,
-      addedRangeMi: 0,
-      online: vs.cloudConnection?.isOnline ?? false,
-      lat: vs.gnssLocation?.latitude ?? null,
-      lon: vs.gnssLocation?.longitude ?? null,
-      gnssTimeStamp: vs.gnssLocation?.timeStamp ?? null,
-      gnssSpeedMph: vs.gnssSpeed?.value != null ? vs.gnssSpeed.value * 2.23694 : null,
-      gnssAltitudeM: vs.gnssAltitude?.value ?? null,
-      gnssErrorM: vs.gnssError?.positionHorizontal ?? null,
-      gnssBearingDeg: vs.gnssError?.bearing ?? null,
-      powerState: powerStateRaw,
-      hvThermalEvent: hvThermalRaw,
-      hvThermalPropagation: hvThermalPropRaw,
-      hvThermalActive,
-      wiperFluidState: wiperFluidRaw,
-      brakeFluidLow: brakeLowBool,
-      tirePressureFL: tpFL,
-      tirePressureFR: tpFR,
-      tirePressureRL: tpRL,
-      tirePressureRR: tpRR,
-      otaCurrentVersion: otaCurrent,
-      otaAvailableVersion: otaAvailable,
-      otaStatus: otaStatusRaw,
-      otaUpdateAvailable,
-      otaInstalling,
-      gearStatus: gearStatusRaw,
-    };
+    return mapRawVehicleState(vs, 'poll');
   } catch (e) {
     const msg = String(e);
     // 401 in the error body → session expired. Set the reauth flag so the
@@ -810,6 +800,102 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
     }
     return null;
   }
+}
+
+// ── Real-time push path (websocket subscription) ──────────────────────────
+// server/rivian-state-monitor.js holds a persistent graphql-ws subscription
+// to wss://api.rivian.com/gql-consumer-subscriptions/graphql and writes the
+// merged vehicleState here. Reading it is a plain file read -- no websocket
+// client on the request path, same convention as readRivianParallaxState()
+// above and the Tesla telemetry sidecar.
+//
+// The push path is PREFERRED but never REQUIRED: the poll above stays fully
+// wired as the fallback. Staleness of this file is the only switch between
+// them (see getRivianVehicleState).
+//
+// !! Before anyone deletes fetchRivianVehicleState(): the only live capture
+// of this subscription was taken while the vehicle was IN SERVICE, when
+// Rivian reports nearly every vehicleState field as null. The transport is
+// confirmed (handshake, auth with the dashboard's shared account, a real
+// stream of `next` frames); FULL FIELD POPULATION IS NOT. Take an
+// out-of-service capture and diff a pushed payload against a polled
+// GetVehicleState response field by field first. Until then the poll is the
+// thing that proves the numbers, and this is the thing that makes them
+// timely.
+//
+// Generous window on purpose: a parked, quiet car legitimately pushes
+// nothing for a while, and falling back to the poll's 5-minute idle tier the
+// moment it goes quiet would give up most of the benefit. If nothing has
+// arrived in this long, though, the socket is more likely wedged than the
+// car is quiet -- and the monitor's own idle watchdog (10 min) should have
+// reconnected by then, so silence past this point is a real fault.
+const PUSH_STALE_MS = 15 * 60_000;
+
+export interface RivianPushState {
+  state: RivianVehicleState;
+  updatedAt: number;
+  ageMs: number;
+}
+
+function pushStatePath(): string {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  return join(dir, 'rivian-push-state.json');
+}
+
+export function readRivianPushState(): RivianPushState | null {
+  const p = pushStatePath();
+  if (!existsSync(p)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf-8')) as {
+      updatedAt?: number;
+      vehicleState?: RawVehicleState | null;
+    };
+    const updatedAt = typeof raw.updatedAt === 'number' ? raw.updatedAt : 0;
+    if (!updatedAt || !raw.vehicleState) return null;
+    return {
+      // Same mapping as the poll, including its null-tolerance: the monitor
+      // merges pushed patches over the last known values but makes no
+      // guarantee that every field has ever been seen, so anything never
+      // pushed is simply absent and falls through to the same defaults an
+      // all-null polled response would produce.
+      state: mapRawVehicleState(raw.vehicleState, 'push'),
+      updatedAt,
+      ageMs: Date.now() - updatedAt,
+    };
+  } catch {
+    // A torn read (monitor mid-write) or a corrupt file must degrade to the
+    // poll, never throw into the request path.
+    return null;
+  }
+}
+
+// True while the websocket subscription is delivering. Exported so the
+// dashboard route can skip its poll-interval cache gate -- serving a
+// minutes-old cached snapshot makes no sense when a fresher one is sitting
+// in a local file for free.
+export function rivianPushFresh(): boolean {
+  const p = readRivianPushState();
+  return p !== null && p.ageMs < PUSH_STALE_MS;
+}
+
+// The one entry point callers should use for vehicle state.
+//   push fresh  -> pushed state, zero network calls, real-time
+//   otherwise   -> the REST poll, backoff ladder and all, exactly as before
+// Deliberately not "push OR nothing": the socket can be down for reasons
+// that have nothing to do with the vehicle (container restart, Rivian
+// dropping the subscription, a wedged connection mid-reconnect), and the
+// poll is a fully working path that should cover every one of those.
+export async function getRivianVehicleState(
+  vehicleId?: string,
+): Promise<RivianVehicleState | null> {
+  const pushed = readRivianPushState();
+  if (pushed && pushed.ageMs < PUSH_STALE_MS) {
+    return pushed.state;
+  }
+  if (pushed) {
+    console.warn(`[rivian] push state stale (${Math.round(pushed.ageMs / 60000)}m), falling back to poll`);
+  }
+  return fetchRivianVehicleState(vehicleId);
 }
 
 // Clear backoff + reauth flags after a successful login. Called from
