@@ -113,6 +113,8 @@ export interface WallConnectorData {
 export interface DashboardFlags {
   teslaReauthRequired: boolean;
   teslaReauthReason: string | null;
+  teslaApiForbidden: boolean;
+  teslaApiForbiddenReason: string | null;
   rivianReauthDueSoon: boolean;
   rivianReauthDaysLeft: number | null;
   rivianReauthRequired: boolean;
@@ -956,6 +958,10 @@ async function handleGet(req: Request) {
   const flags: DashboardFlags = {
     teslaReauthRequired: !!flagsPersisted.tesla_reauth_required,
     teslaReauthReason: flagsPersisted.tesla_reauth_required?.reason ?? null,
+    teslaApiForbidden: !!flagsPersisted.tesla_api_forbidden,
+    teslaApiForbiddenReason: flagsPersisted.tesla_api_forbidden
+      ? `HTTP ${flagsPersisted.tesla_api_forbidden.status}: ${flagsPersisted.tesla_api_forbidden.body}`
+      : null,
     rivianReauthDueSoon: !!flagsPersisted.rivian_reauth_due_soon,
     rivianReauthDaysLeft: flagsPersisted.rivian_reauth_due_soon?.daysLeft ?? null,
     rivianReauthRequired: !!flagsPersisted.rivian_reauth_required,

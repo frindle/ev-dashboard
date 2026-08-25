@@ -1,5 +1,5 @@
 import { readTokens, writeTokens, TeslaTokens, readConfig, writeConfig } from './config';
-import { markTeslaReauthRequired, clearTeslaReauthRequired } from './sessionFlags';
+import { markTeslaReauthRequired, clearTeslaReauthRequired, markTeslaApiForbidden, clearTeslaApiForbidden } from './sessionFlags';
 import { loggedFetch, logApiBody } from './apiLog';
 
 const FLEET_BASE = 'https://fleet-api.prd.na.vn.cloud.tesla.com';
@@ -182,6 +182,10 @@ const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60_000;
 const RATE_LIMIT_COOLDOWN_MS = 15 * 60_000;
 let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
+// 403s specifically, tracked apart from the general failure counter so a
+// sustained 403 storm (billing/usage limit or missing scope) can be surfaced
+// as its own status instead of being mislabelled as a reauth-needed 401.
+let consecutive403 = 0;
 
 // A fresh OAuth callback invalidates everything the breaker was reacting to
 // (the run of 401s that opened it came from the dead token chain). Without
@@ -227,6 +231,20 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       if (res.status === 401) {
         markTeslaReauthRequired(`401 from ${path}`);
       }
+      // A 403 is an authorization refusal, not an expired token — re-auth does
+      // not fix a billing/usage-limit hit or a missing scope. location_data is
+      // already dropped upstream (its 403 is benign), so a 403 reaching here is
+      // a real API refusal. Only surface it after a sustained storm so a single
+      // blip doesn't raise a banner; capture the body so it can be confirmed as
+      // billing vs. genuine unauthorized.
+      if (res.status === 403) {
+        consecutive403++;
+        if (consecutive403 >= CIRCUIT_BREAKER_THRESHOLD) {
+          markTeslaApiForbidden(res.status, body);
+        }
+      } else {
+        consecutive403 = 0;
+      }
       if (res.status === 429) {
         const retryAfterSec = Number(res.headers.get('retry-after'));
         const cooldownMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec * 1000 : RATE_LIMIT_COOLDOWN_MS;
@@ -242,6 +260,10 @@ async function fleetGet<T>(path: string): Promise<T | null> {
       return null;
     }
     consecutiveFailures = 0;
+    consecutive403 = 0;
+    // A 2xx also proves the API isn't refusing us — clear any forbidden flag
+    // (a billing top-up or scope grant self-heals on the next successful call).
+    clearTeslaApiForbidden();
     // A 2xx from Fleet API is proof the credentials work — that is exactly
     // what tesla_reauth_required claims is untrue, so clear it here rather
     // than only inside refreshAccessToken(). Without this, the flag survived

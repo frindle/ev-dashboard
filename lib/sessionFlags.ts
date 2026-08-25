@@ -7,6 +7,13 @@ export interface SessionFlags {
   tesla_reauth_required?: { at: number; reason: string };
   tesla_reauth_pushover_at?: number;
 
+  // Sustained Fleet-API 403 storm — distinct from reauth. A 403 is an
+  // authorization/entitlement refusal, NOT an expired token: it's raised by a
+  // billing/usage-limit hit or a missing scope, neither of which re-running
+  // OAuth fixes. We surface the raw status + body so it can be confirmed as a
+  // billing limit vs. a genuine unauthorized before anyone re-auths.
+  tesla_api_forbidden?: { at: number; status: number; body: string };
+
   rivian_reauth_due_soon?: { at: number; daysLeft: number };
   rivian_reauth_required?: { at: number; reason: string };
   rivian_reauth_pushover_at?: number;
@@ -71,6 +78,23 @@ export function clearTeslaReauthRequired(): void {
       delete f.tesla_reauth_required;
       delete f.tesla_reauth_pushover_at;
       console.log('[flags] tesla_reauth_required cleared');
+    }
+  });
+}
+
+export function markTeslaApiForbidden(status: number, body: string): void {
+  mutate(f => {
+    if (f.tesla_api_forbidden) return; // keep the first observed reason
+    f.tesla_api_forbidden = { at: Date.now(), status, body: body.slice(0, 300) };
+    console.warn('[flags] tesla_api_forbidden set:', status, body.slice(0, 160));
+  });
+}
+
+export function clearTeslaApiForbidden(): void {
+  mutate(f => {
+    if (f.tesla_api_forbidden) {
+      delete f.tesla_api_forbidden;
+      console.log('[flags] tesla_api_forbidden cleared');
     }
   });
 }
