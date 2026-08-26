@@ -54,6 +54,32 @@ const TESLA_ARRIVAL_FLAG_FILE = 'tesla-arrival-notified.json';
 // webhook. Upgrade to a real file lock if this ever runs multi-process.
 const arrivalCheckInFlight = new Set<string>();
 
+// Is it dark enough that arriving should turn the garage lights on?
+//
+// This lives here rather than in Home Assistant deliberately. The HA automation
+// carried this condition:
+//
+//   now() > (next_setting - 1h) or now() < next_rising
+//
+// which is ALWAYS TRUE -- next_rising is by definition in the future, so the
+// second clause never fails. It never gated on darkness at all, and the lights
+// were switched on at 12:56 and 14:09 in full sun on 2026-08-25.
+//
+// OWM already returns sunset/sunrise in the response we fetch anyway, so the
+// dashboard can decide and HA can stay dumb: webhook fires => lights on.
+//
+// FAILS OPEN. If we have no sunset data, return true and let the lights come
+// on. Arriving to a dark garage is worse than a light burning at noon, and it
+// matches the rule already applied to Tesla's gearStatus: an unset signal must
+// not suppress a real arrival.
+const SUNSET_BUFFER_MS = 60 * 60_000; // treat the hour before sunset as dark
+
+function isDarkEnoughForLights(w: WeatherData | null): boolean {
+  if (!w || w.sunsetMs === null || w.sunriseMs === null) return true;
+  const now = Date.now();
+  return now >= (w.sunsetMs - SUNSET_BUFFER_MS) || now <= w.sunriseMs;
+}
+
 async function checkVehicleArrival(webhookUrl: string, flagFile: string, isDriving: boolean, atHome: boolean | null, label: string): Promise<void> {
   if (!webhookUrl) return;
   if (arrivalCheckInFlight.has(flagFile)) return; // a concurrent request is already handling this vehicle
@@ -166,6 +192,11 @@ export interface WeatherData {
   condition: string;
   icon: string;
   humidity: number;
+  // Unix ms, UTC. From OWM's sys.sunrise/sys.sunset, which the response always
+  // carried and this code previously threw away. null when weather is
+  // unavailable -- isDarkEnoughForLights fails OPEN on null.
+  sunriseMs: number | null;
+  sunsetMs: number | null;
 }
 
 async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<WeatherData | null> {
@@ -193,6 +224,10 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
     interface OWMResponse {
       main: { temp: number; feels_like: number; humidity: number };
       weather: Array<{ description: string; icon: string }>;
+      // Already in every OWM /weather response, previously discarded. Unix
+      // seconds, UTC. Used to gate the arrival webhook on darkness so Home
+      // Assistant does not have to -- see isDarkEnoughForLights.
+      sys?: { sunrise?: number; sunset?: number };
     }
     const data = await res.json() as OWMResponse;
     return {
@@ -201,6 +236,8 @@ async function fetchWeather(cfg: ReturnType<typeof readConfig>): Promise<Weather
       condition: (data.weather[0]?.description ?? '').replace(/^\w/, c => c.toUpperCase()),
       icon: data.weather[0]?.icon ?? '',
       humidity: data.main.humidity,
+      sunriseMs: data.sys?.sunrise ? data.sys.sunrise * 1000 : null,
+      sunsetMs: data.sys?.sunset ? data.sys.sunset * 1000 : null,
     };
   } catch (e) {
     console.error('[weather] fetch error:', e);
@@ -813,6 +850,21 @@ async function handleGet(req: Request) {
   const homeLat = cfg.home.lat ?? cfg.weather.lat ?? null;
   const homeLon = cfg.home.lon ?? cfg.weather.lon ?? null;
   const homeRadius = cfg.home.radiusMeters > 0 ? cfg.home.radiusMeters : 150;
+  // APPROACH radius, used ONLY for the arrival webhook -- deliberately much
+  // wider than homeRadius.
+  //
+  // Why: the arrival webhook only fires if a poll catches the vehicle inside
+  // the radius AND still in drive. Rivian polls every 20s while driving
+  // (RIVIAN_INTERVAL_DRIVING_MS) and homeRadius defaults to 150m. At 30mph you
+  // cross 150m in ~11s, so parking before the next poll lands is the normal
+  // case, not the edge case -- the whole window can fall between two polls.
+  // Observed 2026-08-25: fired three times mid-afternoon and not at all on an
+  // after-dark arrival, and the lights had to be turned on by hand.
+  //
+  // 400m (~1/4 mile) is ~30s of approach at 30mph, comfortably more than one
+  // poll interval, so the vehicle is seen while still driving. Lights come on
+  // as you pull in rather than after you have parked and walked to the door.
+  const arrivalRadius = cfg.home.arrivalRadiusMeters > 0 ? cfg.home.arrivalRadiusMeters : 400;
 
   // Returns a best-guess atHome from whatever position we have (fresh or
   // last-known) for display, plus whether that position is fresh enough to
@@ -821,6 +873,15 @@ async function handleGet(req: Request) {
   // for display -- which threw away a last-known position that might clearly
   // put the car away, and only *looked* reasonable by coincidence when the
   // car happened to be sitting at home when it went quiet.
+  // Distance-based approach test for the arrival webhook. Separate from
+  // computeAtHome because "is the car home" (display) and "is the car arriving"
+  // (side effect) are different questions with different radii.
+  function computeApproaching(lat: number | null | undefined, lon: number | null | undefined): boolean | null {
+    if (homeLat === null || homeLon === null) return null;
+    if (lat === null || lat === undefined || lon === null || lon === undefined) return null;
+    return distanceMeters(lat, lon, homeLat, homeLon) <= arrivalRadius;
+  }
+
   function computeAtHome(label: string, lat: number | null | undefined, lon: number | null | undefined, gpsFresh: boolean): { atHome: boolean | null; fresh: boolean } {
     if (homeLat === null || homeLon === null) {
       noHomeCoordsWarned ||= warnNoHomeOnce();
@@ -842,7 +903,13 @@ async function handleGet(req: Request) {
   // a fresh position for it, not a last-known one, so it can't fire off a
   // stale reading. Force the "confident" atHome to null (not true) when the
   // position is stale, regardless of what the display value says.
-  if (rivianState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive', rivianHome.fresh ? rivianHome.atHome : null, 'rivian');
+  // Fire on APPROACH (400m) rather than on arrival (150m), so the 20s poll has
+  // room to see the vehicle before it parks. gearStatus is still required --
+  // inside 400m and driving is a real approach; inside 400m and parked is just
+  // sitting at home, which the flag file already suppresses.
+  const rivianApproaching = computeApproaching(rivianState?.lat, rivianState?.lon);
+  const darkEnough = isDarkEnoughForLights(weather);
+  if (rivianState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive' && darkEnough, rivianHome.fresh ? rivianApproaching : null, 'rivian');
 
   const teslaHome = computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh));
   const teslaAtHome = teslaHome.atHome;
@@ -851,7 +918,7 @@ async function handleGet(req: Request) {
   // hardcoded behavior) when gearStatus is unknown/empty rather than false --
   // an unset signal shouldn't ever suppress a real arrival.
   const teslaIsDriving = teslaState?.gearStatus ? teslaState.gearStatus === 'drive' : true;
-  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, teslaIsDriving, teslaHome.fresh ? teslaHome.atHome : null, 'tesla');
+  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, teslaIsDriving && darkEnough, teslaHome.fresh ? teslaHome.atHome : null, 'tesla');
 
   // Usage estimate for the live-map tile (VehicleCard.tsx renders one
   // whenever a vehicle is away with known coordinates -- mirror that exact

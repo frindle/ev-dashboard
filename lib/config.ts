@@ -75,7 +75,8 @@ export interface AppConfig {
   home: {
     lat: number | null;
     lon: number | null;
-    radiusMeters: number; // how close counts as "home"
+    radiusMeters: number; // how close counts as "home" (display)
+    arrivalRadiusMeters: number; // wider approach radius for the arrival webhook, so a 20s poll sees the car before it parks
     arrivalWebhookUrl: string; // fired once when Rivian enters the radius while still driving — e.g. Home Assistant webhook for garage lights
   };
   solar: {
@@ -149,6 +150,7 @@ const DEFAULT_CONFIG: AppConfig = {
     lat: null,
     lon: null,
     radiusMeters: 150,
+    arrivalRadiusMeters: 400,
     arrivalWebhookUrl: '',
   },
   solar: {
