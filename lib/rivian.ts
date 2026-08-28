@@ -18,10 +18,10 @@ const GATEWAY = 'https://rivian.com/api/gql/gateway/graphql';
 // websocket service instead -- see server/parallax-monitor.js and
 // readRivianParallaxState() below.
 
-// Rivian sessions appear to last on the order of 90 days with no documented
-// refresh mutation. Track from savedAt so we can warn the user at day 83
-// and hard-flag at day 90 before we start seeing 401s in the wild.
-const RIVIAN_SESSION_DAYS = 90;
+// Rivian sessions appear to last on the order of 6 months (180 days) with no
+// documented refresh mutation. Track from savedAt so we can warn the user at
+// day 173 and hard-flag at day 180 before we start seeing 401s in the wild.
+const RIVIAN_SESSION_DAYS = 180;
 const RIVIAN_SESSION_WARN_DAYS = 7;
 
 export function checkRivianSessionAge(): { daysOld: number; daysLeft: number } | null {

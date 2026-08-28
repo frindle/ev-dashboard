@@ -42,7 +42,7 @@ export function notifyFlagChanges(n: NotifyInput): void {
   } else if (n.rivianReauthDueSoon && shouldPushDueSoonOnce()) {
     void sendPush(
       'EV Dashboard — Rivian session expiring soon',
-      `The Rivian session is ~${n.rivianReauthDaysLeft ?? '?'} day(s) from its 90-day limit. ` +
+      `The Rivian session is ~${n.rivianReauthDaysLeft ?? '?'} day(s) from its 180-day limit. ` +
       'Re-login from the admin panel soon to avoid a gap in vehicle data.',
     );
   }
