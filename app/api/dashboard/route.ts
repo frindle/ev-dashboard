@@ -403,6 +403,14 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     }
   }
 
+  // Telemetry is the source of truth. If it has ever delivered (cache exists),
+  // serve the cached state and do NOT REST-poll for staleness: an asleep car
+  // 408s (zero info), and a genuinely dead stream is the watchdog's job
+  // (fleet_telemetry_config synced check), not a per-poll REST fallback.
+  if (!force && cache?.state) {
+    return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
+  }
+
   const fresh = await fetchVehicleState(vin);
   if (fresh) {
     // Track whether the lat/lon in the returned object came from this
