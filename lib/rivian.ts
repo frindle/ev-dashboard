@@ -199,6 +199,7 @@ function loginDebugPath(): string {
 // latest decoded values here so this read stays a plain file read, no
 // websocket client on the request path.
 const PARALLAX_STALE_MS = 5 * 60_000; // monitor pushes every ~15-60s while charging
+const PARALLAX_POWER_STALE_MS = 90_000; // powerKw only valid if a power msg arrived this recently
 
 export interface RivianParallaxState {
   powerKw: number | null;
@@ -209,6 +210,7 @@ export interface RivianParallaxState {
   displayStatus: number | null;
   evseType: number | null;
   fresh: boolean; // false = no update within PARALLAX_STALE_MS, don't trust powerKw
+  powerKwAt: number | null;
 }
 
 export function readRivianParallaxState(): RivianParallaxState | null {
@@ -218,8 +220,14 @@ export function readRivianParallaxState(): RivianParallaxState | null {
   try {
     const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
     const updatedAt = typeof raw.updatedAt === 'number' ? raw.updatedAt : 0;
+    const powerKwAt = typeof raw.powerKwAt === 'number' ? raw.powerKwAt : null;
+    const powerKw = (typeof raw.powerKw === 'number' && 
+      powerKwAt !== null && 
+      Date.now() - powerKwAt < PARALLAX_POWER_STALE_MS) 
+      ? raw.powerKw 
+      : null;
     return {
-      powerKw: typeof raw.powerKw === 'number' ? raw.powerKw : null,
+      powerKw,
       totalChargedEnergyKwh: typeof raw.totalChargedEnergyKwh === 'number' ? raw.totalChargedEnergyKwh : null,
       timeToEndOfChargeSec: typeof raw.timeToEndOfChargeSec === 'number' ? raw.timeToEndOfChargeSec : null,
       chargingStateEnum: typeof raw.chargingStateEnum === 'number' ? raw.chargingStateEnum : null,
@@ -227,6 +235,7 @@ export function readRivianParallaxState(): RivianParallaxState | null {
       displayStatus: typeof raw.displayStatus === 'number' ? raw.displayStatus : null,
       evseType: typeof raw.evseType === 'number' ? raw.evseType : null,
       fresh: Date.now() - updatedAt < PARALLAX_STALE_MS,
+      powerKwAt
     };
   } catch {
     return null;

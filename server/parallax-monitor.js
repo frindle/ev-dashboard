@@ -25,6 +25,7 @@ const { WebSocket } = require('ws');
 const KEYS_DIR = process.env.KEYS_DIR || '/app/keys';
 const TOKENS_PATH = path.join(KEYS_DIR, 'rivian-tokens.json');
 const STATE_PATH = path.join(KEYS_DIR, 'rivian-parallax.json');
+const PARALLAX_LOG_DIR = path.join(KEYS_DIR, 'parallax-log');
 
 const WS_URL = 'wss://api.rivian.com/gql-consumer-subscriptions/graphql';
 const APOLLO_CLIENT_NAME = 'com.rivian.ios.consumer-apollo-ios';
@@ -153,10 +154,61 @@ function writeState(patch) {
   let state = {};
   try { state = JSON.parse(fs.readFileSync(STATE_PATH, 'utf-8')); } catch { /* first write */ }
   const merged = { ...state, ...patch, updatedAt: Date.now() };
+  if ('powerKw' in patch) {
+    merged.powerKwAt = Date.now();
+  }
   try {
     fs.writeFileSync(STATE_PATH, JSON.stringify(merged));
   } catch (e) {
     console.error('[parallax] write failed:', e.message);
+  }
+  
+  // Log charge session data when there's actual charging telemetry
+  if ('powerKw' in patch || 'totalChargedEnergyKwh' in patch || 'chargingStateEnum' in patch) {
+    logParallaxFrame(merged);
+  }
+}
+
+function logParallaxFrame(state) {
+  try {
+    fs.mkdirSync(PARALLAX_LOG_DIR, { recursive: true });
+    
+    const dateStr = new Date().toISOString().split('T')[0];
+    const logFilePath = path.join(PARALLAX_LOG_DIR, `${dateStr}.jsonl`);
+    
+    const logEntry = JSON.stringify({
+      receivedAt: new Date().toISOString(),
+      powerKw: state.powerKw ?? null,
+      totalChargedEnergyKwh: state.totalChargedEnergyKwh ?? null,
+      chargingStateEnum: state.chargingStateEnum ?? null,
+      timeToEndOfChargeSec: state.timeToEndOfChargeSec ?? null,
+      plugConnectionStatus: state.plugConnectionStatus ?? null,
+      displayStatus: state.displayStatus ?? null
+    }) + '\n';
+    
+    fs.appendFileSync(logFilePath, logEntry);
+    
+    // Best-effort 14-day-old-file cleanup (like rivian-state-monitor.js)
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 14);
+    const cutoffTimestamp = cutoffDate.getTime();
+    
+    try {
+      const files = fs.readdirSync(PARALLAX_LOG_DIR);
+      for (const file of files) {
+        if (file.endsWith('.jsonl')) {
+          const filePath = path.join(PARALLAX_LOG_DIR, file);
+          const stats = fs.statSync(filePath);
+          if (stats.mtimeMs < cutoffTimestamp) {
+            fs.unlinkSync(filePath);
+          }
+        }
+      }
+    } catch (cleanupError) {
+      // Silently ignore cleanup errors
+    }
+  } catch (e) {
+    console.warn('[parallax] frame log failed:', e.message);
   }
 }
 

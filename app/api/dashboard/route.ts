@@ -1013,7 +1013,7 @@ async function handleGet(req: Request) {
       state: rivianState,
       connected: rivianConnected,
       atHome: rivianAtHome,
-      parallaxPowerKw: (parallax?.fresh && parallax.powerKw !== null) ? parallax.powerKw : null,
+      parallaxPowerKw: (rivianState?.isCharging && parallax?.fresh && parallax.powerKw !== null) ? parallax.powerKw : null,
     },
     {
       id: 'tesla',
