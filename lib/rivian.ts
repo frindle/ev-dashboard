@@ -143,7 +143,7 @@ export interface RivianVehicleState {
   anyDoorUnlocked: boolean;
   twelveVoltBatteryHealth: string; // raw value, semantics unconfirmed — log-only until we see a real reading
   climateOn: boolean;
-  rangeMi: number;            // distanceToEmpty.value (miles)
+  rangeMi: number;            // distanceToEmpty.value (kilometers) → miles
   odometer: number;           // vehicleMileage.value (miles)
   chargeRateMph: number;      // not reported by Rivian API — always 0
   addedRangeMi: number;       // not reported by Rivian API — always 0
@@ -703,7 +703,7 @@ export function mapRawVehicleState(vs: RawVehicleState, source: 'poll' | 'push' 
     anyDoorUnlocked,
     twelveVoltBatteryHealth: twelveVoltRaw,
     climateOn: CLIMATE_ACTIVE.has(climateVal),
-    rangeMi: vs.distanceToEmpty?.value ?? 0,
+    rangeMi: vs.distanceToEmpty?.value ? Math.round(vs.distanceToEmpty.value / 1.609344) : 0,
     // vehicleMileage is returned in meters; convert to miles
     odometer: Math.round((vs.vehicleMileage?.value ?? 0) / 1609.344),
     minutesToFull: vs.timeToEndOfCharge?.value ?? 0,
