@@ -10,6 +10,22 @@ import {
   TeslaVehicleState,
   WallConnectorVitals,
 } from '@/lib/tesla';
+
+// Helper to read telemetry degradation status from watchdog
+async function readTelemetryDegraded(): Promise<boolean> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, 'telemetry-health.json');
+  
+  try {
+    if (!existsSync(path)) return false; // healthy default - watchdog may not have run yet
+    const data = await readFile(path, 'utf-8');
+    const health = JSON.parse(data);
+    // Return true if either syncedOk is false or limitReached is true
+    return health.syncedOk === false || health.limitReached === true;
+  } catch {
+    return false; // healthy default on parse failure
+  }
+}
 import { getRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded, readRivianParallaxState, rivianPushFresh } from '@/lib/rivian';
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
@@ -373,7 +389,8 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
       // SOME telemetry field arrived recently, not that Location did.
       // Confirmed 2026-08-08: this let atHome read true long after the car
       // actually left, as long as any other telemetry kept trickling in.
-      return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
+      const degraded = await readTelemetryDegraded();
+      return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: degraded } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
     }
     // Poll-sourced data: use the original cadence (30s active / 5min idle).
     // cache.source !== 'telemetry' here means we've fallen back to polling
@@ -382,9 +399,8 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     if (cache.source !== 'telemetry') {
       const isActive = cache.state.isCharging || (cache.state.online && cache.state.chargingState === 'Charging');
       const interval = isActive ? TESLA_INTERVAL_ACTIVE_MS : TESLA_INTERVAL_IDLE_MS;
-      if (ageMs < interval) {
-        return { ...cache.state, _telemetryDegraded: true } as TeslaVehicleState & { _telemetryDegraded: boolean };
-      }
+      const degraded = await readTelemetryDegraded();
+      return { ...cache.state, _telemetryDegraded: degraded } as TeslaVehicleState & { _telemetryDegraded: boolean };
     }
   }
 
@@ -396,7 +412,8 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     // Return cached state with telemetry degradation flag set to false since we're using telemetry data
     // If no cache exists but telemetry is fresh, return null for the state and mark as not telemetry degraded
     if (cache?.state) {
-      return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
+      const degraded = await readTelemetryDegraded();
+      return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: degraded } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
     } else {
       // No cache but telemetry is fresh - we can't provide a valid state, so return null
       return null;
@@ -408,7 +425,8 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
   // 408s (zero info), and a genuinely dead stream is the watchdog's job
   // (fleet_telemetry_config synced check), not a per-poll REST fallback.
   if (!force && cache?.state) {
-    return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
+    const degraded = await readTelemetryDegraded();
+    return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: degraded } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
   }
 
   const fresh = await fetchVehicleState(vin);
@@ -478,16 +496,18 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     // Mutate-attach so the caller can tell what happened. (Avoids changing
     // the public return type while still threading the flag through.)
     (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._gpsFresh = freshGpsFromPoll;
+    const degraded = await readTelemetryDegraded();
     // Degraded only when the car is ONLINE yet we still had to REST-poll (the
     // stream should be delivering but isn't). An asleep car (online === false)
     // legitimately pushes no telemetry, so that is NOT a failure — don't alarm.
-    (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = fresh.online === true;
+    (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = degraded;
     return fresh;
   }
   // Fetch failed — fall back to cached if we have it so the UI doesn't go blank.
   if (cache?.state) {
     (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._gpsFresh = false;
-    (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = cache.state.online === true;
+    const degraded = await readTelemetryDegraded();
+    (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = degraded;
   }
   return cache?.state ?? null;
 }
