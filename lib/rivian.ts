@@ -62,6 +62,12 @@ let nextAllowedAt = 0;
 const API_ERROR_ALERT_THRESHOLD = 3;
 let consecutiveApiErrors = 0;
 
+// Persistent failure threshold - after this many non-throttle failures in a row,
+// we assume opaque throttling or dead endpoint and escalate to backoff instead
+// of hammering the endpoint. This prevents persistent "fetch failed" errors from
+// causing endless retries.
+const PERSISTENT_FAILURE_BACKOFF_THRESHOLD = 3;
+
 function nextBackoffMs(): number {
   const idx = Math.min(backoffAttempt, BACKOFF_STEPS_MIN.length - 1);
   return BACKOFF_STEPS_MIN[idx] * 60 * 1000;
@@ -787,7 +793,14 @@ export async function fetchRivianVehicleState(vehicleId?: string): Promise<Rivia
       recordBackoffError();
       console.error('[rivian] THROTTLED:', msg.slice(0, 240));
     } else {
-      console.warn('[rivian] fetchRivianVehicleState failed (non-throttle, retrying next cycle):', msg.slice(0, 240));
+      // Check for persistent non-throttle failures that should trigger backoff
+      const nextConsecutiveApiErrors = consecutiveApiErrors + 1;
+      if (nextConsecutiveApiErrors >= PERSISTENT_FAILURE_BACKOFF_THRESHOLD) {
+        recordBackoffError();
+        console.warn('[rivian] fetchRivianVehicleState failed (persistent non-throttle, escalating to backoff):', msg.slice(0, 240));
+      } else {
+        console.warn('[rivian] fetchRivianVehicleState failed (non-throttle, retrying next cycle):', msg.slice(0, 240));
+      }
     }
 
     consecutiveApiErrors++;
