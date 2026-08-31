@@ -97,6 +97,11 @@ launch('parallax', 'node', [path.join(__dirname, 'parallax-monitor.js')], { crit
 // going dark.
 launch('rivian-ws', 'node', [path.join(__dirname, 'rivian-state-monitor.js')], { critical: false });
 
+// 2d. Tesla telemetry watchdog -- monitors liveness of the telemetry stream
+// and alerts on real failures (not just silence). Non-critical like other
+// sidecars.
+launch('telemetry-watchdog', 'node', [path.join(__dirname, 'telemetry-watchdog.js')], { critical: false });
+
 // 3. Tesla vehicle-command HTTP proxy — only if the partner private key exists.
 //    If not, skip silently so the container can still come up for non-Tesla
 //    setup steps.
