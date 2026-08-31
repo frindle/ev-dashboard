@@ -180,6 +180,8 @@ async function refreshAccessToken(tokens: TeslaTokens): Promise<string | null> {
 const CIRCUIT_BREAKER_THRESHOLD = 3;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60_000;
 const RATE_LIMIT_COOLDOWN_MS = 15 * 60_000;
+// Extended cooldown for EXCEEDED_LIMIT (monthly quota) errors
+const EXCEEDED_LIMIT_COOLDOWN_MS = 6 * 60 * 60_000; // 6 hours
 let consecutiveFailures = 0;
 let circuitOpenUntil = 0;
 // 403s specifically, tracked apart from the general failure counter so a
@@ -241,6 +243,12 @@ async function fleetGet<T>(path: string): Promise<T | null> {
         consecutive403++;
         if (consecutive403 >= CIRCUIT_BREAKER_THRESHOLD) {
           markTeslaApiForbidden(res.status, body);
+        }
+        
+        // Check for EXCEEDED_LIMIT specifically and apply longer cooldown
+        if (body.includes('EXCEEDED_LIMIT')) {
+          circuitOpenUntil = Date.now() + EXCEEDED_LIMIT_COOLDOWN_MS;
+          console.warn(`[tesla] EXCEEDED_LIMIT detected — opening circuit breaker for ${EXCEEDED_LIMIT_COOLDOWN_MS / 1000}s`);
         }
       } else {
         consecutive403 = 0;

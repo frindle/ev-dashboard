@@ -304,6 +304,26 @@ function applyTeslaFieldFreshness(state: TeslaVehicleState): TeslaVehicleState &
   return { ...out, _gpsFresh: gpsFresh };
 }
 
+// Check if telemetry stream is fresh enough to avoid making REST calls
+async function isTelemetryFresh(): Promise<boolean> {
+  const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
+  const path = join(dir, TESLA_CACHE_FILE);
+  
+  let cache: TeslaCache | null = null;
+  if (existsSync(path)) {
+    try { 
+      cache = JSON.parse(await readFile(path, 'utf-8')) as TeslaCache; 
+    } catch { /* fall through */ }
+  }
+
+  // If no cache or not from telemetry source, it's stale
+  if (!cache || cache.source !== 'telemetry') return false;
+  
+  // Check if the cache is within the trust window (TELEMETRY_TRUST_WINDOW_MS)
+  const ageMs = Date.now() - cache.fetchedAt;
+  return ageMs < TELEMETRY_TRUST_WINDOW_MS;
+}
+
 async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicleState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, TESLA_CACHE_FILE);
@@ -365,6 +385,21 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
       if (ageMs < interval) {
         return { ...cache.state, _telemetryDegraded: true } as TeslaVehicleState & { _telemetryDegraded: boolean };
       }
+    }
+  }
+
+  // Check telemetry freshness before making REST vehicle_data call
+  const telemetryFresh = await isTelemetryFresh();
+  
+  if (telemetryFresh) {
+    console.log('[tesla] Telemetry stream is fresh, skipping REST vehicle_data poll');
+    // Return cached state with telemetry degradation flag set to false since we're using telemetry data
+    // If no cache exists but telemetry is fresh, return null for the state and mark as not telemetry degraded
+    if (cache?.state) {
+      return { ...applyTeslaFieldFreshness(cache.state), _telemetryDegraded: false } as TeslaVehicleState & { _gpsFresh: boolean; _telemetryDegraded: boolean };
+    } else {
+      // No cache but telemetry is fresh - we can't provide a valid state, so return null
+      return null;
     }
   }
 
