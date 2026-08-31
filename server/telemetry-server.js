@@ -74,6 +74,7 @@ const KEYS_DIR = process.env.KEYS_DIR || path.join(process.cwd(), 'keys');
 const STATE_FILE = path.join(KEYS_DIR, 'tesla-state.json');
 const CONFIG_FILE = path.join(KEYS_DIR, 'config.json');
 const PROTO_PATH = path.join(process.cwd(), 'protos', 'vehicle_data.proto');
+const PUSH_LOG_DIR = path.join(KEYS_DIR, 'push-log');
 
 // Plan A trust model: no Cloudflare mTLS in front of us. Anything that reaches
 // our endpoint via the tunnel could be spoofed, so we enforce two checks:
@@ -118,6 +119,44 @@ function writeState(state) {
     fs.writeFileSync(STATE_FILE, JSON.stringify({ state, fetchedAt: Date.now(), source: 'telemetry' }));
   } catch (e) {
     console.error('[telemetry] write failed:', e.message);
+  }
+}
+
+// Log telemetry frame to push log
+function logPushFrame(frameData) {
+  // Create daily-rotated file
+  const dateStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const logFile = path.join(PUSH_LOG_DIR, `${dateStr}.jsonl`);
+  
+  try {
+    // Ensure directory exists
+    fs.mkdirSync(PUSH_LOG_DIR, { recursive: true });
+    
+    // Append frame data to file
+    fs.appendFileSync(logFile, JSON.stringify(frameData) + '\n');
+    
+    // Best-effort delete files older than 14 days
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 14);
+    
+    fs.readdir(PUSH_LOG_DIR, (err, files) => {
+      if (err) return;
+      
+      for (const file of files) {
+        if (!file.endsWith('.jsonl')) continue;
+        
+        const filePath = path.join(PUSH_LOG_DIR, file);
+        try {
+          const stats = fs.statSync(filePath);
+          if (stats.mtime < cutoffDate) {
+            fs.unlinkSync(filePath);
+          }
+        } catch { /* ignore */ }
+      }
+    });
+  } catch (e) {
+    // Best-effort logging - failure should not break state write
+    console.warn('[telemetry] frame log failed:', e.message);
   }
 }
 
@@ -413,6 +452,33 @@ wss.on('connection', (ws, req) => {
       for (const datum of obj.data || []) {
         applyDatum(merged, datum.key, datum.value || {});
       }
+      
+      // Log the frame with fields that arrived in this frame
+      const changedFields = {};
+      for (const datum of obj.data || []) {
+        const fieldName = fieldNumberToName.get(datum.key) || `Field${datum.key}`;
+        const value = datum.value;
+        if (value) {
+          // Extract the actual value from the typed field
+          const v = value.stringValue ?? value.intValue ?? value.longValue
+                 ?? value.floatValue ?? value.doubleValue ?? value.booleanValue
+                 ?? value.locationValue ?? value.chargingValue ?? value.shiftStateValue
+                 ?? value.detailedChargeStateValue ?? value.hvacPowerValue
+                 ?? value.sentryModeStateValue ?? value.chargePortLatchValue
+                 ?? value.fastChargerValue ?? value.cableTypeValue
+                 ?? value.scheduledChargingModeValue ?? null;
+          changedFields[fieldName] = v;
+        }
+      }
+      
+      if (Object.keys(changedFields).length > 0) {
+        logPushFrame({
+          receivedAt: new Date().toISOString(),
+          source: 'tesla',
+          changed: changedFields
+        });
+      }
+      
       writeState(merged);
       if (process.env.TELEMETRY_DEBUG === '1') {
         console.log(`[telemetry] vin=${incomingVin} ${(obj.data || []).length} fields`);

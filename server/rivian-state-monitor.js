@@ -41,6 +41,7 @@ const { VEHICLE_STATE_FIELDS } = require('./rivian-vehicle-state-fields.js');
 const KEYS_DIR = process.env.KEYS_DIR || '/app/keys';
 const TOKENS_PATH = path.join(KEYS_DIR, 'rivian-tokens.json');
 const STATE_PATH = path.join(KEYS_DIR, 'rivian-push-state.json');
+const PUSH_LOG_DIR = path.join(KEYS_DIR, 'push-log');
 
 const WS_URL = 'wss://api.rivian.com/gql-consumer-subscriptions/graphql';
 const APOLLO_CLIENT_NAME = 'com.rivian.ios.consumer-apollo-ios';
@@ -119,6 +120,43 @@ function writeState(source) {
     fs.writeFileSync(STATE_PATH, JSON.stringify(payload));
   } catch (e) {
     console.error('[rivian-ws] write failed:', e.message);
+  }
+}
+
+function logPushFrame(frameData) {
+  // Create daily-rotated file
+  const dateStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const logFile = path.join(PUSH_LOG_DIR, `${dateStr}.jsonl`);
+  
+  try {
+    // Ensure directory exists
+    fs.mkdirSync(PUSH_LOG_DIR, { recursive: true });
+    
+    // Append frame data to file
+    fs.appendFileSync(logFile, JSON.stringify(frameData) + '\n');
+    
+    // Best-effort delete files older than 14 days
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 14);
+    
+    fs.readdir(PUSH_LOG_DIR, (err, files) => {
+      if (err) return;
+      
+      for (const file of files) {
+        if (!file.endsWith('.jsonl')) continue;
+        
+        const filePath = path.join(PUSH_LOG_DIR, file);
+        try {
+          const stats = fs.statSync(filePath);
+          if (stats.mtime < cutoffDate) {
+            fs.unlinkSync(filePath);
+          }
+        } catch { /* ignore */ }
+      }
+    });
+  } catch (e) {
+    // Best-effort logging - failure should not break state write
+    console.warn('[rivian-ws] frame log failed:', e.message);
   }
 }
 
@@ -238,6 +276,22 @@ function connect() {
       // what lib/rivian.ts uses to decide the push path is alive, and a
       // parked car legitimately pushes repeats.
       writeState('push');
+      
+      // Log the frame with only changed fields (as requested)
+      if (changed > 0) {
+        const changedFields = {};
+        for (const [k, v] of Object.entries(vs)) {
+          if (k === '__typename') continue;
+          if (v === null || v === undefined) continue;
+          changedFields[k] = v;
+        }
+        logPushFrame({
+          receivedAt: new Date().toISOString(),
+          source: 'rivian',
+          changed: changedFields
+        });
+      }
+      
       if (frames <= 3 || changed > 0) {
         console.log(`[rivian-ws] push #${frames}: ${changed} field(s) updated`);
       }

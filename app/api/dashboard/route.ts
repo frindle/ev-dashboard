@@ -470,13 +470,16 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     // Mutate-attach so the caller can tell what happened. (Avoids changing
     // the public return type while still threading the flag through.)
     (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._gpsFresh = freshGpsFromPoll;
-    (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = true;
+    // Degraded only when the car is ONLINE yet we still had to REST-poll (the
+    // stream should be delivering but isn't). An asleep car (online === false)
+    // legitimately pushes no telemetry, so that is NOT a failure — don't alarm.
+    (fresh as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = fresh.online === true;
     return fresh;
   }
   // Fetch failed — fall back to cached if we have it so the UI doesn't go blank.
   if (cache?.state) {
     (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._gpsFresh = false;
-    (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = true;
+    (cache.state as TeslaVehicleState & { _gpsFresh?: boolean; _telemetryDegraded?: boolean })._telemetryDegraded = cache.state.online === true;
   }
   return cache?.state ?? null;
 }
