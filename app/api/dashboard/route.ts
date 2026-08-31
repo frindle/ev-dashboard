@@ -399,8 +399,10 @@ async function smartFetchTesla(vin: string, force: boolean): Promise<TeslaVehicl
     if (cache.source !== 'telemetry') {
       const isActive = cache.state.isCharging || (cache.state.online && cache.state.chargingState === 'Charging');
       const interval = isActive ? TESLA_INTERVAL_ACTIVE_MS : TESLA_INTERVAL_IDLE_MS;
-      const degraded = await readTelemetryDegraded();
-      return { ...cache.state, _telemetryDegraded: degraded } as TeslaVehicleState & { _telemetryDegraded: boolean };
+      if (ageMs < interval) {
+        const degraded = await readTelemetryDegraded();
+        return { ...cache.state, _telemetryDegraded: degraded } as TeslaVehicleState & { _telemetryDegraded: boolean };
+      }
     }
   }
 
