@@ -241,6 +241,7 @@ function connect() {
   const ws = new WebSocket(WS_URL, 'graphql-transport-ws');
   let acked = false;
   let gotAnyMessage = false;
+  let stableTimer = null;
 
   const reconnect = () => {
     attempt++;
@@ -267,7 +268,7 @@ function connect() {
 
     if (msg.type === 'connection_ack' && !acked) {
       acked = true;
-      attempt = 0; // reset backoff on a real successful connection
+      stableTimer = setTimeout(() => { attempt = 0; }, 30_000); // reset backoff only if the connection proves sustained
       ws.send(JSON.stringify({
         id: crypto.randomUUID(),
         type: 'subscribe',
@@ -281,7 +282,18 @@ function connect() {
       return;
     }
 
-    if (msg.type !== 'next') return;
+    // graphql-transport-ws MUST answer a server Ping with a Pong.
+    if (msg.type === 'ping') {
+      try { ws.send(JSON.stringify({ type: 'pong' })); } catch { /* socket may be closing */ }
+      return;
+    }
+    // Anything that isn't `next` (error, complete, etc.) carries the server's own
+    // explanation for ending the subscription -- the 4420/4430 close codes are
+    // undocumented, so log the payload rather than discarding it silently.
+    if (msg.type !== 'next') {
+      console.warn(`[parallax] server msg type=${msg.type} payload=${JSON.stringify(msg.payload ?? null).slice(0, 600)}`);
+      return;
+    }
     const data = msg.payload && msg.payload.data && msg.payload.data.parallaxMessages;
     if (!data) return;
     gotAnyMessage = true;
@@ -302,6 +314,7 @@ function connect() {
 
   ws.on('close', (code) => {
     console.log(`[parallax] connection closed (${code}), got messages this session: ${gotAnyMessage}`);
+    if (stableTimer) clearTimeout(stableTimer);
     reconnect();
   });
 }
