@@ -16,6 +16,8 @@ services:
       - TESLA_LOG_API_BODIES=1
     env_file:
       - .env
+    labels:
+      net.unraid.docker.icon: "https://raw.githubusercontent.com/frindle/ev-dashboard/main/icon.png"
     restart: unless-stopped
 
 networks:
