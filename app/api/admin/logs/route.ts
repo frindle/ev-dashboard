@@ -95,8 +95,8 @@ async function readDailyLogs(dateStr?: string, startTime?: string, endTime?: str
               const entry = JSON.parse(line);
               const receivedAt = new Date(entry.receivedAt);
               
-              if (startTime && receivedAt.getHours() * 60 + receivedAt.getMinutes() < parseTime(startTime)) return false;
-              if (endTime && receivedAt.getHours() * 60 + receivedAt.getMinutes() > parseTime(endTime)) return false;
+              if (startTime && receivedAt.getUTCHours() * 60 + receivedAt.getUTCMinutes() < parseTime(startTime)) return false;
+              if (endTime && receivedAt.getUTCHours() * 60 + receivedAt.getUTCMinutes() > parseTime(endTime)) return false;
               
               return true;
             } catch {
@@ -148,8 +148,8 @@ async function readDailyLogs(dateStr?: string, startTime?: string, endTime?: str
               const entry = JSON.parse(line);
               const receivedAt = new Date(entry.receivedAt);
               
-              if (startTime && receivedAt.getHours() * 60 + receivedAt.getMinutes() < parseTime(startTime)) return false;
-              if (endTime && receivedAt.getHours() * 60 + receivedAt.getMinutes() > parseTime(endTime)) return false;
+              if (startTime && receivedAt.getUTCHours() * 60 + receivedAt.getUTCMinutes() < parseTime(startTime)) return false;
+              if (endTime && receivedAt.getUTCHours() * 60 + receivedAt.getUTCMinutes() > parseTime(endTime)) return false;
               
               return true;
             } catch {
