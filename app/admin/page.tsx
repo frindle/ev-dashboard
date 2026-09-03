@@ -380,6 +380,49 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* ── Privacy / Vacation Mode ── */}
+      <div className="admin-section">
+        <div className="admin-section-header">
+          <div className="admin-section-title">
+            <span className="icon" style={{ fontSize: 18 }}>visibility_off</span>
+            Privacy
+            {config.vacationMode && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 10,
+                background: 'rgba(224,181,61,0.15)', color: '#e0b53d',
+                fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+                padding: '4px 10px', borderRadius: 999,
+              }}>
+                <span className="icon" style={{ fontSize: 13 }}>visibility_off</span>
+                VACATION MODE ON
+              </span>
+            )}
+          </div>
+          <SectionSaveButton onClick={save} disabled={saving} />
+        </div>
+        <div className="admin-section-body">
+          <div className="form-row">
+            <label className="form-label">
+              <input
+                type="checkbox"
+                checked={config.vacationMode}
+                onChange={e => setConfig(prev => prev && { ...prev, vacationMode: e.target.checked })}
+                style={{ marginRight: 8 }}
+              />
+              Vacation Mode — force-hide all vehicle location
+            </label>
+            <div className="form-hint">
+              When on, every vehicle location surface is hidden across all dashboards: map markers, the shared
+              vehicle map, raw GPS lat/long, heading/speed on the away tile, and home-vs-away state. Location is
+              stripped server-side from the data layer, so it never reaches the browser or the cached payload. To a
+              viewer the dashboard is indistinguishable from an ordinary &quot;location unavailable&quot; state — there is
+              deliberately NO visible &quot;vacation&quot; badge, because that would announce that you&apos;re away. This toggle is
+              only visible here in settings. Persists until you turn it off. Save to apply.
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* ── Tesla ── */}
       <div className="admin-section">
         <div className="admin-section-header">

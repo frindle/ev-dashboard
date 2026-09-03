@@ -33,6 +33,7 @@ import { logApiCall } from '@/lib/apiLog';
 import { appendChargeHistory, type ChargeHistoryRow } from '@/lib/chargeHistory';
 import { logWcDiagnostic } from '@/lib/wcDiagnostics';
 import { readGarageDoorState, type GarageDoorState } from '@/lib/ratgdo';
+import { redactDashboardLocation } from '@/lib/vacation';
 
 export const dynamic = 'force-dynamic';
 
@@ -1146,7 +1147,7 @@ async function handleGet(req: Request) {
     console.warn('[notify] failed:', String(e).slice(0, 160));
   }
 
-  const data: DashboardData = {
+  const assembled: DashboardData = {
     vehicles,
     wallConnectors,
     weather,
@@ -1157,6 +1158,14 @@ async function handleGet(req: Request) {
     flags,
     garageDoorState,
   };
+
+  // Vacation Mode: strip every vehicle location field from the payload BEFORE
+  // it is persisted or returned, so coordinates never reach the browser and
+  // never sit in keys/last-status.json (which /api/dashboard/cached serves
+  // verbatim). All the arrival-webhook / atHome logic above ran on the
+  // unredacted state, so home-automation still works while away — only the
+  // outbound wire payload is redacted. See lib/vacation.ts.
+  const data: DashboardData = cfg.vacationMode ? redactDashboardLocation(assembled) : assembled;
 
   // Persist to disk so the client can show last-known state on restart
   try {

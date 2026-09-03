@@ -96,6 +96,18 @@ export interface AppConfig {
     password: string;
     channel: number;  // camera channel on the NVR, 0 for a single IP camera
   };
+  // Privacy switch (owner-facing, set in the admin panel). When true, the app
+  // force-hides ALL vehicle location data everywhere it could surface — map
+  // markers, raw lat/lon, heading/speed on the away tile, home-vs-away state,
+  // and the shared vehicle map. Redaction happens server-side in the data
+  // layer (see lib/vacation.ts, applied by /api/dashboard,
+  // /api/dashboard/cached, and /api/admin/raw-state) so coordinates never
+  // reach the browser. IMPORTANT: the redacted result is made indistinguishable
+  // from an ordinary "location unavailable" state — atHome is nulled and coords
+  // stripped, with NO visible "vacation" badge/indicator and no wire flag,
+  // deliberately: a visible indicator would announce that the owner is away,
+  // defeating the purpose. Persists in config.json.
+  vacationMode: boolean;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -170,6 +182,7 @@ const DEFAULT_CONFIG: AppConfig = {
     password: '',
     channel: 0,
   },
+  vacationMode: false,
 };
 
 function configPath(): string {
