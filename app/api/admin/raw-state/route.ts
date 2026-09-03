@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
 import { readRivianRaw, readTeslaRaw } from '@/lib/rawState';
+import { readConfig } from '@/lib/config';
+import { scrubRawLocation } from '@/lib/vacation';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +43,16 @@ export async function GET(req: NextRequest) {
   const out: Record<string, unknown> = { ts: new Date().toISOString() };
   if (provider === 'rivian' || provider === 'all') out.rivian = await readRivianRaw();
   if (provider === 'tesla' || provider === 'all') out.tesla = await readTeslaRaw(limit);
+
+  // This diagnostic dump exposes raw provider payloads, which include vehicle
+  // location (see the NOTE above). Honour Vacation Mode here too: recursively
+  // null any location-named key so the raw view can't leak position while the
+  // privacy switch is on. No marker is added — the scrubbed output just looks
+  // like data without location. Reversible: turn Vacation Mode off to see full
+  // raw data again.
+  if (readConfig().vacationMode) {
+    return Response.json(scrubRawLocation(out) as Record<string, unknown>);
+  }
 
   return Response.json(out);
 }
