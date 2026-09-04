@@ -178,6 +178,9 @@ export interface RivianVehicleState {
   otaUpdateAvailable: boolean;
   otaInstalling: boolean;
   gearStatus: string;          // raw gearStatus.value — 'park' | 'drive' | ... (confirmed via logs 2026-07-19)
+  totalChargedEnergyKwh: number | null;
+  displayStatus: number | null;
+  evseType: number | null;
 }
 
 // ── Token storage ─────────────────────────────────────────────────────────────
@@ -277,7 +280,11 @@ export function applyParallaxToRivianState(
     ? Math.round(parallax.timeToEndOfChargeSec / 60)
     : state.minutesToFull;
 
-  return { ...state, isCharging, isPluggedIn, chargingState, minutesToFull };
+  const totalChargedEnergyKwh = isCharging ? (parallax.totalChargedEnergyKwh ?? null) : null;
+  const displayStatus = parallax.displayStatus ?? null;
+  const evseType = parallax.evseType ?? null;
+
+  return { ...state, isCharging, isPluggedIn, chargingState, minutesToFull, totalChargedEnergyKwh, displayStatus, evseType };
 }
 
 // Rivian's mobile API is unofficial/reverse-engineered and known to change
@@ -785,6 +792,9 @@ export function mapRawVehicleState(vs: RawVehicleState, source: 'poll' | 'push' 
     otaStatus: otaStatusRaw,
     otaUpdateAvailable,
     otaInstalling,
+    totalChargedEnergyKwh: null,
+    displayStatus: null,
+    evseType: null,
     gearStatus: gearStatusRaw,
   };
 }

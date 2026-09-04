@@ -225,7 +225,10 @@ function applyDatum(state, key, value) {
     // subscribed at once -- whichever arrived last silently overwrote
     // chargeRateMph with a wrong-unit number).
     case 'ChargeAmps':
-      state.chargerActualCurrentA = Number(v) || 0; break;
+      state.chargerActualCurrentA = Number(v) || 0;
+      // Live charge activity -- keep the freshness stamp current so a steady
+      // charge isn't dropped after TESLA_FIELD_STALE_MS (route.ts gate).
+      state._chargeStateUpdatedAt = Date.now(); break;
     case 'ChargeRateMilePerHour':
       state.chargeRateMph = Number(v) || 0; break;
     case 'TimeToFullCharge':
@@ -236,7 +239,10 @@ function applyDatum(state, key, value) {
     // Reported directly by the vehicle (accounts for phases/power factor),
     // more accurate than deriving amps * voltage ourselves.
     case 'ACChargingPower':
-      state.chargerPowerKw = Number(v) || 0; break;
+      state.chargerPowerKw = Number(v) || 0;
+      // Live charge activity -- keep the freshness stamp current so a steady
+      // charge isn't dropped after TESLA_FIELD_STALE_MS (route.ts gate).
+      state._chargeStateUpdatedAt = Date.now(); break;
 
     // Access / climate
     case 'Locked':

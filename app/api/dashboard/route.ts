@@ -317,7 +317,14 @@ function applyTeslaFieldFreshness(state: TeslaVehicleState): TeslaVehicleState &
   const gpsFresh = state.lat !== null && state.lon !== null && locAge < TESLA_FIELD_STALE_MS;
   const chargeAge = state._chargeStateUpdatedAt ? Date.now() - state._chargeStateUpdatedAt : Infinity;
   const chargeStateFresh = chargeAge < TESLA_FIELD_STALE_MS;
-  const out = chargeStateFresh ? state : { ...state, isPluggedIn: false, isCharging: false };
+  // Location freshness mirrors gpsFresh -- if the car is AWAKE (location fresh)
+  // and charge state is stale, it unplugged and drove off: zero both. If it's
+  // fully asleep (location ALSO stale), it's parked and still plugged where it
+  // was: keep last-known isPluggedIn, only clear isCharging.
+  const locFresh = state.lat !== null && state.lon !== null && locAge < TESLA_FIELD_STALE_MS;
+  const out = chargeStateFresh ? state
+    : locFresh ? { ...state, isPluggedIn: false, isCharging: false }
+    : { ...state, isCharging: false };
   return { ...out, _gpsFresh: gpsFresh };
 }
 
@@ -574,7 +581,7 @@ async function updateSessionKwh(
           side, vehicleName,
           startedAt: new Date(rec.sessionStartedAt).toISOString(),
           endedAt:   new Date(now).toISOString(),
-          durationMin: Math.round((now - rec.sessionStartedAt) / 60_000),
+          durationMin: Math.floor((now - rec.sessionStartedAt) / 60_000),
           energyKwh: Math.round(rec.sessionKwh * 100) / 100,
         },
       });

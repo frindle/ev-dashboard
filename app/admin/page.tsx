@@ -1353,7 +1353,7 @@ function ChargeStatsSection({ onSave, saving }: { onSave: () => void; saving: bo
                   <tr key={i}>
                     <td style={{ padding: '2px 8px 2px 0' }}>{fmtDate(s.startedAt)}</td>
                     <td style={{ padding: '2px 8px' }}>{s.vehicleName}</td>
-                    <td style={{ padding: '2px 8px' }}>{s.durationMin} min</td>
+                    <td style={{ padding: '2px 8px' }}>{Math.floor(s.durationMin)} min</td>
                     <td style={{ padding: '2px 8px' }}>{s.energyKwh}</td>
                     {stats.ratePerKwh != null && <td style={{ padding: '2px 8px' }}>${(s.costUsd ?? 0).toFixed(2)}</td>}
                   </tr>
