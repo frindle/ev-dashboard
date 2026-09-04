@@ -20,4 +20,16 @@ export async function register() {
     poll();
     setInterval(poll, POLL_MS);
   }, 5000);
+
+  // ecobee -> Vacation Mode sync. Reads climate.upstairs from Home Assistant
+  // and edge-toggles the dashboard's Vacation Mode privacy switch. No-op unless
+  // HA_URL/HA_TOKEN are set, and never throws (see lib/ecobee-sync.ts). Dynamic
+  // import so the fs-using module is only loaded in the nodejs runtime.
+  const ECOBEE_MS = 60_000;
+  const { syncEcobeeVacation } = await import('./lib/ecobee-sync');
+  const syncEcobee = () => { syncEcobeeVacation().catch(() => {}); };
+  setTimeout(() => {
+    syncEcobee();
+    setInterval(syncEcobee, ECOBEE_MS);
+  }, 7000);
 }
