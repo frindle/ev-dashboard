@@ -802,19 +802,10 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
               fontFamily: "'Space Grotesk', sans-serif", fontSize: lg ? 15 : 13, fontWeight: 600
             }}>{btnLabel}</button>
           )}
-          {/* Status-only (dashed border, no onClick) -- unlike the real
-              start/stop button above, this isn't a control that loses its
-              reason to exist when interactive=false, so it renders on the
-              12.3" kiosk too (matches NOT PLUGGED IN below, which never had
-              an interactive gate). */}
-          {v.ctrl === 'schedule' && (
-            <span style={{
-              flex: 'none', padding: lg ? '12px 16px' : '10px 14px', borderRadius: 11,
-              background: '#1b232b', border: '1px dashed rgba(255,255,255,0.12)',
-              color: '#a4afba', fontFamily: "'JetBrains Mono', monospace",
-              fontSize: lg ? 12 : 10.5, letterSpacing: '.04em'
-            }}>SCHEDULE ONLY</span>
-          )}
+          {/* Rivian's "SCHEDULE ONLY" pill was removed here — it made this card's
+              footer taller than Tesla's (shifting the centered dial/stats up on
+              the shared-height kiosk row). The source caption below already says
+              charging is schedule-managed via the Rivian app. */}
           {v.ctrl === 'full' && !v.charging && !pluggedIn && (
             <span style={{
               flex: 'none', padding: lg ? '12px 16px' : '10px 14px', borderRadius: 11,
@@ -833,6 +824,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           </span>
         </div>
         <span style={{
+          display: 'block', lineHeight: 1.4, minHeight: lg ? 27 : 24,  // reserve 2 lines so a 1- vs 2-line caption doesn't shift the card's centered content
           fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 9.5 : 8.5,
           letterSpacing: '.14em', color: '#5e6873', textAlign: sourceAlign
         }}>
