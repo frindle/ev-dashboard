@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef, Component, type ReactNode } from 'react';
+import { circuitStatus } from '@/lib/circuitStatus';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
 import {
   AuthBanners,
@@ -250,7 +251,6 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnec
   // connector is still physically occupied either way.
   const leftInUse  = (left?.vitals?.vehicleCharging  ?? false) || (left?.vitals?.vehicleConnected  ?? false) || leftVehiclePluggedIn;
   const rightInUse = (right?.vitals?.vehicleCharging ?? false) || (right?.vitals?.vehicleConnected ?? false) || rightVehiclePluggedIn;
-  const activeCount = (leftInUse ? 1 : 0) + (rightInUse ? 1 : 0);
 
   const usedKw   = kwFor(usedAmps);
   const freeAmps = Math.max(0, CIRCUIT_AMPS - usedAmps);
@@ -265,10 +265,8 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnec
   const rightTodayKwh   = right?.todayKwh   ?? 0;
   const todayKwh = leftTodayKwh + rightTodayKwh;
 
-  const statusLabel = activeCount === 0 ? 'IDLE — NOTHING CHARGING'
-    : activeCount === 2 ? 'BOTH CHARGING — WITHIN CIRCUIT LIMIT'
-    : 'ONE CONNECTOR ACTIVE';
-  const statusColor = activeCount > 0 ? ACCENT : '#7d8893';
+  const { label: statusLabel, charging: statusActive } = circuitStatus(leftAmps, rightAmps, leftInUse, rightInUse);
+  const statusColor = statusActive ? ACCENT : '#7d8893';
 
   // Per-side accent colors so when both connectors are active the user can
   // see at a glance how the demand is split. LEFT = Rivian (cool steel grey),
