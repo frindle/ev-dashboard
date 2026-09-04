@@ -242,6 +242,44 @@ export function readRivianParallaxState(): RivianParallaxState | null {
   }
 }
 
+// ── Parallax-first state override ────────────────────────────────────────────
+// The classic GraphQL vehicleState lags and is unreliable for home L2 charging,
+// while the Parallax websocket stream is live. Enum mapping derived empirically
+// from 4899 logged frames (vault Claude/API-Docs/Rivian.md):
+//   chargingStateEnum === 3 → actively charging (only state where energy rises)
+//   chargingStateEnum === 5 → charge complete / holding at target (still plugged)
+//   chargingStateEnum === 1 → idle
+//   plugConnectionStatus === 2 → plugged in; === 1 → unplugged
+// CRITICAL: powerKw and totalChargedEnergyKwh FREEZE at their last non-zero
+// value for hours after a session ends -- never derive isCharging from
+// powerKw > 0. The enum is strictly more reliable than power here.
+export function applyParallaxToRivianState(
+  state: RivianVehicleState | null,
+  parallax: RivianParallaxState | null,
+): RivianVehicleState | null {
+  // Fallback: no state, no parallax data, or stale -- preserve today's
+  // classic-API behavior unchanged.
+  if (state === null || parallax === null || parallax.fresh !== true) return state;
+
+  const isCharging = parallax.chargingStateEnum === 3;
+  const isPluggedIn = parallax.plugConnectionStatus === 2;
+  let chargingState: string;
+  if (!isPluggedIn) {
+    chargingState = 'disconnected';
+  } else if (parallax.chargingStateEnum === 3) {
+    chargingState = 'charging';
+  } else if (parallax.chargingStateEnum === 5) {
+    chargingState = 'charge_complete';
+  } else {
+    chargingState = 'not_charging';
+  }
+  const minutesToFull = (isCharging && typeof parallax.timeToEndOfChargeSec === 'number')
+    ? Math.round(parallax.timeToEndOfChargeSec / 60)
+    : state.minutesToFull;
+
+  return { ...state, isCharging, isPluggedIn, chargingState, minutesToFull };
+}
+
 // Rivian's mobile API is unofficial/reverse-engineered and known to change
 // without notice. Persist the full raw GetCurrentUser response (success or
 // failure, every login attempt — overwritten each time) so there's always a

@@ -26,7 +26,7 @@ async function readTelemetryDegraded(): Promise<boolean> {
     return false; // healthy default on parse failure
   }
 }
-import { getRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded, readRivianParallaxState, rivianPushFresh } from '@/lib/rivian';
+import { applyParallaxToRivianState, getRivianVehicleState, hasRivianTokens, RivianVehicleState, rivianApiDegraded, readRivianParallaxState, rivianPushFresh } from '@/lib/rivian';
 import { readFlags } from '@/lib/sessionFlags';
 import { notifyFlagChanges } from '@/lib/notifications';
 import { logApiCall } from '@/lib/apiLog';
@@ -1004,6 +1004,11 @@ async function handleGet(req: Request) {
   // Sync file read, not a network call -- server/parallax-monitor.js is
   // the thing that actually talks to Rivian; this just reads its cache.
   const parallax = readRivianParallaxState();
+  // Parallax-first: when the websocket stream is fresh it overrides the laggy
+  // classic-API charging fields (see applyParallaxToRivianState in lib/rivian.ts).
+  // Power stays gated on the NEW, parallax-derived isCharging -- so powerKw is
+  // suppressed the moment charging stops, before its stale frozen value can show.
+  const rivianAdjusted = applyParallaxToRivianState(rivianState, parallax);
 
   const vehicles: VehicleData[] = [
     {
@@ -1011,10 +1016,10 @@ async function handleGet(req: Request) {
       name: cfg.vehicles.rivian.name,
       model: cfg.vehicles.rivian.model,
       chargerSide: cfg.vehicles.rivian.chargerSide,
-      state: rivianState,
+      state: rivianAdjusted,
       connected: rivianConnected,
       atHome: rivianAtHome,
-      parallaxPowerKw: (rivianState?.isCharging && parallax?.fresh && parallax.powerKw !== null) ? parallax.powerKw : null,
+      parallaxPowerKw: (rivianAdjusted?.isCharging && parallax?.fresh && parallax.powerKw !== null) ? parallax.powerKw : null,
     },
     {
       id: 'tesla',
