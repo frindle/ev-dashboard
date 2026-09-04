@@ -828,7 +828,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
           fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 9.5 : 8.5,
           letterSpacing: '.14em', color: '#5e6873', textAlign: sourceAlign
         }}>
-          {v.ctrl === 'full' ? 'CHARGE LIMIT' : 'CHARGE LIMIT · VIA SCHEDULE'} · {canEditLimit ? 'TAP DIAL TO SET' : 'SET VIA RIVIAN APP'} · SOURCE {v.apiLabel}
+          {v.ctrl === 'full' ? 'CHARGE LIMIT' : 'CHARGE LIMIT · VIA SCHEDULE'} · {canEditLimit ? 'TAP DIAL TO SET' : (v.ctrl === 'full' ? 'SET IN TESLA APP' : 'SET VIA RIVIAN APP')} · SOURCE {v.apiLabel}
         </span>
       </div>
     </div>
