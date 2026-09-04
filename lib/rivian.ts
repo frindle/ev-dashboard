@@ -264,12 +264,20 @@ export function applyParallaxToRivianState(
   // classic-API behavior unchanged.
   if (state === null || parallax === null || parallax.fresh !== true) return state;
 
-  const isCharging = parallax.chargingStateEnum === 3;
+  // Corroboration veto: the Parallax enum can be FROZEN at 3 with powerKw
+  // frozen at its last value for hours after a session ends (the monitor
+  // advances updatedAt on heartbeats even when decoded values are unchanged),
+  // so fresh === true does not prove the enum reflects the current session.
+  // The vehicle's own state is authoritative here: a car reporting powerState
+  // 'sleep' cannot be actively charging, and 'charging_scheduled' is an
+  // explicit "plugged, scheduled, not yet charging" state.
+  const vehicleNotCharging = state.powerState === 'sleep' || state.chargingState === 'charging_scheduled';
+  const isCharging = parallax.chargingStateEnum === 3 && !vehicleNotCharging;
   const isPluggedIn = parallax.plugConnectionStatus === 2;
   let chargingState: string;
   if (!isPluggedIn) {
     chargingState = 'disconnected';
-  } else if (parallax.chargingStateEnum === 3) {
+  } else if (isCharging) {
     chargingState = 'charging';
   } else if (parallax.chargingStateEnum === 5) {
     chargingState = 'charge_complete';
