@@ -18,6 +18,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, Component, type ReactNode } from 'react';
 import { circuitStatus } from '@/lib/circuitStatus';
+import { shouldShowFeedError } from '@/lib/feedFreshness';
 import dynamic from 'next/dynamic';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
 import {
@@ -617,6 +618,9 @@ export default function Dashboard() {
 function DashboardInner() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [feedState, setFeedState] = useState<'live' | 'stale' | 'error'>('stale');
+  // Debounce the "API ERROR" pill: only flip to error after FEED_ERROR_THRESHOLD
+  // consecutive failed polls (a single transient blip must not paint the flag).
+  const feedErrorCount = useRef(0);
   const [showCamera, setShowCamera] = useState(false);
   // null until mount — SSR renders the same placeholder as the initial
   // client render, so the clock never causes a hydration text mismatch
@@ -672,12 +676,13 @@ function DashboardInner() {
   const fetchData = useCallback(async (fresh = false) => {
     try {
       const res = await fetch(`/api/dashboard${fresh ? '?fresh=1' : ''}`, { cache: 'no-store' });
-      if (!res.ok) { setFeedState('error'); return; }
+      if (!res.ok) { feedErrorCount.current += 1; if (shouldShowFeedError(feedErrorCount.current)) { setFeedState('error'); } return; }
       const json = await res.json() as DashboardData;
       setData(json);
+      feedErrorCount.current = 0;
       setFeedState(Date.now() - new Date(json.lastUpdated).getTime() < 60000 ? 'live' : 'stale');
     } catch {
-      setFeedState('error');
+      feedErrorCount.current += 1; if (shouldShowFeedError(feedErrorCount.current)) { setFeedState('error'); }
     }
   }, []);
 
