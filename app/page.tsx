@@ -244,6 +244,13 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnec
   const leftVehiclePluggedIn  = vehicles.find(v => v.chargerSide === 'LEFT')?.state?.isPluggedIn  ?? false;
   const rightVehiclePluggedIn = vehicles.find(v => v.chargerSide === 'RIGHT')?.state?.isPluggedIn ?? false;
 
+  // The circuit banner keys "charging" on the vehicle's own isCharging flag, not
+  // just the connector's amps — a Wall Connector can report a phantom draw (pilot
+  // active at the charge limit, or a stale cached power reading) while the car is
+  // not charging, which used to flip the banner to a false "BOTH CHARGING".
+  const leftVehicleCharging  = vehicles.find(v => v.chargerSide === 'LEFT')?.state?.isCharging  ?? false;
+  const rightVehicleCharging = vehicles.find(v => v.chargerSide === 'RIGHT')?.state?.isCharging ?? false;
+
   const leftAmps  = left?.vitals?.currentA  ?? 0;
   const rightAmps = right?.vitals?.currentA ?? 0;
   const usedAmps  = Math.round(leftAmps + rightAmps);
@@ -266,7 +273,7 @@ function CircuitPanel({ wallConnectors, vehicles, wcDataUnavailable, teslaConnec
   const rightTodayKwh   = right?.todayKwh   ?? 0;
   const todayKwh = leftTodayKwh + rightTodayKwh;
 
-  const { label: statusLabel, charging: statusActive } = circuitStatus(leftAmps, rightAmps, leftInUse, rightInUse);
+  const { label: statusLabel, charging: statusActive } = circuitStatus(leftAmps, rightAmps, leftInUse, rightInUse, leftVehicleCharging, rightVehicleCharging);
   const statusColor = statusActive ? ACCENT : '#7d8893';
 
   // Per-side accent colors so when both connectors are active the user can
