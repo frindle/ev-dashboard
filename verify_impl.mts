@@ -68,7 +68,7 @@ const pt = (o: Record<string, unknown> = {}) => o as any;
 //    in field keys must be backslash-escaped.
 {
   const r = fn([pt({ measurement: 'my cpu,load=x', fields: { 'k v=w': 1 } })]);
-  chk('measurement escapes space/comma (not =); key escapes space/comma/=', r === 'my\\ cpu\\,load=x k\\ v\\=w');
+  chk('measurement escapes space/comma (not =); key escapes space/comma/=', r === 'my\\ cpu\\,load=x k\\ v\\=w=1');
 }
 
 // 5) OVER-ESCAPE CONTROL -- identifiers WITHOUT special chars must NOT gain

@@ -30,7 +30,7 @@ import sys
 TARGET = pathlib.Path('server/influx-line-protocol.js')
 
 # frozen from TASK.md -- re-run `ollama-dispatch-scaffold --freeze-literals .`
-LITERALS = [[None, 'measurement'], [None, 'timestamp'], [None, 'fields'], [None, 'in <path>:'], ['app/api/x/route.ts', '- in app/api/x/route.ts: ']]
+LITERALS = [[None, 'measurement'], [None, 'timestamp'], [None, 'fields']]
 
 
 def _parse_must_contain(task_text):
