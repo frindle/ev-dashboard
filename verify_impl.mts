@@ -5,7 +5,10 @@
 // property directly; each FAILS on the stub (returns {}) and passes on a
 // correct impl.)
 
-import { buildMetricsRawPayload as fn } from './app/api/metrics/raw/route.ts';
+import { buildMetricsRawPayload as fn, GET } from './app/api/metrics/raw/route.ts';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pjoin } from 'node:path';
 
 let fails = 0;
 let checks = 0;
@@ -80,6 +83,36 @@ const g = (o: any, path: string): any => path.split('.').reduce((a, k) => (a == 
   // empty sources -> empty object
   const e = fn({}, { vacationMode: false });
   chk('degenerate: empty sources -> {}', e && Object.keys(e).length === 0);
+}
+
+function join_tmp(): string { return pjoin(tmpdir(), 'evmr-'); }
+
+// 7. GET integration: reads keys/*.json from KEYS_DIR, honors config vacationMode,
+//    returns merged+scrubbed JSON. Exercises the route wiring (readJson, config
+//    read, sources assembly, Response), not just the pure helper.
+{
+  const dir = mkdtempSync(join_tmp());
+  writeFileSync(pjoin(dir, 'config.json'), JSON.stringify({ vacationMode: true }));
+  writeFileSync(pjoin(dir, 'rivian-state-debug.json'), JSON.stringify({ latitude: 42.1, longitude: -71.2, token: 'abc', soc: 77 }));
+  writeFileSync(pjoin(dir, 'tesla-state.json'), JSON.stringify({ password: 'p', charge: 55 }));
+  const prev = process.env.KEYS_DIR;
+  process.env.KEYS_DIR = dir;
+  let body: any = {};
+  let threw = false;
+  try {
+    const res: any = await GET();
+    body = await res.json();
+    chk('GET: returns json content-type', String(res.headers.get('content-type') || '').includes('application/json'));
+  } catch { threw = true; }
+  if (prev === undefined) delete process.env.KEYS_DIR; else process.env.KEYS_DIR = prev;
+  chk('GET: did not throw', threw === false);
+  chk('GET: rivian source present', !!(body && body.rivianRaw));
+  chk('GET: passthrough scalar kept (soc)', g(body, 'rivianRaw.soc') === 77);
+  chk('GET: vacation strips latitude', g(body, 'rivianRaw.latitude') === undefined);
+  chk('GET: vacation strips longitude', g(body, 'rivianRaw.longitude') === undefined);
+  chk('GET: secret token stripped', g(body, 'rivianRaw.token') === undefined);
+  chk('GET: secret password stripped (tesla)', g(body, 'teslaState.password') === undefined);
+  chk('GET: tesla passthrough kept (charge)', g(body, 'teslaState.charge') === 55);
 }
 
 if (checks < 3) {
