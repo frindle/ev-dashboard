@@ -87,32 +87,66 @@ const g = (o: any, path: string): any => path.split('.').reduce((a, k) => (a == 
 
 function join_tmp(): string { return pjoin(tmpdir(), 'evmr-'); }
 
-// 7. GET integration: reads keys/*.json from KEYS_DIR, honors config vacationMode,
-//    returns merged+scrubbed JSON. Exercises the route wiring (readJson, config
-//    read, sources assembly, Response), not just the pure helper.
-{
+// helper: run GET() against a temp KEYS_DIR holding the given files, return parsed body.
+async function getWith(files: Record<string, unknown>): Promise<any> {
   const dir = mkdtempSync(join_tmp());
-  writeFileSync(pjoin(dir, 'config.json'), JSON.stringify({ vacationMode: true }));
-  writeFileSync(pjoin(dir, 'rivian-state-debug.json'), JSON.stringify({ latitude: 42.1, longitude: -71.2, token: 'abc', soc: 77 }));
-  writeFileSync(pjoin(dir, 'tesla-state.json'), JSON.stringify({ password: 'p', charge: 55 }));
+  for (const [name, val] of Object.entries(files)) writeFileSync(pjoin(dir, name), JSON.stringify(val));
   const prev = process.env.KEYS_DIR;
   process.env.KEYS_DIR = dir;
-  let body: any = {};
-  let threw = false;
   try {
     const res: any = await GET();
-    body = await res.json();
-    chk('GET: returns json content-type', String(res.headers.get('content-type') || '').includes('application/json'));
-  } catch { threw = true; }
-  if (prev === undefined) delete process.env.KEYS_DIR; else process.env.KEYS_DIR = prev;
-  chk('GET: did not throw', threw === false);
-  chk('GET: rivian source present', !!(body && body.rivianRaw));
+    const ct = String(res.headers.get('content-type') || '');
+    const body = await res.json();
+    return { body, ct, threw: false };
+  } catch { return { body: {}, ct: '', threw: true }; }
+  finally { if (prev === undefined) delete process.env.KEYS_DIR; else process.env.KEYS_DIR = prev; }
+}
+
+// 7. GET integration, VACATION ON: reads every keys/*.json source, honors
+//    config vacationMode, returns merged+scrubbed JSON. Exercises the route
+//    wiring (readJson per source, config read, sources assembly, Response) --
+//    each source line must be a real readJson call, not a benign passthrough.
+{
+  const r = await getWith({
+    'config.json': { vacationMode: true },
+    'rivian-state-debug.json': { latitude: 42.1, longitude: -71.2, token: 'abc', soc: 77 },
+    'rivian-state.json': { gps: { lat: 1, lon: 2 }, odometer: 12345 },
+    'tesla-state.json': { password: 'p', charge: 55 },
+    'rivian-parallax.json': { secret: 'zz', ampsRequested: 32 },
+    'last-status.json': { location: 'home', ts: 1699 },
+  });
+  const body = r.body;
+  chk('GET: returns json content-type', r.ct.includes('application/json'));
+  chk('GET: did not throw', r.threw === false);
+  // every source key must be present -- kills "replace readJson call with its first arg"
+  chk('GET: rivianRaw source present', !!(body && body.rivianRaw));
+  chk('GET: rivianState source present (odometer)', g(body, 'rivianState.odometer') === 12345);
+  chk('GET: teslaState source present (charge)', g(body, 'teslaState.charge') === 55);
+  chk('GET: parallax source present (ampsRequested)', g(body, 'parallax.ampsRequested') === 32);
+  chk('GET: lastStatus source present (ts)', g(body, 'lastStatus.ts') === 1699);
   chk('GET: passthrough scalar kept (soc)', g(body, 'rivianRaw.soc') === 77);
-  chk('GET: vacation strips latitude', g(body, 'rivianRaw.latitude') === undefined);
-  chk('GET: vacation strips longitude', g(body, 'rivianRaw.longitude') === undefined);
+  // vacation on -> location stripped everywhere (recursive)
+  chk('GET/vacation: strips latitude', g(body, 'rivianRaw.latitude') === undefined);
+  chk('GET/vacation: strips longitude', g(body, 'rivianRaw.longitude') === undefined);
+  chk('GET/vacation: strips nested gps', g(body, 'rivianState.gps') === undefined);
+  chk('GET/vacation: strips location key', g(body, 'lastStatus.location') === undefined);
+  // secrets stripped regardless of vacation
   chk('GET: secret token stripped', g(body, 'rivianRaw.token') === undefined);
-  chk('GET: secret password stripped (tesla)', g(body, 'teslaState.password') === undefined);
-  chk('GET: tesla passthrough kept (charge)', g(body, 'teslaState.charge') === 55);
+  chk('GET: secret password stripped', g(body, 'teslaState.password') === undefined);
+  chk('GET: secret secret-key stripped', g(body, 'parallax.secret') === undefined);
+}
+
+// 8. GET integration, VACATION OFF (no config.json -> default false): location
+//    MUST be preserved. Kills the "vacationMode default false -> true" mutation,
+//    which only bites when config is absent.
+{
+  const r = await getWith({
+    'rivian-state-debug.json': { latitude: 42.1, token: 'abc', soc: 77 },
+  });
+  const body = r.body;
+  chk('GET/no-vacation: latitude PRESERVED', g(body, 'rivianRaw.latitude') === 42.1);
+  chk('GET/no-vacation: scalar kept (soc)', g(body, 'rivianRaw.soc') === 77);
+  chk('GET/no-vacation: secret STILL stripped', g(body, 'rivianRaw.token') === undefined);
 }
 
 if (checks < 3) {
