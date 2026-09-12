@@ -8,7 +8,7 @@ import { readConfig } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
-export interface MetricsRawOpts {
+interface MetricsRawOpts {
   vacationMode: boolean;
 }
 
@@ -42,7 +42,7 @@ function scrub(value: unknown, vacationMode: boolean): unknown {
 // Merge the provided raw source objects into one payload. Every source is
 // represented under its own key; non-location, non-secret fields pass through
 // unchanged. Inputs are deep-cloned (never mutated).
-export function buildMetricsRawPayload(
+function buildMetricsRawPayload(
   sources: Record<string, unknown>,
   opts: MetricsRawOpts,
 ): Record<string, unknown> {
