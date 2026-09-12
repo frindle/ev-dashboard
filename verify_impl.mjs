@@ -88,7 +88,11 @@ try {
 //   // obj.raw must deep-equal `data` (verbatim, incl. gui_settings); obj.chargePercent===57; etc.
 const PARAMS = ['cs', 'vs', 'cls', 'ds', 'su', 'otaStatus', 'data'];
 function evalExpr(...args) {
-  const fn = new Function(...PARAMS, 'return (' + EXPR + ');');   // eslint-disable-line no-new-func
+  // The extracted region is the CONTENTS of fetchVehicleState's return object
+  // literal (the generic extractor strips the enclosing { }). Re-wrap in braces
+  // so it evaluates as the object it is -- `return (a: 1)` is a syntax error,
+  // `return ({a: 1})` is the object. (This harness targets an object literal.)
+  const fn = new Function(...PARAMS, 'return ({' + EXPR + '});');   // eslint-disable-line no-new-func
   return fn(...args);
 }
 
