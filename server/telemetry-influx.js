@@ -65,4 +65,31 @@ function buildTelemetryPoints(state, opts) {
   return [point];
 }
 
-module.exports = { buildTelemetryPoints };
+// Compose the InfluxDB /api/v2/write POST request for a telemetry state. Pure:
+// no I/O, no mutation of `state`/`opts`. Returns null when there is nothing to
+// write (empty body) or when influxUrl/influxToken are missing -- callers must
+// not guess credentials or fire an empty POST.
+function buildInfluxWriteRequest(state, opts) {
+  const options = (opts && typeof opts === 'object') ? opts : {};
+  const influxUrl = options.influxUrl;
+  const influxToken = options.influxToken;
+  if (!influxUrl || !influxToken) return null;
+  const points = buildTelemetryPoints(state, { vacationMode: options.vacationMode, ts: options.ts });
+  const body = require('./influx-line-protocol').pointsToLineProtocol(points);
+  if (body === '') return null;
+  let base = String(influxUrl);
+  if (base.endsWith('/')) base = base.slice(0, -1); // trim exactly ONE trailing slash
+  const org = encodeURIComponent(String(options.influxOrg || ''));
+  const bucket = encodeURIComponent(String(options.influxBucket || ''));
+  return {
+    url: base + '/api/v2/write?org=' + org + '&bucket=' + bucket + '&precision=ms',
+    method: 'POST',
+    headers: {
+      Authorization: 'Token ' + influxToken,
+      'Content-Type': 'text/plain; charset=utf-8',
+    },
+    body,
+  };
+}
+
+module.exports = { buildTelemetryPoints, buildInfluxWriteRequest };
