@@ -54,11 +54,12 @@ const chk = (name: string, cond: boolean) => {
 // --- fetch capture --------------------------------------------------------
 type Call = { url: string; opts: any };
 let calls: Call[] = [];
-let fetchMode: 'ok' | 'throw' = 'ok';
+let fetchMode: 'ok' | 'throw' | 'reject' = 'ok';
 const realFetch = (globalThis as any).fetch;
 (globalThis as any).fetch = (url: any, opts: any) => {
   calls.push({ url: String(url), opts: opts || {} });
-  if (fetchMode === 'throw') throw new Error('simulated influx outage');
+  if (fetchMode === 'throw') throw new Error('simulated influx outage (sync)');
+  if (fetchMode === 'reject') return Promise.reject(new Error('simulated influx outage (async)'));
   return Promise.resolve({ ok: true, status: 204, text: async () => '' });
 };
 
@@ -190,6 +191,41 @@ const influxOn = () =>
   chk('case5: lat PRESENT when vacationMode is off', body.includes('12.3456'));
   chk('case5: lon PRESENT when vacationMode is off', body.includes('65.4321'));
   chk('case5: secret value STILL dropped regardless of vacationMode', !body.includes(SECRET));
+}
+
+// ---- Case 5b: vacationMode explicitly false in config -> lat/lon PRESENT.
+//      Pins getVacationMode's `=== true` (config present, value false). -----
+{
+  calls = [];
+  fetchMode = 'ok';
+  influxOn();
+  setVacationConfig(false);
+  mod.writeState(mkRedactState());
+  const body = String((calls[0]?.opts || {}).body || '');
+  chk('case5b: a POST fires with vacationMode:false in config', calls.length === 1);
+  chk('case5b: lat PRESENT when config vacationMode is false', body.includes('12.3456'));
+  chk('case5b: secret STILL dropped', !body.includes(SECRET));
+}
+
+// ---- Case 7: async Influx rejection -> writeState survives, rejection is
+//      HANDLED (no unhandledRejection), JSON still written. Pins the fire-and
+//      -forget .catch attachment. ----------------------------------------
+{
+  calls = [];
+  fetchMode = 'reject';
+  influxOn();
+  setVacationConfig(null);
+  try { rmSync(STATE_FILE, { force: true }); } catch {}
+  let unhandled = false;
+  const onUnhandled = () => { unhandled = true; };
+  process.on('unhandledRejection', onUnhandled);
+  let threw = false;
+  try { mod.writeState({ chargePercent: 33 }); } catch { threw = true; }
+  await new Promise((r) => setTimeout(r, 40)); // let the rejection settle
+  process.off('unhandledRejection', onUnhandled);
+  chk('case7: writeState does not throw on async Influx rejection', threw === false);
+  chk('case7: async Influx rejection is handled (no unhandledRejection)', unhandled === false);
+  chk('case7: JSON state file still written despite async Influx rejection', existsSync(STATE_FILE));
 }
 
 // ---- Case 6: configured but empty/unserializable state -> NO POST, no throw

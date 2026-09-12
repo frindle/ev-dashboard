@@ -48,10 +48,10 @@ Add a non-blocking InfluxDB dual-write. Reuse the EXISTING pure composition in
    and unchanged, then in a SEPARATE `try/catch`:
    ```
    try {
-     const p = maybeWriteInflux(state, { vacationMode: getVacationMode() });
-     if (p && typeof p.catch === 'function') p.catch((e) => console.error('[telemetry] influx write failed:', e.message));
+     Promise.resolve(maybeWriteInflux(state, { vacationMode: getVacationMode() }))
+       .catch((e) => console.error('[telemetry] influx write failed:', e && e.message));
    } catch (e) {
-     console.error('[telemetry] influx write failed:', e.message);
+     console.error('[telemetry] influx write failed:', e && e.message);
    }
    ```
    Do NOT `await` it -- a slow/failed Influx must not delay or fail the JSON write.
@@ -63,7 +63,7 @@ Add a non-blocking InfluxDB dual-write. Reuse the EXISTING pure composition in
    function getVacationMode() {
      try {
        const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
-       return Boolean(cfg && cfg.vacationMode);
+       return cfg?.vacationMode === true;
      } catch { return false; }
    }
    ```

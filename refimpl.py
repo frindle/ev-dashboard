@@ -35,7 +35,7 @@ NEW_VIN = OLD_VIN + (
     "function getVacationMode() {\n"
     "  try {\n"
     "    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));\n"
-    "    return Boolean(cfg && cfg.vacationMode);\n"
+    "    return cfg?.vacationMode === true;\n"
     "  } catch { return false; }\n"
     "}\n\n"
     "// Compose + fire the InfluxDB /api/v2/write POST for a telemetry state.\n"
@@ -79,10 +79,10 @@ NEW_WS = (
     "  // Best-effort InfluxDB dual-write -- never blocks or throws into the\n"
     "  // telemetry/JSON path (fire-and-forget, errors swallowed+logged).\n"
     "  try {\n"
-    "    const p = maybeWriteInflux(state, { vacationMode: getVacationMode() });\n"
-    "    if (p && typeof p.catch === 'function') p.catch((e) => console.error('[telemetry] influx write failed:', e.message));\n"
+    "    Promise.resolve(maybeWriteInflux(state, { vacationMode: getVacationMode() }))\n"
+    "      .catch((e) => console.error('[telemetry] influx write failed:', e && e.message));\n"
     "  } catch (e) {\n"
-    "    console.error('[telemetry] influx write failed:', e.message);\n"
+    "    console.error('[telemetry] influx write failed:', e && e.message);\n"
     "  }\n"
     "}"
 )
@@ -104,7 +104,7 @@ OLD_START = (
 # line is a changed line. The guard is unobservable in-process (server startup
 # needs a subprocess to exercise) -> annotated so the relevance mutator skips it.
 NEW_START = (
-    "if (require.main === module) { // relevance: unobservable -- server startup, not exercised by in-process unit tests\n"
+    "if (require.main === module) { //# relevance: unobservable -- server startup, not exercised by in-process unit tests\n"
     "loadProto().then(() => {\n"
     "  server.listen(PORT, '0.0.0.0', () => {\n"
     "    console.log(`[telemetry] listening on :${PORT}`);\n"
