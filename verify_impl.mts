@@ -130,6 +130,14 @@ const validOpts = (o: Record<string, unknown> = {}) => ({
     !!r && r.url.includes('org=my%20org') && r.url.includes('bucket=b%26c'));
 }
 
+// 10. UNDERSPEC PIN -- null/missing org or bucket must not leak "null"/"undefined"
+//     into the query; they encode to empty. Pins the org/bucket fallback branch.
+{
+  const r = fn({ a: 1 }, validOpts({ influxOrg: null, influxBucket: undefined }));
+  chk('null org / missing bucket -> empty-encoded, no "null"/"undefined" in url',
+    !!r && r.url === 'http://influx.local/api/v2/write?org=&bucket=&precision=ms');
+}
+
 // Structural floor -- matches the Python/Swift `>= 3` discipline. Deleting the
 // guard above with zero chk() calls would otherwise leave fails=0 and go green
 // (a vacuous verify). Nothing enforces a case count for us, so count here.
