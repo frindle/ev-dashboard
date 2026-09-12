@@ -18,6 +18,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const protobuf = require('protobufjs');
 const { ByteBuffer } = require('flatbuffers');
+const { buildInfluxWriteRequest } = require('./telemetry-influx');
 
 // The vehicle does NOT send a raw protobuf Payload over the WebSocket --
 // it wraps it in a FlatBuffers envelope (confirmed against Tesla's own
@@ -92,6 +93,38 @@ function getExpectedVin() {
   } catch { return ''; }
 }
 
+// Top-level vacationMode flag from config.json -- when true the Influx dual-write
+// drops location fields (handled inside ./telemetry-influx). Never throws.
+function getVacationMode() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+    return cfg?.vacationMode === true;
+  } catch { return false; }
+}
+
+// Non-blocking InfluxDB dual-write. Self-contained: never throws (sync failures
+// caught here, async rejections swallowed by the .catch). No-op unless all four
+// INFLUX_* env vars are set AND buildInfluxWriteRequest has something to write.
+function maybeWriteInflux(state, opts = {}) {
+  try {
+    const influxUrl = process.env.INFLUX_URL;
+    const influxToken = process.env.INFLUX_TOKEN;
+    const influxOrg = process.env.INFLUX_ORG;
+    const influxBucket = process.env.INFLUX_BUCKET;
+    if (!influxUrl || !influxToken || !influxOrg || !influxBucket) return; // any unset -> no-op
+    const req = buildInfluxWriteRequest(state, {
+      influxUrl, influxToken, influxOrg, influxBucket,
+      measurement: process.env.INFLUX_MEASUREMENT, // optional; default ev_telemetry
+      vacationMode: opts.vacationMode,
+    });
+    if (!req) return; // nothing to write (empty body)
+    return fetch(req.url, { method: req.method, headers: req.headers, body: req.body })
+      .catch((e) => console.error('[telemetry] influx write failed:', e));
+  } catch (e) {
+    console.error('[telemetry] influx write failed:', e);
+  }
+}
+
 let Payload = null;
 let fieldNumberToName = new Map();
 
@@ -120,6 +153,9 @@ function writeState(state) {
   } catch (e) {
     console.error('[telemetry] write failed:', e.message);
   }
+  // Fire-and-forget InfluxDB dual-write. maybeWriteInflux is self-contained and
+  // never throws, so a slow/failed Influx can't delay or break the JSON write.
+  maybeWriteInflux(state, { vacationMode: getVacationMode() });
 }
 
 // Log telemetry frame to push log
@@ -507,11 +543,17 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (e) => console.error(`[telemetry] ws error: ${e.message}`));
 });
 
-loadProto().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[telemetry] listening on :${PORT}`);
+// Only stand up the ws server when run directly (`node server/telemetry-server.js`),
+// not when imported (e.g. by tests) -- importing must be side-effect-free.
+if (require.main === module) {
+  loadProto().then(() => {
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`[telemetry] listening on :${PORT}`);
+    });
+  }).catch(e => {
+    console.error('[telemetry] failed to start:', e);
+    process.exit(1);
   });
-}).catch(e => {
-  console.error('[telemetry] failed to start:', e);
-  process.exit(1);
-});
+}
+
+module.exports = { writeState, maybeWriteInflux };

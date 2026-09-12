@@ -14,6 +14,13 @@ services:
       - KEYS_DIR=/app/keys
       - TELEMETRY_PORT=50051
       - TESLA_LOG_API_BODIES=1
+      # InfluxDB dual-write — set these (values live in .env, not here) to turn
+      # on the telemetry->InfluxDB write path in server/telemetry-server.js.
+      # All four required; any unset => disabled (no-op). See .env.example.
+      # - INFLUX_URL=http://10.0.6.61:8086
+      # - INFLUX_TOKEN=...
+      # - INFLUX_ORG=...
+      # - INFLUX_BUCKET=...
     env_file:
       - .env
     labels:
