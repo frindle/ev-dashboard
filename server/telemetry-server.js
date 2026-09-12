@@ -379,6 +379,12 @@ function applyDatum(state, key, value) {
       state.milesSinceReset = Number(v) || 0; break;
 
     default:
+      // Capture unmapped fields instead of dropping them so every streamed
+      // field reaches the cache (and thus /api/metrics/influx → InfluxDB).
+      if (v !== null && v !== undefined) {
+        state.raw = state.raw || {};
+        state.raw[fieldName] = v;
+      }
       if (process.env.TELEMETRY_DEBUG === '1') {
         console.log(`[telemetry] unmapped field ${fieldName}=${JSON.stringify(v)}`);
       }
