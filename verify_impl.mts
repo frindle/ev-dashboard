@@ -121,6 +121,26 @@ const pt = (o: Record<string, unknown> = {}) => o as any;
   chk('integers as-is incl. 0 and negative', r === 'g zero=0,neg=-7');
 }
 
+// 12) BAD ELEMENTS in the array -- null / non-object entries are skipped, not
+//     serialized and not thrown on; the valid point still comes through.
+{
+  const r = fn([null, 'garbage', 42, pt({ measurement: 'm', fields: { a: 1 } })]);
+  chk('null/non-object array elements skipped', r === 'm a=1');
+}
+
+// 13) TIMESTAMP NaN -- a non-finite timestamp must NOT be appended (no ' NaN').
+{
+  const r = fn([pt({ measurement: 'm', fields: { a: 1 }, timestamp: NaN })]);
+  chk('NaN timestamp not appended', r === 'm a=1');
+}
+
+// 14) TIMESTAMP 0 -- zero is a VALID finite ms timestamp and MUST be appended
+//     (a truthiness check instead of Number.isFinite would wrongly drop it).
+{
+  const r = fn([pt({ measurement: 'm', fields: { a: 1 }, timestamp: 0 })]);
+  chk('zero timestamp appended (finite, not truthy-checked)', r === 'm a=1 0');
+}
+
 const CASES_AUTHORED = true;
 if (!CASES_AUTHORED) {
   console.log('  SCAFFOLD_INCOMPLETE: adversarial cases not yet authored in verify_impl.mts.');
