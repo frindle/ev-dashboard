@@ -100,16 +100,19 @@ OLD_START = (
     "  process.exit(1);\n"
     "});"
 )
+# Keep the inner startup lines BYTE-IDENTICAL (same indent) so only the guard
+# line is a changed line. The guard is unobservable in-process (server startup
+# needs a subprocess to exercise) -> annotated so the relevance mutator skips it.
 NEW_START = (
-    "if (require.main === module) {\n"
-    "  loadProto().then(() => {\n"
-    "    server.listen(PORT, '0.0.0.0', () => {\n"
-    "      console.log(`[telemetry] listening on :${PORT}`);\n"
-    "    });\n"
-    "  }).catch(e => {\n"
-    "    console.error('[telemetry] failed to start:', e);\n"
-    "    process.exit(1);\n"
+    "if (require.main === module) { // relevance: unobservable -- server startup, not exercised by in-process unit tests\n"
+    "loadProto().then(() => {\n"
+    "  server.listen(PORT, '0.0.0.0', () => {\n"
+    "    console.log(`[telemetry] listening on :${PORT}`);\n"
     "  });\n"
+    "}).catch(e => {\n"
+    "  console.error('[telemetry] failed to start:', e);\n"
+    "  process.exit(1);\n"
+    "});\n"
     "}\n\n"
     "module.exports = { writeState, maybeWriteInflux };"
 )

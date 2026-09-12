@@ -21,7 +21,7 @@
 //   4. redaction preserved        -> secret-named key value + vacationMode lat/lon
 //      are absent from the emitted body; a non-secret field survives.
 
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,6 +29,12 @@ import { join } from 'node:path';
 const KEYS = mkdtempSync(join(tmpdir(), 'ev-influx-verify-'));
 process.env.KEYS_DIR = KEYS;
 const STATE_FILE = join(KEYS, 'tesla-state.json');
+const CONFIG_FILE = join(KEYS, 'config.json');
+const setVacationConfig = (on: boolean | null) => {
+  // null -> no config file at all (getVacationMode hits its catch -> false)
+  if (on === null) { try { rmSync(CONFIG_FILE, { force: true }); } catch {} return; }
+  writeFileSync(CONFIG_FILE, JSON.stringify({ vacationMode: on, vehicles: { tesla: { vin: 'X' } } }));
+};
 
 // Clean INFLUX_* out of the ambient env so a case controls them fully.
 for (const k of ['INFLUX_URL', 'INFLUX_TOKEN', 'INFLUX_ORG', 'INFLUX_BUCKET', 'INFLUX_MEASUREMENT']) {
@@ -142,30 +148,61 @@ chk('writeState is exported as a function', typeof mod.writeState === 'function'
   chk('case3: JSON state file has the written state despite Influx failure', ok);
 }
 
-// ---- Case 4: redaction preserved through the wiring ----------------------
+// Redaction goes through writeState (not maybeWriteInflux directly) so that
+// getVacationMode()'s config-read is exercised: writeState passes
+// { vacationMode: getVacationMode() } and getVacationMode reads config.json.
+const SECRET = 'SUPERSECRETVALUE';
+const mkRedactState = () => ({
+  chargePercent: 90,
+  apiToken: SECRET,                          // secret-named key -> ALWAYS dropped
+  location: { lat: 12.3456, lon: 65.4321 },  // dropped ONLY under vacationMode
+});
+const influxOn = () =>
+  setEnv({ INFLUX_URL: 'http://10.0.6.61:8086', INFLUX_TOKEN: 'tok-abc123', INFLUX_ORG: 'org', INFLUX_BUCKET: 'bucket' });
+
+// ---- Case 4: vacationMode ON via config -> lat/lon + secret redacted ------
 {
   calls = [];
   fetchMode = 'ok';
-  setEnv({
-    INFLUX_URL: 'http://10.0.6.61:8086',
-    INFLUX_TOKEN: 'tok-abc123',
-    INFLUX_ORG: 'org',
-    INFLUX_BUCKET: 'bucket',
-  });
-  const SECRET = 'SUPERSECRETVALUE';
-  const state = {
-    chargePercent: 90,
-    apiToken: SECRET,                 // secret-named key -> ALWAYS dropped
-    location: { lat: 12.3456, lon: 65.4321 }, // dropped under vacationMode
-  };
-  await Promise.resolve(mod.maybeWriteInflux(state, { vacationMode: true })).catch(() => {});
-  chk('case4: a POST still fires with non-secret fields present', calls.length === 1);
+  influxOn();
+  setVacationConfig(true);
+  mod.writeState(mkRedactState());
+  chk('case4: a POST fires (vacation on) with non-secret fields present', calls.length === 1);
   const body = String((calls[0]?.opts || {}).body || '');
   chk('case4: non-secret field survives (chargePercent=90)', body.includes('chargePercent=90'));
   chk('case4: secret value is NOT in the body', !body.includes(SECRET));
   chk('case4: secret key name is NOT in the body', !body.toLowerCase().includes('apitoken'));
   chk('case4: lat value redacted under vacationMode', !body.includes('12.3456'));
   chk('case4: lon value redacted under vacationMode', !body.includes('65.4321'));
+}
+
+// ---- Case 5: vacationMode OFF (no config) -> lat/lon PRESENT, secret still
+//      dropped. Pins getVacationMode(): a one-directional over-redaction fix
+//      (always-true) would wrongly strip lat/lon here. ----------------------
+{
+  calls = [];
+  fetchMode = 'ok';
+  influxOn();
+  setVacationConfig(null); // absent config -> getVacationMode() returns false
+  mod.writeState(mkRedactState());
+  chk('case5: a POST fires (vacation off)', calls.length === 1);
+  const body = String((calls[0]?.opts || {}).body || '');
+  chk('case5: lat PRESENT when vacationMode is off', body.includes('12.3456'));
+  chk('case5: lon PRESENT when vacationMode is off', body.includes('65.4321'));
+  chk('case5: secret value STILL dropped regardless of vacationMode', !body.includes(SECRET));
+}
+
+// ---- Case 6: configured but empty/unserializable state -> NO POST, no throw
+//      Pins the `if (!req) return` guard: buildInfluxWriteRequest returns null
+//      for an empty body; firing fetch(null.url) would throw. ---------------
+{
+  calls = [];
+  fetchMode = 'ok';
+  influxOn();
+  let threw = false;
+  try { await Promise.resolve(mod.maybeWriteInflux({}, {})).catch(() => {}); } catch { threw = true; }
+  chk('case6: empty state -> NO POST (null request short-circuits)', calls.length === 0);
+  chk('case6: empty state -> does not throw', threw === false);
 }
 
 (globalThis as any).fetch = realFetch;
