@@ -35,40 +35,42 @@ const chk = (name: string, cond: boolean) => {
 };
 
 // --- helpers ---------------------------------------------------------------
-// deep-get by dotted path, so a wrong flatten (bad key) reads as undefined.
-function g(o: any, path: string): any {
-  return path.split('.').reduce((a: any, k: string) => (a == null ? a : a[k]), o);
-}
-// find the single point (or undefined) returned for a state.
 function one(state: any, opts?: any): any {
   const r = fn(state as any, (opts || {}) as any);
   return Array.isArray(r) ? r[0] : undefined;
 }
+// fields is a FLAT map whose KEYS are dotted paths -> read by literal key.
+function fld(p: any, key: string): any {
+  return (p && p.fields) ? p.fields[key] : undefined;
+}
+function hasField(p: any, key: string): boolean {
+  return !!(p && p.fields) && Object.prototype.hasOwnProperty.call(p.fields, key);
+}
 
-// 1. FLATTEN: nested numeric leaf -> dotted field key, value preserved.
+// 1. FLATTEN: nested numeric leaf -> dotted field KEY, value preserved.
 {
   const p = one({ drivetrain: { soc: 77, powerW: 1234 } });
-  chk('flatten: nested numeric -> dotted key', g(p, 'fields.drivetrain.soc') === 77);
-  chk('flatten: second nested numeric kept', g(p, 'fields.drivetrain.powerW') === 1234);
-  chk('flatten: point has measurement string', typeof g(p, 'measurement') === 'string');
+  chk('flatten: nested numeric -> dotted key', fld(p, 'drivetrain.soc') === 77);
+  chk('flatten: second nested numeric kept', fld(p, 'drivetrain.powerW') === 1234);
+  chk('flatten: point has measurement string', typeof (p && p.measurement) === 'string');
 }
 
 // 2. TYPES: boolean + non-empty string kept; empty string / null / undefined dropped.
 {
   const p = one({ isCharging: true, gear: 'D', note: '', missing: null, gone: undefined, n: 5 });
-  chk('types: boolean leaf kept', g(p, 'fields.isCharging') === true);
-  chk('types: non-empty string kept', g(p, 'fields.gear') === 'D');
-  chk('types: empty string dropped', g(p, 'fields.note') === undefined);
-  chk('types: null dropped', !('missing' in (g(p, 'fields') || {})));
-  chk('types: undefined dropped', !('gone' in (g(p, 'fields') || {})));
-  chk('types: numeric kept alongside', g(p, 'fields.n') === 5);
+  chk('types: boolean leaf kept', fld(p, 'isCharging') === true);
+  chk('types: non-empty string kept', fld(p, 'gear') === 'D');
+  chk('types: empty string dropped', !hasField(p, 'note'));
+  chk('types: null dropped', !hasField(p, 'missing'));
+  chk('types: undefined dropped', !hasField(p, 'gone'));
+  chk('types: numeric kept alongside', fld(p, 'n') === 5);
 }
 
 // 3. EMPTY containers produce no field; all-empty state -> [] (no point).
 {
   const p = one({ x: {}, y: [], z: 3 });
-  chk('empty: empty object yields no field', g(p, 'fields.x') === undefined);
-  chk('empty: only real leaf survives', g(p, 'fields.z') === 3);
+  chk('empty: empty object yields no field', !hasField(p, 'x'));
+  chk('empty: only real leaf survives', fld(p, 'z') === 3);
   const r = fn({ a: {}, b: null } as any, {} as any);
   chk('empty: degenerate state -> [] (no point)', Array.isArray(r) && r.length === 0);
 }
@@ -76,33 +78,31 @@ function one(state: any, opts?: any): any {
 // 4. SECRETS always dropped, at any depth, in BOTH modes.
 {
   const p = one({ apiToken: 'zzz', nested: { password: 'p', v: 1 }, secretKey: 'q', ok: 2 });
-  chk('secret: top-level *token* dropped', g(p, 'fields.apiToken') === undefined);
-  chk('secret: nested password dropped', g(p, 'fields.nested.password') === undefined);
-  chk('secret: *secret* key dropped', g(p, 'fields.secretKey') === undefined);
-  chk('secret: sibling of secret kept', g(p, 'fields.nested.v') === 1);
-  // even with vacation OFF, secrets still go
+  chk('secret: top-level *token* dropped', !hasField(p, 'apiToken'));
+  chk('secret: nested password dropped', !hasField(p, 'nested.password'));
+  chk('secret: *secret* key dropped', !hasField(p, 'secretKey'));
+  chk('secret: sibling of secret kept', fld(p, 'nested.v') === 1);
   const p2 = one({ password: 'p', charge: 9 }, { vacationMode: false });
-  chk('secret: dropped even when vacation off', g(p2, 'fields.password') === undefined);
-  chk('secret: non-secret kept when vacation off', g(p2, 'fields.charge') === 9);
+  chk('secret: dropped even when vacation off', !hasField(p2, 'password'));
+  chk('secret: non-secret kept when vacation off', fld(p2, 'charge') === 9);
 }
 
 // 5. OVER-TRIGGER GUARD: vacation OFF -> location MUST be preserved.
-//    (A one-directional fix that always strips location breaks this.)
 {
   const p = one({ latitude: 42.1, longitude: -71.2, gps: { lat: 1 }, soc: 55 }, { vacationMode: false });
-  chk('guard: vacation off -> latitude PRESERVED', g(p, 'fields.latitude') === 42.1);
-  chk('guard: vacation off -> longitude PRESERVED', g(p, 'fields.longitude') === -71.2);
-  chk('guard: vacation off -> nested gps PRESERVED', g(p, 'fields.gps.lat') === 1);
+  chk('guard: vacation off -> latitude PRESERVED', fld(p, 'latitude') === 42.1);
+  chk('guard: vacation off -> longitude PRESERVED', fld(p, 'longitude') === -71.2);
+  chk('guard: vacation off -> nested gps PRESERVED', fld(p, 'gps.lat') === 1);
 }
 
 // 6. VACATION ON -> location stripped recursively; non-location kept.
 {
   const p = one({ latitude: 42.1, pos: { lat: 1, gps: { lat: 2 }, alt: 9 }, soc: 5 }, { vacationMode: true });
-  chk('vacation: top latitude stripped', g(p, 'fields.latitude') === undefined);
-  chk('vacation: nested lat stripped', g(p, 'fields.pos.lat') === undefined);
-  chk('vacation: nested gps subtree stripped', g(p, 'fields.pos.gps') === undefined);
-  chk('vacation: non-location nested kept (alt)', g(p, 'fields.pos.alt') === 9);
-  chk('vacation: non-location scalar kept (soc)', g(p, 'fields.soc') === 5);
+  chk('vacation: top latitude stripped', !hasField(p, 'latitude'));
+  chk('vacation: nested lat stripped', !hasField(p, 'pos.lat'));
+  chk('vacation: nested gps subtree stripped', !hasField(p, 'pos.gps.lat'));
+  chk('vacation: non-location nested kept (alt)', fld(p, 'pos.alt') === 9);
+  chk('vacation: non-location scalar kept (soc)', fld(p, 'soc') === 5);
 }
 
 // 7. NO MUTATION of the input object.
@@ -118,11 +118,11 @@ function one(state: any, opts?: any): any {
 // 8. TIMESTAMP + measurement default/override.
 {
   const p = one({ a: 1 }, { ts: 1699999999999 });
-  chk('ts: numeric ts becomes point.timestamp', g(p, 'timestamp') === 1699999999999);
+  chk('ts: numeric ts becomes point.timestamp', (p && p.timestamp) === 1699999999999);
   const p2 = one({ a: 1 }, {});
-  chk('ts: absent ts -> no timestamp', g(p2, 'timestamp') === undefined);
+  chk('ts: absent ts -> no timestamp', (p2 && p2.timestamp) === undefined);
   const p3 = one({ a: 1 }, { measurement: 'ev_custom' });
-  chk('measurement: override honored', g(p3, 'measurement') === 'ev_custom');
+  chk('measurement: override honored', (p3 && p3.measurement) === 'ev_custom');
 }
 
 // 9. DEGENERATE inputs must NOT throw.
@@ -131,7 +131,8 @@ function one(state: any, opts?: any): any {
   try { fn(null as any, {} as any); fn(undefined as any, undefined as any); fn(42 as any, {} as any); }
   catch { threw = true; }
   chk('degenerate: null/undefined/scalar state do not throw', threw === false);
-  chk('degenerate: null state -> []', Array.isArray(fn(null as any, {} as any)) && fn(null as any, {} as any).length === 0);
+  const rn = fn(null as any, {} as any);
+  chk('degenerate: null state -> []', Array.isArray(rn) && rn.length === 0);
 }
 
 // Structural floor -- matches the Python/Swift `>= 3` discipline. Deleting the

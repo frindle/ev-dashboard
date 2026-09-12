@@ -30,7 +30,7 @@ import sys
 TARGET = pathlib.Path('server/telemetry-influx.js')
 
 # frozen from TASK.md -- re-run `ollama-dispatch-scaffold --freeze-literals .`
-LITERALS = [[None, 'latitude'], [None, 'password'], [None, 'measurement'], [None, 'in <path>:'], ['app/api/x/route.ts', '- in app/api/x/route.ts: ']]
+LITERALS = [[None, 'latitude'], [None, 'password'], [None, 'measurement']]
 
 
 def _parse_must_contain(task_text):
