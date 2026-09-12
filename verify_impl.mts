@@ -75,6 +75,25 @@ function hasField(p: any, key: string): boolean {
   chk('empty: degenerate state -> [] (no point)', Array.isArray(r) && r.length === 0);
 }
 
+// 3b. ARRAYS flatten to indexed dotted keys (cell voltages, tire pressures, ...).
+{
+  const p = one({ cells: [10, 20], meta: { name: 'x' } });
+  chk('array: index 0 flattened', fld(p, 'cells.0') === 10);
+  chk('array: index 1 flattened', fld(p, 'cells.1') === 20);
+  chk('array: sibling object still flattened', fld(p, 'meta.name') === 'x');
+}
+
+// 3c. NUMERIC edges: 0 is a REAL value (must be kept); NaN/Infinity are not
+//     valid Influx floats (must be dropped). Pins Number.isFinite, not truthiness.
+{
+  const p = one({ soc: 0, pedal: 0, bad: Infinity, worse: NaN, good: 5 });
+  chk('numeric: zero KEPT (not dropped as falsy)', fld(p, 'soc') === 0);
+  chk('numeric: second zero KEPT', fld(p, 'pedal') === 0);
+  chk('numeric: Infinity dropped', !hasField(p, 'bad'));
+  chk('numeric: NaN dropped', !hasField(p, 'worse'));
+  chk('numeric: finite kept', fld(p, 'good') === 5);
+}
+
 // 4. SECRETS always dropped, at any depth, in BOTH modes.
 {
   const p = one({ apiToken: 'zzz', nested: { password: 'p', v: 1 }, secretKey: 'q', ok: 2 });
