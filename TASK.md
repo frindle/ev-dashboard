@@ -25,36 +25,41 @@ Add a non-blocking InfluxDB dual-write. Reuse the EXISTING pure composition in
    `const { buildInfluxWriteRequest } = require('./telemetry-influx');`
    (Nothing requires it today; that is the missing wire.)
 
-2. **Add an exported helper `maybeWriteInflux(state, opts = {})`** (so it is
-   unit-testable without standing up the ws server):
-   - Read the four vars from `process.env`: `INFLUX_URL`, `INFLUX_TOKEN`,
-     `INFLUX_ORG`, `INFLUX_BUCKET`.
-   - **If any of the four is unset/empty -> return immediately (no-op).** This is
-     the safe default until the env is set: behaviour is then byte-for-byte
-     unchanged.
-   - Otherwise call `buildInfluxWriteRequest(state, { influxUrl, influxToken,
-     influxOrg, influxBucket, vacationMode: opts.vacationMode })`. Let the
-     measurement default to the module's `ev_telemetry` (do not pass a
-     measurement unless `process.env.INFLUX_MEASUREMENT` is set -- optional).
-   - If the request is `null` (nothing to write) -> return.
-   - Otherwise fire the HTTP POST the descriptor describes using the global
-     `fetch` (Node 26 has it): `fetch(req.url, { method: req.method, headers:
-     req.headers, body: req.body })`. **Return that promise** so callers/tests
-     can observe it.
-
-3. **Call it from `writeState`, AFTER the JSON write, fire-and-forget and
-   crash-proof.** The Influx POST must NEVER throw into or block the JSON /
-   telemetry path. Keep the existing `fs.writeFileSync(STATE_FILE, ...)` first
-   and unchanged, then in a SEPARATE `try/catch`:
+2. **Add an exported, SELF-CONTAINED helper `maybeWriteInflux(state, opts = {})`**
+   (so it is unit-testable without standing up the ws server, and so `writeState`
+   can call it on one line with no wrapping). It must NEVER throw and must swallow
+   async errors itself:
    ```
-   try {
-     Promise.resolve(maybeWriteInflux(state, { vacationMode: getVacationMode() }))
-       .catch((e) => console.error('[telemetry] influx write failed:', e && e.message));
-   } catch (e) {
-     console.error('[telemetry] influx write failed:', e && e.message);
+   function maybeWriteInflux(state, opts = {}) {
+     try {
+       const influxUrl = process.env.INFLUX_URL;
+       const influxToken = process.env.INFLUX_TOKEN;
+       const influxOrg = process.env.INFLUX_ORG;
+       const influxBucket = process.env.INFLUX_BUCKET;
+       if (!influxUrl || !influxToken || !influxOrg || !influxBucket) return; // any unset -> no-op
+       const req = buildInfluxWriteRequest(state, {
+         influxUrl, influxToken, influxOrg, influxBucket,
+         measurement: process.env.INFLUX_MEASUREMENT, // optional; default ev_telemetry
+         vacationMode: opts.vacationMode,
+       });
+       if (!req) return; // nothing to write (empty body)
+       return fetch(req.url, { method: req.method, headers: req.headers, body: req.body })
+         .catch((e) => console.error('[telemetry] influx write failed:', e));
+     } catch (e) {
+       console.error('[telemetry] influx write failed:', e);
+     }
    }
    ```
-   Do NOT `await` it -- a slow/failed Influx must not delay or fail the JSON write.
+   - Uses the global `fetch` (Node 26 has it). The inner `.catch` swallows async
+     failures; the surrounding `try/catch` swallows sync failures.
+
+3. **Call it from `writeState`, AFTER the JSON write.** Keep the existing
+   `fs.writeFileSync(STATE_FILE, ...)` first and unchanged, then ONE line:
+   ```
+   maybeWriteInflux(state, { vacationMode: getVacationMode() });
+   ```
+   Do NOT `await` it -- a slow/failed Influx must not delay or fail the JSON
+   write, and because maybeWriteInflux is self-contained it cannot throw here.
 
 4. **Add `getVacationMode()`** mirroring the existing `getExpectedVin()` (read
    `CONFIG_FILE` = `KEYS_DIR/config.json`, top-level `vacationMode` boolean,

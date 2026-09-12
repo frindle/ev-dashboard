@@ -24,6 +24,7 @@
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 // KEYS_DIR is read at module load -> set BEFORE importing the target.
 const KEYS = mkdtempSync(join(tmpdir(), 'ev-influx-verify-'));
@@ -239,6 +240,21 @@ const influxOn = () =>
   try { await Promise.resolve(mod.maybeWriteInflux({}, {})).catch(() => {}); } catch { threw = true; }
   chk('case6: empty state -> NO POST (null request short-circuits)', calls.length === 0);
   chk('case6: empty state -> does not throw', threw === false);
+}
+
+// ---- Case 8: startup guard -- requiring the module must NOT stand up the ws
+//      server. The fix guards loadProto()/server.listen() behind
+//      `require.main === module`; a missing/negated guard starts the server on
+//      import, keeping the event loop alive so the child never exits on its own.
+//      Run in a fresh child: correct -> no open handle -> exits 0; negated ->
+//      hangs -> the unref'd timer fires -> exit 3. -----------------------------
+{
+  const r = spawnSync(
+    process.execPath,
+    ['-e', 'setTimeout(function(){process.exit(3);},2500).unref(); require("./server/telemetry-server.js");'],
+    { cwd: process.cwd(), timeout: 15000, encoding: 'utf8' },
+  );
+  chk('case8: importing the module does not start the server (require.main===module guard)', r.status === 0);
 }
 
 (globalThis as any).fetch = realFetch;
