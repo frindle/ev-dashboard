@@ -65,31 +65,34 @@ function buildTelemetryPoints(state, opts) {
   return [point];
 }
 
-// Compose the InfluxDB /api/v2/write POST request for a telemetry state. Pure:
-// no I/O, no mutation of `state`/`opts`. Returns null when there is nothing to
-// write (empty body) or when influxUrl/influxToken are missing -- callers must
-// not guess credentials or fire an empty POST.
-function buildInfluxWriteRequest(state, opts) {
+// The 5 known /api/metrics/raw sections and their per-section measurements.
+const SECTION_MEASUREMENTS = [
+  ['rivianRaw', 'ev_rivian_raw'],
+  ['rivianState', 'ev_rivian_state'],
+  ['teslaState', 'ev_tesla_state'],
+  ['parallax', 'ev_parallax'],
+  ['lastStatus', 'ev_last_status'],
+];
+
+// Serialize ALL cached source state as InfluxDB line protocol (Telegraf-pull
+// ingestion). Pure, no I/O: `sources` is the PASSED-IN /api/metrics/raw payload.
+// Each present & non-null section goes through buildTelemetryPoints with its own
+// measurement; secret scrub + vacationMode location-drop are inherited from it.
+// Empty / no state -> ''. Never mutates `sources`.
+function buildInfluxLineProtocol(sources, opts) {
   const options = (opts && typeof opts === 'object') ? opts : {};
-  const influxUrl = options.influxUrl;
-  const influxToken = options.influxToken;
-  if (!influxUrl || !influxToken) return null;
-  const points = buildTelemetryPoints(state, { vacationMode: options.vacationMode, ts: options.ts });
-  const body = require('./influx-line-protocol').pointsToLineProtocol(points);
-  if (body === '') return null;
-  let base = String(influxUrl);
-  if (base.endsWith('/')) base = base.slice(0, -1); // trim exactly ONE trailing slash
-  const org = encodeURIComponent(String(options.influxOrg || ''));
-  const bucket = encodeURIComponent(String(options.influxBucket || ''));
-  return {
-    url: base + '/api/v2/write?org=' + org + '&bucket=' + bucket + '&precision=ms',
-    method: 'POST',
-    headers: {
-      Authorization: 'Token ' + influxToken,
-      'Content-Type': 'text/plain; charset=utf-8',
-    },
-    body,
-  };
+  if (!sources || typeof sources !== 'object' || Array.isArray(sources)) return '';
+  const points = [];
+  for (const [sectionKey, measurement] of SECTION_MEASUREMENTS) {
+    const section = sources[sectionKey];
+    if (section === null || section === undefined) continue;
+    points.push(...buildTelemetryPoints(section, {
+      vacationMode: options.vacationMode,
+      ts: options.ts,
+      measurement,
+    }));
+  }
+  return require('./influx-line-protocol').pointsToLineProtocol(points);
 }
 
-module.exports = { buildTelemetryPoints, buildInfluxWriteRequest };
+module.exports = { buildTelemetryPoints, buildInfluxLineProtocol };
