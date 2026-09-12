@@ -10,7 +10,9 @@ lib/tesla.ts:344
 
 ## Required change
 
-the returned TeslaVehicleState carries the full parsed vehicle_data response verbatim under a raw field (Record<string,unknown>) so full-fidelity Tesla REST telemetry flows to InfluxDB; every existing typed field maps exactly as before; the requested endpoints string is NOT changed
+the returned TeslaVehicleState carries the full parsed vehicle_data response verbatim under a new optional `raw` field so full-fidelity Tesla REST telemetry flows to InfluxDB; every existing typed field maps exactly as before; the requested endpoints string is NOT changed.
+
+Type `raw` so the whole response assigns with NO cast: declare `raw?: unknown;` on the TeslaVehicleState interface and assign `raw: data` (data is the local VehicleData interface, which has no index signature, so `Record<string,unknown>` would force an `as` cast). Do NOT put a TypeScript `as` cast inside the returned object literal -- a test evaluates that object as plain JS and an `as` would break it. `unknown` needs none.
 
 Behaviour that must NOT change:
 - Every existing typed field maps EXACTLY as it does today: chargePercent =
@@ -28,7 +30,7 @@ Behaviour that must NOT change:
 - `raw` must hold the COMPLETE parsed vehicle_data response verbatim (the whole
   `data` object, including any groups the typed mapping ignores, e.g.
   gui_settings / vehicle_config / extra charge_state fields), not a
-  hand-rebuilt subset.
+  hand-rebuilt subset. Store it by reference (`raw: data`), not a clone.
 
 ## Must contain
 

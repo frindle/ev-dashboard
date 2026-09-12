@@ -2,7 +2,7 @@
 """Reference impl for ev-tesla-rest-capture-all.
 Applies the intended fix to lib/tesla.ts so the gate can prove the verify goes
 green on a correct change, then reverts it. Two edits, single file:
-  1) add `raw?: Record<string, unknown>;` to the TeslaVehicleState interface
+  1) add `raw?: unknown;` to the TeslaVehicleState interface
   2) add `raw: data,` to fetchVehicleState's returned object
 Leaves the endpoints string and every typed mapping untouched.
 """
@@ -21,7 +21,7 @@ s = s.replace(
     iface_anchor
     + "\n  // Full parsed vehicle_data REST response, verbatim, so every field the\n"
     + "  // typed mapping ignores still reaches the cache and /api/metrics/influx.\n"
-    + "  raw?: Record<string, unknown>;\n",
+    + "  raw?: unknown;\n",
     1,
 )
 
