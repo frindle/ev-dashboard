@@ -4,15 +4,65 @@
 // THIS file only; the sidecar wires the actual HTTP POST to InfluxDB separately.
 'use strict';
 
-// TODO(dispatch): flatten the telemetry `state` into InfluxDB points.
-// Return an array of { measurement, fields, timestamp } where `fields` is a FLAT
-// map of dotted-path leaf values (numbers, booleans, non-empty strings only;
-// null/undefined and empty objects/arrays dropped). When opts.vacationMode is
-// true, recursively drop location keys (lat, lon, latitude, longitude, gps,
-// location). ALWAYS drop secret-named keys (token, secret, password) regardless
-// of vacationMode. Do NOT mutate the input. timestamp = opts.ts (ms) when given.
+const DEFAULT_MEASUREMENT = 'ev_telemetry';
+// Secret-named keys (token / secret / password) are ALWAYS dropped, at any depth,
+// regardless of vacationMode -- matched as a case-insensitive substring so that
+// apiToken, secretKey, dbPassword etc. all scrub out.
+const SECRET_KEY_PARTS = ['token', 'secret', 'password'];
+// Location keys recursively dropped when opts.vacationMode is true.
+const LOCATION_KEYS = new Set(['lat', 'lon', 'latitude', 'longitude', 'gps', 'location']);
+
+function isSecretKey(key) {
+  const k = String(key).toLowerCase();
+  return SECRET_KEY_PARTS.some((part) => k.includes(part));
+}
+
+function isLocationKey(key, vacationMode) {
+  if (!vacationMode) return false;
+  return LOCATION_KEYS.has(String(key).toLowerCase());
+}
+
+// Recursively flatten `value` into the flat dotted-path map `out`. Never mutates
+// its input -- it only reads and rebuilds. Dropped: null/undefined, empty strings,
+// non-finite numbers (NaN/Infinity are not valid Influx floats), secret keys, and
+// location keys under vacationMode. Empty objects/arrays simply contribute no leaf.
+function flatten(value, prefix, out, opts) {
+  if (value === null || value === undefined) return;
+  const t = typeof value;
+  if (t === 'number') {
+    if (Number.isFinite(value)) out[prefix] = value;
+    return;
+  }
+  if (t === 'boolean' || t === 'string') {
+    if (value !== '') out[prefix] = value;
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) flatten(value[i], prefix + '.' + i, out, opts);
+    return;
+  }
+  if (t === 'object') {
+    for (const key of Object.keys(value)) {
+      if (isSecretKey(key) || isLocationKey(key, opts.vacationMode)) continue;
+      flatten(value[key], prefix ? prefix + '.' + key : String(key), out, opts);
+    }
+  }
+}
+
 function buildTelemetryPoints(state, opts) {
-  return [];
+  const options = (opts && typeof opts === 'object') ? opts : {};
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return [];
+  const fields = {};
+  flatten(state, '', fields, options);
+  if (Object.keys(fields).length === 0) return [];
+  const point = {
+    measurement: (typeof options.measurement === 'string' && options.measurement !== '')
+      ? options.measurement
+      : DEFAULT_MEASUREMENT,
+    fields,
+  };
+  if (typeof options.ts === 'number') point.timestamp = options.ts;
+  return [point];
 }
 
 module.exports = { buildTelemetryPoints };
