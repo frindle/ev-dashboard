@@ -80,6 +80,9 @@ export interface TeslaVehicleState {
   scheduledDepartureTime?: { hour: number; minute: number; second: number };
   scheduledChargingMode?: number; // 0 Unknown, 1 Off, 2 StartAt, 3 DepartBy
   milesSinceReset?: number;
+  // Full parsed vehicle_data response, verbatim (by reference) -- the REST
+  // poll path stores it here so full-fidelity telemetry reaches InfluxDB.
+  raw?: unknown;
 }
 
 export interface WallConnectorVitals {
@@ -384,6 +387,9 @@ export async function fetchVehicleState(vin: string): Promise<TeslaVehicleState 
     otaAvailableVersion: su.version ?? '',
     otaInstalling: otaStatus === 'installing',
     otaUpdateAvailable: otaStatus !== '',
+    // Full parsed vehicle_data response verbatim (by reference) so the
+    // unmapped groups/fields flow through to InfluxDB untouched.
+    raw: data,
   };
 }
 
