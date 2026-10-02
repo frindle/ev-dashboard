@@ -1327,3 +1327,47 @@ export function formatApptNumber(workOrderId: unknown): string | null {
   if (/^0+$/.test(digits)) return null;
   return '#' + digits.replace(/^0+/, '');
 }
+
+/**
+ * Select the active (in-progress) work order from a commsListDiscussions
+ * array.  Among multiple IN_PROGRESS threads, returns the one with the
+ * latest appointmentDate; items with a missing or unparseable date sort
+ * oldest (via -Infinity).  Returns null when threads is not an array or
+ * no element has workOrderStatus === 'IN_PROGRESS'.
+ */
+export function pickActiveWorkOrder(
+  threads: unknown,
+): { workOrderId: string; workOrderType: string | null; appointmentDate: string | null } | null {
+  if (!Array.isArray(threads)) return null;
+
+  let best: { workOrderId: string; workOrderType: string | null; appointmentDate: string | null } | null = null;
+  let bestDate = -Infinity;
+
+  for (const thread of threads) {
+    if (thread === null || thread === undefined || typeof thread !== 'object') continue;
+
+    const workOrderStatus = (thread as Record<string, unknown>).workOrderStatus;
+    const statusMatch = String(workOrderStatus).toUpperCase() === 'IN_PROGRESS';
+    if (!statusMatch) continue;
+
+    const raw = thread as Record<string, unknown>;
+    const workOrderId = String(raw.workOrderId);
+    const workOrderType = raw.workOrderType == null ? null : String(raw.workOrderType);
+    const appointmentDate = raw.appointmentDate == null ? null : String(raw.appointmentDate);
+
+    let dateVal = -Infinity;
+    if (appointmentDate) {
+      const d = new Date(appointmentDate);
+      if (!isNaN(d.getTime())) {
+        dateVal = d.getTime();
+      }
+    }
+
+    if (dateVal >= bestDate) {
+      bestDate = dateVal;
+      best = { workOrderId, workOrderType, appointmentDate };
+    }
+  }
+
+  return best;
+}
