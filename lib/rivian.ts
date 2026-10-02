@@ -1306,30 +1306,62 @@ export async function fetchRivianWorkOrderTiming(workOrderId: string): Promise<R
  * Returns null unless RIVIAN_SERVICE_MODE is explicitly enabled. Nothing in
  * the app calls this today — see the dormancy note above for what flips it on.
  */
-export async function fetchRivianServiceState(vehicleId?: string): Promise<RivianServiceState | null> {
+export async function fetchRivianServiceState(vehicleId?: string): Promise<RivianServiceSnapshot | null> {
   if (!rivianServiceModeEnabled()) return null;
 
-  const threads = await fetchRivianServiceThreads();
-  // In service iff ANY thread is IN_PROGRESS (SERVICE_CENTER or MOBILE_SERVICE).
-  const active = threads.find((t) => t.workOrderStatus === 'IN_PROGRESS') ?? null;
-  const inService = active !== null;
+  const tokens = readRivianTokens();
+  if (!tokens) return null;
+  if (inBackoffWindow()) return null;
 
-  const lineItems = inService ? await fetchRivianServiceLineItems(vehicleId) : [];
-  const timing = active?.workOrderId ? await fetchRivianWorkOrderTiming(active.workOrderId) : null;
+  const vid = vehicleId ?? tokens.vehicleId;
 
-  const itemsTotal = lineItems.length;
-  const itemsComplete = lineItems.filter((i) => i.isComplete === true).length;
+  try {
+    const threadsData = await gql<{ commsListDiscussions?: RawServiceThread[] | null }>(
+      GET_ASYNC_MESSAGE_THREAD_LIST,
+      {},
+      authHeaders(tokens),
+    );
+    const threads = svcArray<RawServiceThread>(threadsData?.commsListDiscussions);
 
-  return {
-    inService,
-    workOrderId: active?.workOrderId ?? null,
-    appointmentDate: active?.appointmentDate ?? null,
-    threads,
-    lineItems,
-    timing,
-    itemsComplete,
-    itemsTotal,
-  };
+    // Find the active (IN_PROGRESS) work order from raw threads.
+    const active = pickActiveWorkOrder(threads);
+
+    let requests: unknown[] = [];
+    let workOrder: unknown = null;
+
+    if (active) {
+      // Only make line-items and timing calls when there is an active work order.
+      if (vid) {
+        try {
+          const reqData = await gql<{ consumerServiceRequests?: { result?: RawServiceRequest[] | null } | null }>(
+            GET_ACTIVE_REQUESTS,
+            { vehicleId: vid },
+            authHeaders(tokens),
+            VS_GATEWAY,
+          );
+          requests = svcArray<RawServiceRequest>(reqData?.consumerServiceRequests?.result);
+        } catch (e) {
+          console.warn('[rivian] fetchRivianServiceState line-items failed:', String(e).slice(0, 240));
+        }
+      }
+      try {
+        const woData = await gql<{ queryByWorkOrderId?: RawWorkOrderTiming | null }>(
+          QUERY_BY_WORK_ORDER_ID,
+          { workOrderId: active.workOrderId },
+          authHeaders(tokens),
+          VS_GATEWAY,
+        );
+        workOrder = woData?.queryByWorkOrderId ?? null;
+      } catch (e) {
+        console.warn('[rivian] fetchRivianServiceState timing failed:', String(e).slice(0, 240));
+      }
+    }
+
+    return normalizeRivianServiceState({ threads, requests, workOrder });
+  } catch (e) {
+    console.warn('[rivian] fetchRivianServiceState threads call failed:', String(e).slice(0, 240));
+    return null;
+  }
 }
 
 /**
