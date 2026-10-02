@@ -1049,6 +1049,28 @@ export type RivianServiceItemStatus =
   | 'CLOSED_WORK_COMPLETE'
   | string;
 
+/**
+ * Map a raw Rivian service request status string to a user-facing category.
+ *
+ * Coerces with `String(raw ?? '').trim().toUpperCase()` so null, undefined,
+ * numbers, and empty strings all normalise safely.
+ *
+ *   'OPEN_IN_PROGRESS'  -> 'active'
+ *   'CLOSED_WORK_COMPLETE' -> 'done'
+ *   'OPEN_SCHEDULED'    -> 'queued'  (falls through to default)
+ *   any other / unknown  -> 'queued'
+ *
+ * Never throws.
+ */
+export function mapServiceRequestStatus(
+  raw: unknown,
+): 'active' | 'queued' | 'done' {
+  const s = String(raw ?? '').trim().toUpperCase();
+  if (s === 'OPEN_IN_PROGRESS') return 'active';
+  if (s === 'CLOSED_WORK_COMPLETE') return 'done';
+  return 'queued';
+}
+
 export interface RivianServiceThread {
   workOrderId: string | null;
   workOrderType: RivianWorkOrderType | null;
@@ -1284,28 +1306,222 @@ export async function fetchRivianWorkOrderTiming(workOrderId: string): Promise<R
  * Returns null unless RIVIAN_SERVICE_MODE is explicitly enabled. Nothing in
  * the app calls this today — see the dormancy note above for what flips it on.
  */
-export async function fetchRivianServiceState(vehicleId?: string): Promise<RivianServiceState | null> {
+export async function fetchRivianServiceState(vehicleId?: string): Promise<RivianServiceSnapshot | null> {
   if (!rivianServiceModeEnabled()) return null;
 
-  const threads = await fetchRivianServiceThreads();
-  // In service iff ANY thread is IN_PROGRESS (SERVICE_CENTER or MOBILE_SERVICE).
-  const active = threads.find((t) => t.workOrderStatus === 'IN_PROGRESS') ?? null;
-  const inService = active !== null;
+  const tokens = readRivianTokens();
+  if (!tokens) return null;
+  if (inBackoffWindow()) return null;
 
-  const lineItems = inService ? await fetchRivianServiceLineItems(vehicleId) : [];
-  const timing = active?.workOrderId ? await fetchRivianWorkOrderTiming(active.workOrderId) : null;
+  const vid = vehicleId ?? tokens.vehicleId;
 
-  const itemsTotal = lineItems.length;
-  const itemsComplete = lineItems.filter((i) => i.isComplete === true).length;
+  try {
+    const threadsData = await gql<{ commsListDiscussions?: RawServiceThread[] | null }>(
+      GET_ASYNC_MESSAGE_THREAD_LIST,
+      {},
+      authHeaders(tokens),
+    );
+    const threads = svcArray<RawServiceThread>(threadsData?.commsListDiscussions);
+
+    // Find the active (IN_PROGRESS) work order from raw threads.
+    const active = pickActiveWorkOrder(threads);
+
+    let requests: unknown[] = [];
+    let workOrder: unknown = null;
+
+    if (active) {
+      // Only make line-items and timing calls when there is an active work order.
+      if (vid) {
+        try {
+          const reqData = await gql<{ consumerServiceRequests?: { result?: RawServiceRequest[] | null } | null }>(
+            GET_ACTIVE_REQUESTS,
+            { vehicleId: vid },
+            authHeaders(tokens),
+            VS_GATEWAY,
+          );
+          requests = svcArray<RawServiceRequest>(reqData?.consumerServiceRequests?.result);
+        } catch (e) {
+          console.warn('[rivian] fetchRivianServiceState line-items failed:', String(e).slice(0, 240));
+        }
+      }
+      try {
+        const woData = await gql<{ queryByWorkOrderId?: RawWorkOrderTiming | null }>(
+          QUERY_BY_WORK_ORDER_ID,
+          { workOrderId: active.workOrderId },
+          authHeaders(tokens),
+          VS_GATEWAY,
+        );
+        workOrder = woData?.queryByWorkOrderId ?? null;
+      } catch (e) {
+        console.warn('[rivian] fetchRivianServiceState timing failed:', String(e).slice(0, 240));
+      }
+    }
+
+    return normalizeRivianServiceState({ threads, requests, workOrder });
+  } catch (e) {
+    console.warn('[rivian] fetchRivianServiceState threads call failed:', String(e).slice(0, 240));
+    return null;
+  }
+}
+
+/**
+ * Derive the abbreviated appointment label from a Rivian workOrderId.
+ *
+ * Example: 'WO-000002434913' → '#2434913'
+ *
+ * Coerces with String() first (may arrive as a number).  Strips every
+ * non-digit character, then strips leading zeros, prefixes '#'.
+ * Returns null when the input is null/undefined, has no digits, or is
+ * all zeros.
+ */
+export function formatApptNumber(workOrderId: unknown): string | null {
+  if (workOrderId == null) return null;
+  const digits = String(workOrderId).replace(/\D/g, '');
+  if (digits === '') return null;
+  if (/^0+$/.test(digits)) return null;
+  return '#' + digits.replace(/^0+/, '');
+}
+
+/**
+ * Select the active (in-progress) work order from a commsListDiscussions
+ * array.  Among multiple IN_PROGRESS threads, returns the one with the
+ * latest appointmentDate; items with a missing or unparseable date sort
+ * oldest (via -Infinity).  Returns null when threads is not an array or
+ * no element has workOrderStatus === 'IN_PROGRESS'.
+ */
+export function pickActiveWorkOrder(
+  threads: unknown,
+): { workOrderId: string; workOrderType: string | null; appointmentDate: string | null } | null {
+  if (!Array.isArray(threads)) return null;
+
+  let best: { workOrderId: string; workOrderType: string | null; appointmentDate: string | null } | null = null;
+  let bestDate = -Infinity;
+
+  for (const thread of threads) {
+    if (thread === null || thread === undefined || typeof thread !== 'object') continue;
+
+    const workOrderStatus = (thread as Record<string, unknown>).workOrderStatus;
+    const statusMatch = String(workOrderStatus).toUpperCase() === 'IN_PROGRESS';
+    if (!statusMatch) continue;
+
+    const raw = thread as Record<string, unknown>;
+    const workOrderId = String(raw.workOrderId);
+    const workOrderType = raw.workOrderType == null ? null : String(raw.workOrderType);
+    const appointmentDate = raw.appointmentDate == null ? null : String(raw.appointmentDate);
+
+    let dateVal = -Infinity;
+    if (appointmentDate) {
+      const d = new Date(appointmentDate);
+      if (!isNaN(d.getTime())) {
+        dateVal = d.getTime();
+      }
+    }
+
+    if (dateVal >= bestDate) {
+      bestDate = dateVal;
+      best = { workOrderId, workOrderType, appointmentDate };
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Normalized snapshot of Rivian service state, suitable for UI consumption.
+ * Derived from the raw RivianServiceState (threads, lineItems, timing) via
+ * pickActiveWorkOrder, formatApptNumber, and mapServiceRequestStatus.
+ */
+export type RivianServiceSnapshot = {
+  inService: boolean;
+  apptNumber: string | null;
+  workOrderType: string | null;
+  serviceCenterName: string | null;
+  statusText: string | null;
+  requests: { label: string; status: 'active' | 'queued' | 'done' }[];
+  done: number;
+  total: number;
+  completedAt: string | null;
+  dropoffStartIso: string | null;
+  estReady: null;
+  fetchedAt: string;
+};
+
+/**
+ * Normalize a raw Rivian service state into a clean snapshot the UI can
+ * consume directly.  Does NOT throw on malformed inputs.
+ */
+export function normalizeRivianServiceState(input: {
+  threads: unknown;
+  requests: unknown;
+  workOrder: unknown;
+  serviceCenterName?: string | null;
+  statusText?: string | null;
+  now?: Date;
+}): RivianServiceSnapshot {
+  const active = pickActiveWorkOrder(input.threads);
+
+  // completedAt: String(workOrder.completedAt) when workOrder is an object
+  // with a non-null completedAt, else null.
+  let completedAt: string | null = null;
+  if (
+    input.workOrder != null &&
+    typeof input.workOrder === 'object' &&
+    !Array.isArray(input.workOrder)
+  ) {
+    const wo = input.workOrder as Record<string, unknown>;
+    const ca = wo.completedAt;
+    if (ca != null) {
+      completedAt = String(ca);
+    }
+  }
+
+  const inService = active !== null && completedAt === null;
+
+  const apptNumber = active ? formatApptNumber(active.workOrderId) : null;
+  const workOrderType = active?.workOrderType ?? null;
+
+  // Filter requests: only objects whose String(title).trim() is non-empty
+  const rawRequests = Array.isArray(input.requests) ? input.requests : [];
+  const requests: { label: string; status: 'active' | 'queued' | 'done' }[] = [];
+  for (const item of rawRequests) {
+    if (item == null || typeof item !== 'object') continue;
+    const title = String((item as Record<string, unknown>).title ?? '').trim();
+    if (title === '') continue;
+    requests.push({
+      label: title,
+      status: mapServiceRequestStatus((item as Record<string, unknown>).status),
+    });
+  }
+
+  const total = requests.length;
+  const done = requests.filter((r) => r.status === 'done').length;
+
+  // dropoffStartIso from workOrder
+  let dropoffStartIso: string | null = null;
+  if (
+    input.workOrder != null &&
+    typeof input.workOrder === 'object' &&
+    !Array.isArray(input.workOrder)
+  ) {
+    const wo = input.workOrder as Record<string, unknown>;
+    const asa = wo.appointmentStartAtIso;
+    if (asa != null) {
+      dropoffStartIso = String(asa);
+    }
+  }
 
   return {
     inService,
-    workOrderId: active?.workOrderId ?? null,
-    appointmentDate: active?.appointmentDate ?? null,
-    threads,
-    lineItems,
-    timing,
-    itemsComplete,
-    itemsTotal,
+    apptNumber,
+    workOrderType,
+    serviceCenterName: input.serviceCenterName ?? null,
+    statusText: input.statusText ?? null,
+    requests,
+    done,
+    total,
+    completedAt,
+    dropoffStartIso,
+    estReady: null,
+    fetchedAt: (input.now ?? new Date()).toISOString(),
   };
 }
