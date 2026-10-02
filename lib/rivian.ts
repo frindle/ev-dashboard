@@ -1393,3 +1393,103 @@ export function pickActiveWorkOrder(
 
   return best;
 }
+
+/**
+ * Normalized snapshot of Rivian service state, suitable for UI consumption.
+ * Derived from the raw RivianServiceState (threads, lineItems, timing) via
+ * pickActiveWorkOrder, formatApptNumber, and mapServiceRequestStatus.
+ */
+export type RivianServiceSnapshot = {
+  inService: boolean;
+  apptNumber: string | null;
+  workOrderType: string | null;
+  serviceCenterName: string | null;
+  statusText: string | null;
+  requests: { label: string; status: 'active' | 'queued' | 'done' }[];
+  done: number;
+  total: number;
+  completedAt: string | null;
+  dropoffStartIso: string | null;
+  estReady: null;
+  fetchedAt: string;
+};
+
+/**
+ * Normalize a raw Rivian service state into a clean snapshot the UI can
+ * consume directly.  Does NOT throw on malformed inputs.
+ */
+export function normalizeRivianServiceState(input: {
+  threads: unknown;
+  requests: unknown;
+  workOrder: unknown;
+  serviceCenterName?: string | null;
+  statusText?: string | null;
+  now?: Date;
+}): RivianServiceSnapshot {
+  const active = pickActiveWorkOrder(input.threads);
+
+  // completedAt: String(workOrder.completedAt) when workOrder is an object
+  // with a non-null completedAt, else null.
+  let completedAt: string | null = null;
+  if (
+    input.workOrder != null &&
+    typeof input.workOrder === 'object' &&
+    !Array.isArray(input.workOrder)
+  ) {
+    const wo = input.workOrder as Record<string, unknown>;
+    const ca = wo.completedAt;
+    if (ca != null) {
+      completedAt = String(ca);
+    }
+  }
+
+  const inService = active !== null && completedAt === null;
+
+  const apptNumber = active ? formatApptNumber(active.workOrderId) : null;
+  const workOrderType = active?.workOrderType ?? null;
+
+  // Filter requests: only objects whose String(title).trim() is non-empty
+  const rawRequests = Array.isArray(input.requests) ? input.requests : [];
+  const requests: { label: string; status: 'active' | 'queued' | 'done' }[] = [];
+  for (const item of rawRequests) {
+    if (item == null || typeof item !== 'object') continue;
+    const title = String((item as Record<string, unknown>).title ?? '').trim();
+    if (title === '') continue;
+    requests.push({
+      label: title,
+      status: mapServiceRequestStatus((item as Record<string, unknown>).status),
+    });
+  }
+
+  const total = requests.length;
+  const done = requests.filter((r) => r.status === 'done').length;
+
+  // dropoffStartIso from workOrder
+  let dropoffStartIso: string | null = null;
+  if (
+    input.workOrder != null &&
+    typeof input.workOrder === 'object' &&
+    !Array.isArray(input.workOrder)
+  ) {
+    const wo = input.workOrder as Record<string, unknown>;
+    const asa = wo.appointmentStartAtIso;
+    if (asa != null) {
+      dropoffStartIso = String(asa);
+    }
+  }
+
+  return {
+    inService,
+    apptNumber,
+    workOrderType,
+    serviceCenterName: input.serviceCenterName ?? null,
+    statusText: input.statusText ?? null,
+    requests,
+    done,
+    total,
+    completedAt,
+    dropoffStartIso,
+    estReady: null,
+    fetchedAt: (input.now ?? new Date()).toISOString(),
+  };
+}
