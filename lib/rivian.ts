@@ -1049,6 +1049,28 @@ export type RivianServiceItemStatus =
   | 'CLOSED_WORK_COMPLETE'
   | string;
 
+/**
+ * Map a raw Rivian service request status string to a user-facing category.
+ *
+ * Coerces with `String(raw ?? '').trim().toUpperCase()` so null, undefined,
+ * numbers, and empty strings all normalise safely.
+ *
+ *   'OPEN_IN_PROGRESS'  -> 'active'
+ *   'CLOSED_WORK_COMPLETE' -> 'done'
+ *   'OPEN_SCHEDULED'    -> 'queued'  (falls through to default)
+ *   any other / unknown  -> 'queued'
+ *
+ * Never throws.
+ */
+export function mapServiceRequestStatus(
+  raw: unknown,
+): 'active' | 'queued' | 'done' {
+  const s = String(raw ?? '').trim().toUpperCase();
+  if (s === 'OPEN_IN_PROGRESS') return 'active';
+  if (s === 'CLOSED_WORK_COMPLETE') return 'done';
+  return 'queued';
+}
+
 export interface RivianServiceThread {
   workOrderId: string | null;
   workOrderType: RivianWorkOrderType | null;
