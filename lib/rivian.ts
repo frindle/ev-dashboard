@@ -1309,3 +1309,21 @@ export async function fetchRivianServiceState(vehicleId?: string): Promise<Rivia
     itemsTotal,
   };
 }
+
+/**
+ * Derive the abbreviated appointment label from a Rivian workOrderId.
+ *
+ * Example: 'WO-000002434913' → '#2434913'
+ *
+ * Coerces with String() first (may arrive as a number).  Strips every
+ * non-digit character, then strips leading zeros, prefixes '#'.
+ * Returns null when the input is null/undefined, has no digits, or is
+ * all zeros.
+ */
+export function formatApptNumber(workOrderId: unknown): string | null {
+  if (workOrderId == null) return null;
+  const digits = String(workOrderId).replace(/\D/g, '');
+  if (digits === '') return null;
+  if (/^0+$/.test(digits)) return null;
+  return '#' + digits.replace(/^0+/, '');
+}
