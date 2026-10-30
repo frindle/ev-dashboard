@@ -2,12 +2,30 @@
 // own. The kiosk's 30s poll lives inside the boundary's children, so a
 // boundary that stays in the fallback forever also stops polling forever.
 //
-// Drives the real class (real react Component) through the same lifecycle
-// React uses: getDerivedStateFromError -> componentDidCatch -> render, with
-// node:test's mocked setTimeout/clearTimeout.
+// Drives the real class through the same lifecycle React uses:
+// getDerivedStateFromError -> componentDidCatch -> render, with node:test's
+// mocked setTimeout/clearTimeout. `react` is resolved to a minimal in-memory
+// Component base (setState is replaced per instance below), so the test does
+// not need node_modules.
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { DashboardErrorBoundary } from './DashboardErrorBoundary.ts';
+import * as nodeModule from 'node:module';
+
+const REACT_STUB = [
+  'export class Component { constructor(props) { this.props = props; } setState() { throw new Error("setState not stubbed"); } }',
+  'export default { Component };',
+].join('\n');
+(nodeModule as any).registerHooks({
+  resolve(specifier: string, context: any, nextResolve: any) {
+    if (specifier === 'react') return { url: 'stub:react', shortCircuit: true };
+    return nextResolve(specifier, context);
+  },
+  load(url: string, context: any, nextLoad: any) {
+    if (url === 'stub:react') return { format: 'module', source: REACT_STUB, shortCircuit: true };
+    return nextLoad(url, context);
+  },
+});
+const { DashboardErrorBoundary } = await import('./DashboardErrorBoundary.ts');
 
 const RESET_MS = 30_000;
 
