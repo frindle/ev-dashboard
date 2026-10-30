@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef, Component, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { DashboardErrorBoundary } from '@/components/DashboardErrorBoundary';
 import { circuitStatus } from '@/lib/circuitStatus';
 import { shouldShowFeedError } from '@/lib/feedFreshness';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
@@ -37,33 +38,20 @@ function reportClientError(source: string, message: string, stack?: string) {
   }).catch(() => null);
 }
 
-class DashboardErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
-  constructor(props: { children: ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-  componentDidCatch(error: Error, info: { componentStack?: string | null }) {
-    reportClientError('client.render', error.message, error.stack ?? info.componentStack ?? undefined);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{
-          width: 1180, height: 820, display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', gap: 10,
-          background: '#0e1216', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif",
-        }}>
-          <span style={{ fontSize: 20, fontWeight: 600 }}>Dashboard hit an error</span>
-          <span style={{ fontSize: 13, color: '#a4afba' }}>It&apos;s been logged. This screen will keep retrying on the next refresh.</span>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
+function reportRenderError(error: Error, info: { componentStack?: string | null }) {
+  reportClientError('client.render', error.message, error.stack ?? info.componentStack ?? undefined);
 }
+
+const RENDER_ERROR_FALLBACK = (
+  <div style={{
+    width: 1180, height: 820, display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center', gap: 10,
+    background: '#0e1216', color: '#e8edf2', fontFamily: "'Space Grotesk',sans-serif",
+  }}>
+    <span style={{ fontSize: 20, fontWeight: 600 }}>Dashboard hit an error</span>
+    <span style={{ fontSize: 13, color: '#a4afba' }}>It&apos;s been logged. Retrying automatically in 30 seconds.</span>
+  </div>
+);
 
 function fmtEta(min: number): string {
   if (min <= 0) return 'AT TARGET';
@@ -476,7 +464,7 @@ function CameraModal({ streamUrl, onClose }: {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
   return (
-    <DashboardErrorBoundary>
+    <DashboardErrorBoundary fallback={RENDER_ERROR_FALLBACK} onError={reportRenderError}>
       <DashboardInner />
     </DashboardErrorBoundary>
   );
