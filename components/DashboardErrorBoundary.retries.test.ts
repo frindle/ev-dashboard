@@ -5,6 +5,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeModule from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const REACT_STUB = [
   'export class Component { constructor(props) { this.props = props; } setState() { throw new Error("setState not stubbed"); } }',
@@ -84,3 +85,8 @@ test('a static ReactNode fallback is still rendered as-is', () => withTimers(() 
   throwInChild(b);
   assert.equal(b.render(), 'STATIC');
 }));
+
+test('the props type advertises the function fallback (typecheck contract for the pages)', () => {
+  const src = readFileSync(new URL('./DashboardErrorBoundary.ts', import.meta.url), 'utf8');
+  assert.match(src, /fallback:\s*ReactNode\s*\|\s*\(\(retries: number\) => ReactNode\)/);
+});
