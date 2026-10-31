@@ -13,7 +13,7 @@ export const RESET_AFTER_MS = 30_000;
 
 export type DashboardErrorBoundaryProps = {
   children?: ReactNode;
-  fallback: ReactNode;
+  fallback: ReactNode | ((retries: number) => ReactNode);
   onError?: (error: Error, info: ErrorInfo) => void;
 };
 
@@ -22,6 +22,7 @@ type State = { hasError: boolean };
 export class DashboardErrorBoundary extends Component<DashboardErrorBoundaryProps, State> {
   state: State = { hasError: false };
   private resetTimer: ReturnType<typeof setTimeout> | null = null;
+  private retries = 0;
 
   static getDerivedStateFromError(): State {
     return { hasError: true };
@@ -32,6 +33,7 @@ export class DashboardErrorBoundary extends Component<DashboardErrorBoundaryProp
     if (this.resetTimer === null) {
       this.resetTimer = setTimeout(() => {
         this.resetTimer = null;
+        this.retries += 1;
         this.setState({ hasError: false });
       }, RESET_AFTER_MS);
     }
@@ -45,7 +47,9 @@ export class DashboardErrorBoundary extends Component<DashboardErrorBoundaryProp
   }
 
   render() {
-    return this.state.hasError ? this.props.fallback : this.props.children;
+    if (!this.state.hasError) return this.props.children;
+    const fallback = this.props.fallback;
+    return typeof fallback === "function" ? fallback(this.retries) : fallback;
   }
 }
 
