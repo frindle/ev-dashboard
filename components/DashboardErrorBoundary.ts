@@ -9,6 +9,8 @@
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
+export const RESET_AFTER_MS = 30_000;
+
 export type DashboardErrorBoundaryProps = {
   children?: ReactNode;
   fallback: ReactNode;
@@ -19,6 +21,7 @@ type State = { hasError: boolean };
 
 export class DashboardErrorBoundary extends Component<DashboardErrorBoundaryProps, State> {
   state: State = { hasError: false };
+  private resetTimer: ReturnType<typeof setTimeout> | null = null;
 
   static getDerivedStateFromError(): State {
     return { hasError: true };
@@ -26,6 +29,19 @@ export class DashboardErrorBoundary extends Component<DashboardErrorBoundaryProp
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     this.props.onError?.(error, info);
+    if (this.resetTimer === null) {
+      this.resetTimer = setTimeout(() => {
+        this.resetTimer = null;
+        this.setState({ hasError: false });
+      }, RESET_AFTER_MS);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.resetTimer !== null) {
+      clearTimeout(this.resetTimer);
+      this.resetTimer = null;
+    }
   }
 
   render() {
