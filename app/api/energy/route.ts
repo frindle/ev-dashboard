@@ -39,7 +39,8 @@ export interface EnergyVehicleSummary {
   // number to cover every night. See lib/chargePlan.ts for the backtest.
   // null until the car has sessions on two different days.
   dailyNeedKwh: number | null;
-  // Live kWh below the charge limit (cached state); null if SoC/limit unknown.
+  // Wall kWh to refill the live gap below the charge limit (cached state,
+  // ~10% charging loss included); null if SoC/limit unknown.
   gapKwh: number | null;
   // Tonight's 8h plan: daily need plus half of any gap beyond it, in 2A
   // steps (min 6A Rivian / 5A Tesla, max 48A). null when dailyNeedKwh is.

@@ -49,9 +49,9 @@ test('ampsFor: 2A steps rounded up, clamped', () => {
 test('tonightPlan: need plus half the gap beyond it; gap unknown -> need only', () => {
   const base = { dailyKwh: 17.7, packKwh: 135, minAmps: 6, maxAmps: 48 };
   const p = tonightPlan({ ...base, socPct: 48.6, limitPct: 70 });
-  assert.ok(Math.abs(p.gapKwh! - 28.89) < 0.01);
-  assert.ok(Math.abs(p.tonightKwh - (17.7 + (28.89 - 17.7) / 2)) < 0.01);
-  assert.equal(p.tonightAmps, 14);   // 23.3 kWh / 1.92 = 12.1A -> next 2A step
+  assert.ok(Math.abs(p.gapKwh! - 28.89 / 0.9) < 0.01);              // pack kWh -> wall kWh
+  assert.ok(Math.abs(p.tonightKwh - (17.7 + (28.89 / 0.9 - 17.7) / 2)) < 0.01);
+  assert.equal(p.tonightAmps, 14);   // 24.9 kWh / 1.92 = 13.0A -> next 2A step
   const full = tonightPlan({ ...base, socPct: 70, limitPct: 70 });
   assert.equal(full.gapKwh, 0);
   assert.equal(full.tonightKwh, 17.7);

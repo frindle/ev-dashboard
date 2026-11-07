@@ -27,6 +27,9 @@ export const CATCH_UP_NIGHTS = 2;
 export const MAX_SPREAD_DAYS = 7;
 // A session that starts before 06:00 local is the previous evening's charge.
 export const USE_DAY_SHIFT_HOURS = 6;
+// Daily use comes from wall-side kWh, the SoC gap is pack-side. L2 charging
+// loses ~10%, so the gap is scaled up to the wall energy that refills it.
+export const CHARGE_EFFICIENCY = 0.9;
 
 const DAY_MS = 86_400_000;
 
@@ -95,7 +98,7 @@ export interface TonightInput {
 }
 
 export interface TonightPlan {
-  gapKwh: number | null;   // kWh below the charge limit right now; null if SoC/limit unknown
+  gapKwh: number | null;   // wall kWh to refill the gap below the charge limit; null if SoC/limit unknown
   tonightKwh: number;
   tonightAmps: number;
 }
@@ -105,7 +108,7 @@ export function tonightPlan(p: TonightInput): TonightPlan {
   const limit = p.limitPct;
   const known = typeof soc === 'number' && typeof limit === 'number' && Number.isFinite(soc) && Number.isFinite(limit)
     && soc > 0 && limit > 0;
-  const gapKwh = known ? Math.max(0, ((limit! - soc!) / 100) * p.packKwh) : null;
+  const gapKwh = known ? Math.max(0, ((limit! - soc!) / 100) * p.packKwh) / CHARGE_EFFICIENCY : null;
   const tonightKwh = p.dailyKwh + (gapKwh === null ? 0 : Math.max(0, gapKwh - p.dailyKwh) / CATCH_UP_NIGHTS);
   return { gapKwh, tonightKwh, tonightAmps: ampsFor(tonightKwh, p.minAmps, p.maxAmps) };
 }
