@@ -17,7 +17,8 @@ import { join } from 'path';
 import { readConfig } from '@/lib/config';
 import { readChargeHistory } from '@/lib/chargeHistory';
 import { vehicleIdResolver } from '@/lib/chargeSessionInflux';
-import { ewmaDailyKwh, tonightPlan, type TonightPlan } from '@/lib/chargePlan';
+import { needEstimate, tonightPlan, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
+import { getWorkDays } from '@/lib/shiftCalendar';
 import { overridePlan, type OverridePlan } from '@/lib/chargeOverride';
 import { readOverride, writeOverride, type StoredOverride } from '@/lib/rivianOverrideStore';
 import { decideAmps, EV_WINDOW, managedIndex, scheduleWithAmps, type AmpsDecision } from '@/lib/rivianSchedule';
@@ -31,7 +32,8 @@ const RUN_INTERVAL_MS = 15 * 60_000;
 
 export interface RivianChargeStatus {
   atMs: number;
-  dailyNeedKwh: number | null;
+  dailyNeedKwh: number | null;   // the plan's need (work-day raise included)
+  need: NeedEstimate | null;
   daily: TonightPlan | null;
   override: StoredOverride | null;
   overridePlan: OverridePlan | null;
@@ -70,15 +72,17 @@ async function maybeNudge(o: StoredOverride | null, plan: OverridePlan | null): 
 
 async function runOnce(now: number): Promise<RivianChargeStatus> {
   const status: RivianChargeStatus = {
-    atMs: now, dailyNeedKwh: null, daily: null, override: null, overridePlan: null,
+    atMs: now, dailyNeedKwh: null, need: null, daily: null, override: null, overridePlan: null,
     controlEnabled: process.env.RIVIAN_SCHEDULE_CONTROL === '1', car: null, decision: null, wrote: null, error: null,
   };
   try {
     const idFor = vehicleIdResolver(readConfig());
-    const need = ewmaDailyKwh((await readChargeHistory()).filter((r) => idFor(r) === 'rivian'));
+    const est = needEstimate((await readChargeHistory()).filter((r) => idFor(r) === 'rivian'), await getWorkDays(now), now);
+    const need = est?.plannedKwh ?? null;
     const st = await readCachedRivianState();
     const common = { socPct: st?.chargePercent, limitPct: st?.chargeLimit, packKwh: PACK_KWH, minAmps: MIN_AMPS, maxAmps: MAX_AMPS };
     status.dailyNeedKwh = need;
+    status.need = est;
     status.daily = need === null ? null : tonightPlan({ ...common, dailyKwh: need });
     status.override = await readOverride(now);
     status.overridePlan = status.override

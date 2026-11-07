@@ -14,7 +14,8 @@ import {
   type VehicleId,
 } from '@/lib/rates';
 import { GAS_PRICE_LABEL, fetchGasPriceUsdPerGallon } from '@/lib/gasPrice';
-import { ewmaDailyKwh, tonightPlan } from '@/lib/chargePlan';
+import { needEstimate, tonightPlan } from '@/lib/chargePlan';
+import { getWorkDays } from '@/lib/shiftCalendar';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,11 +40,19 @@ export interface EnergyVehicleSummary {
   // number to cover every night. See lib/chargePlan.ts for the backtest.
   // null until the car has sessions on two different days.
   dailyNeedKwh: number | null;
+  // What tonight's plan covers: dailyNeedKwh, raised to the recent work-day
+  // rate when the coming day is a shift on the work calendar (Rivian only;
+  // SHIFTS_ICS_URL). Never below dailyNeedKwh.
+  plannedNeedKwh: number | null;
+  nextDayWork: boolean | null;   // null without a calendar
+  workKwh: number | null;        // recent kWh/day on work days / off days
+  offKwh: number | null;
   // Wall kWh to refill the live gap below the charge limit (cached state,
   // ~10% charging loss included); null if SoC/limit unknown.
   gapKwh: number | null;
   // Tonight's 8h plan: daily need plus half of any gap beyond it, in 2A
-  // steps (min 6A Rivian / 5A Tesla, max 48A). null when dailyNeedKwh is.
+  // steps (min 6A Rivian / 5A Tesla, max 48A), from plannedNeedKwh. null
+  // when dailyNeedKwh is.
   tonightKwh: number | null;
   tonightAmps: number | null;
 }
@@ -194,10 +203,13 @@ export async function GET() {
   }
 
   const round2 = (x: number | null) => (x === null ? null : Math.round(x * 100) / 100);
+  // The shift calendar is the Rivian's: the backtest that chose it was the
+  // Rivian's history (lib/chargePlan.ts).
+  const workDays = await getWorkDays();
   const vehicles: EnergyVehicleSummary[] = (['rivian', 'tesla'] as const).map(id => {
-    const need = ewmaDailyKwh(rows.filter(r => idFor(r) === id));
-    const plan = need === null ? null : tonightPlan({
-      dailyKwh: need,
+    const est = needEstimate(rows.filter(r => idFor(r) === id), id === 'rivian' ? workDays : null, nowMs);
+    const plan = est === null ? null : tonightPlan({
+      dailyKwh: est.plannedKwh,
       socPct: stateFor[id]?.chargePercent,
       limitPct: stateFor[id]?.chargeLimit,
       packKwh: COMPARABLES[id].packKwh,
@@ -212,7 +224,11 @@ export async function GET() {
       mpg: COMPARABLES[id].mpg,
       miPerKwh: round2(effFor[id]),
       avgDailyKwh6mo: avgDailyKwh6moFor[id],
-      dailyNeedKwh: round2(need),
+      dailyNeedKwh: round2(est?.ewmaKwh ?? null),
+      plannedNeedKwh: round2(est?.plannedKwh ?? null),
+      nextDayWork: est?.nextDayWork ?? null,
+      workKwh: round2(est?.rates?.workKwh ?? null),
+      offKwh: round2(est?.rates?.offKwh ?? null),
       gapKwh: round2(plan?.gapKwh ?? null),
       tonightKwh: round2(plan?.tonightKwh ?? null),
       tonightAmps: plan?.tonightAmps ?? null,

@@ -16,11 +16,21 @@
 //        tonight = need + max(0, gap - need) / CATCH_UP_NIGHTS
 //    With 2 nights that cut short mornings to ~1% at an average of 13.4A
 //    (p90 18A, max 24A) for the Rivian.
+//  - Work days (shift calendar, shiftCalendar.ts) only ever raise the need:
+//        planned = max(EWMA, recent kWh/day for tomorrow's kind of day)
+//    Work/off rates come from a least-squares fit of each session's kWh on
+//    the work and off days it covers, weighted with a 30-day half-life.
+//    Since Sep 2026 that cut Rivian nights >5 kWh short from 11% to 5%, for
+//    ~1.5 kWh/night more on average. Using the rates both ways (also cutting
+//    before off days) tied the EWMA on error and left more short nights.
 //
 // Pure functions, no imports, so node:test can load this file directly.
 
 export const CHARGE_VOLTS = 240;
 export const CHARGE_WINDOW_HOURS = 8;
+export const CHARGE_WINDOW_END_HOUR = 8;   // EV rate window is 00:00-08:00
+export const WORK_RATE_HALF_LIFE_DAYS = 30;
+export const MIN_DAYS_PER_KIND = 5;
 export const KWH_PER_AMP = (CHARGE_VOLTS * CHARGE_WINDOW_HOURS) / 1000; // 1.92 kWh per amp over 8h
 export const EWMA_HALF_LIFE_DAYS = 7;
 export const CATCH_UP_NIGHTS = 2;
@@ -43,8 +53,19 @@ export interface PlanSession {
 export function useDayNumber(startedAt: string): number | null {
   const t = Date.parse(startedAt);
   if (!Number.isFinite(t)) return null;
-  const d = new Date(t - USE_DAY_SHIFT_HOURS * 3_600_000);
+  return localDayNumber(t - USE_DAY_SHIFT_HOURS * 3_600_000);
+}
+
+// Local (process TZ) calendar date of ms, as days since 1970-01-01.
+export function localDayNumber(ms: number): number {
+  const d = new Date(ms);
   return Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY_MS);
+}
+
+// The day the coming overnight charge is for: the 00:00-08:00 window that
+// ends today serves today until 08:00, tonight's serves tomorrow after that.
+export function nextUseDay(nowMs: number): number {
+  return localDayNumber(nowMs + (24 - CHARGE_WINDOW_END_HOUR) * 3_600_000);
 }
 
 // Daily use series from the first session's day through the last session's
@@ -80,6 +101,63 @@ export function ewmaDailyKwh(sessions: PlanSession[], halfLifeDays = EWMA_HALF_L
   let m = series.use[1];
   for (let i = 2; i < series.use.length; i++) m = alpha * series.use[i] + (1 - alpha) * m;
   return m;
+}
+
+export interface WorkOffRates {
+  workKwh: number;   // kWh/day on work days
+  offKwh: number;    // kWh/day on off days
+}
+
+// Weighted least squares: session kWh ~ work * (work days covered) + off *
+// (off days covered), spans as in dailyUseSeries (the first session, with
+// nothing before it, is skipped). null without MIN_DAYS_PER_KIND of each, or
+// when a rate comes out non-positive.
+export function workOffRates(
+  sessions: PlanSession[], workDays: Set<number>, nowDay: number, halfLifeDays = WORK_RATE_HALF_LIFE_DAYS,
+): WorkOffRates | null {
+  const byDay = new Map<number, number>();
+  for (const s of sessions) {
+    const day = s ? useDayNumber(s.startedAt) : null;
+    const kwh = s && typeof s.energyKwh === 'number' ? s.energyKwh : NaN;
+    if (day === null || !Number.isFinite(kwh) || kwh < 0) continue;
+    byDay.set(day, (byDay.get(day) ?? 0) + kwh);
+  }
+  const days = [...byDay.keys()].sort((a, b) => a - b);
+  let sww = 0, swo = 0, soo = 0, swk = 0, sok = 0, nWork = 0, nOff = 0;
+  for (let i = 1; i < days.length; i++) {
+    const day = days[i];
+    let w = 0, o = 0;
+    for (let d = Math.max(days[i - 1] + 1, day - (MAX_SPREAD_DAYS - 1)); d <= day; d++) {
+      if (workDays.has(d)) w++; else o++;
+    }
+    const k = byDay.get(day)!;
+    const wt = 0.5 ** (Math.max(0, nowDay - day) / halfLifeDays);
+    sww += wt * w * w; swo += wt * w * o; soo += wt * o * o; swk += wt * w * k; sok += wt * o * k;
+    nWork += w; nOff += o;
+  }
+  const det = sww * soo - swo * swo;
+  if (nWork < MIN_DAYS_PER_KIND || nOff < MIN_DAYS_PER_KIND || !(det > 0)) return null;
+  const workKwh = (swk * soo - sok * swo) / det;
+  const offKwh = (sok * sww - swk * swo) / det;
+  return workKwh > 0 && offKwh > 0 ? { workKwh, offKwh } : null;
+}
+
+export interface NeedEstimate {
+  ewmaKwh: number;
+  rates: WorkOffRates | null;
+  nextDayWork: boolean | null;   // null without a calendar
+  plannedKwh: number;            // what tonight's plan uses
+}
+
+// null until ewmaDailyKwh has enough history. workDays null = no calendar.
+export function needEstimate(sessions: PlanSession[], workDays: Set<number> | null, nowMs: number): NeedEstimate | null {
+  const ewmaKwh = ewmaDailyKwh(sessions);
+  if (ewmaKwh === null) return null;
+  if (!workDays) return { ewmaKwh, rates: null, nextDayWork: null, plannedKwh: ewmaKwh };
+  const rates = workOffRates(sessions, workDays, localDayNumber(nowMs));
+  const nextDayWork = workDays.has(nextUseDay(nowMs));
+  const plannedKwh = rates ? Math.max(ewmaKwh, nextDayWork ? rates.workKwh : rates.offKwh) : ewmaKwh;
+  return { ewmaKwh, rates, nextDayWork, plannedKwh };
 }
 
 // Amps (2A steps, rounded up) that add `kwh` in the 8h window, clamped.

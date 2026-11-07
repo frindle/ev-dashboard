@@ -1,7 +1,9 @@
 // Run: TZ=America/Los_Angeles node --experimental-strip-types --test lib/chargePlan.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ampsFor, dailyUseSeries, ewmaDailyKwh, KWH_PER_AMP, tonightPlan, useDayNumber } from './chargePlan.ts';
+import {
+  ampsFor, dailyUseSeries, ewmaDailyKwh, KWH_PER_AMP, localDayNumber, needEstimate, nextUseDay, tonightPlan, useDayNumber, workOffRates,
+} from './chargePlan.ts';
 
 const day = (iso: string) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86_400_000);
 // 23:00 local (PST, UTC-8) on the given date
@@ -62,4 +64,70 @@ test('tonightPlan: need plus half the gap beyond it; gap unknown -> need only', 
     assert.equal(u.tonightKwh, 17.7);
   }
   assert.equal(tonightPlan({ dailyKwh: 2, packKwh: 82, minAmps: 5, maxAmps: 48, socPct: 79, limitPct: 80 }).tonightAmps, 5);
+});
+
+test('nextUseDay: the day the coming 00:00-08:00 charge is for', () => {
+  assert.equal(nextUseDay(Date.parse('2026-11-09T22:00:00-08:00')), day('2026-11-10'));   // tonight -> tomorrow
+  assert.equal(nextUseDay(Date.parse('2026-11-10T03:00:00-08:00')), day('2026-11-10'));   // window running -> today
+  assert.equal(nextUseDay(Date.parse('2026-11-10T07:59:00-08:00')), day('2026-11-10'));
+  assert.equal(nextUseDay(Date.parse('2026-11-10T08:00:00-08:00')), day('2026-11-11'));   // window over -> tomorrow
+  assert.equal(localDayNumber(Date.parse('2026-11-10T23:59:00-08:00')), day('2026-11-10'));
+});
+
+// Charging every night, using 20 kWh on work days and 12 on off days; work on
+// Mon/Tue/Thu (Nov 2026: the 2nd is a Monday).
+function shiftMonth() {
+  const work = new Set<number>();
+  const sessions = [night('2026-10-31', 15)];
+  for (let i = 1; i <= 28; i++) {
+    const date = `2026-11-${String(i).padStart(2, '0')}`;
+    const isWork = [1, 2, 4].includes(new Date(Date.parse(date + 'T12:00:00-08:00')).getDay());
+    if (isWork) work.add(day(date));
+    sessions.push(night(date, isWork ? 20 : 12));
+  }
+  return { work, sessions };
+}
+
+test('workOffRates: recovers the two rates, also from sessions every few days', () => {
+  const { work, sessions } = shiftMonth();
+  const r = workOffRates(sessions, work, day('2026-11-29'))!;
+  assert.ok(Math.abs(r.workKwh - 20) < 1e-9 && Math.abs(r.offKwh - 12) < 1e-9, JSON.stringify(r));
+  // The same driving, charged only on Sundays and Wednesdays: lumps spread over 3-4 days
+  const lumps = [night('2026-10-31', 15)];
+  let acc = 0;
+  for (let i = 1; i <= 28; i++) {
+    const date = `2026-11-${String(i).padStart(2, '0')}`;
+    acc += work.has(day(date)) ? 20 : 12;
+    const dow = new Date(Date.parse(date + 'T12:00:00-08:00')).getDay();
+    if (dow === 0 || dow === 3) { lumps.push(night(date, acc)); acc = 0; }
+  }
+  const l = workOffRates(lumps, work, day('2026-11-29'))!;
+  assert.ok(Math.abs(l.workKwh - 20) < 1e-9 && Math.abs(l.offKwh - 12) < 1e-9, JSON.stringify(l));
+});
+
+test('workOffRates: null without enough of each kind of day', () => {
+  const { sessions } = shiftMonth();
+  assert.equal(workOffRates(sessions, new Set(), day('2026-11-29')), null);                       // no work days
+  const all = new Set(Array.from({ length: 40 }, (_, i) => day('2026-10-25') + i));
+  assert.equal(workOffRates(sessions, all, day('2026-11-29')), null);                             // no off days
+  assert.equal(workOffRates(sessions.slice(0, 3), new Set([day('2026-11-02')]), day('2026-11-03')), null);
+});
+
+test('needEstimate: raises to the work rate before a work day, never lowers', () => {
+  const { work, sessions } = shiftMonth();
+  const ewma = ewmaDailyKwh(sessions)!;
+  assert.ok(ewma > 12 && ewma < 20, String(ewma));
+  // Sun Nov 29 evening: Mon the 30th is a work day (add it to the calendar)
+  work.add(day('2026-11-30'));
+  const before = needEstimate(sessions, work, Date.parse('2026-11-29T21:00:00-08:00'))!;
+  assert.equal(before.nextDayWork, true);
+  assert.ok(Math.abs(before.plannedKwh - 20) < 1e-6, JSON.stringify(before));
+  // Tue Dec 1 is off: stays at the EWMA, not the lower off rate
+  const off = needEstimate(sessions, work, Date.parse('2026-11-30T21:00:00-08:00'))!;
+  assert.equal(off.nextDayWork, false);
+  assert.equal(off.plannedKwh, ewma);
+  // No calendar -> EWMA, no rates
+  assert.deepEqual(needEstimate(sessions, null, Date.parse('2026-11-29T21:00:00-08:00')),
+    { ewmaKwh: ewma, rates: null, nextDayWork: null, plannedKwh: ewma });
+  assert.equal(needEstimate([night('2026-11-01', 40)], work, Date.now()), null);
 });
