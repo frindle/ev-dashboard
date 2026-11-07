@@ -14,6 +14,7 @@ import {
   type VehicleId,
 } from '@/lib/rates';
 import { GAS_PRICE_LABEL, fetchGasPriceUsdPerGallon } from '@/lib/gasPrice';
+import { ewmaDailyKwh, tonightPlan } from '@/lib/chargePlan';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +34,23 @@ export interface EnergyVehicleSummary {
   // weeks of data would read at ~1/8th its real daily average until the
   // window fills up. null only when there's no charge history at all yet.
   avgDailyKwh6mo: number | null;
+  // What the car uses per day now: EWMA (7-day half-life) of daily use, with
+  // each session spread over the days since the previous one. This is the
+  // number to cover every night. See lib/chargePlan.ts for the backtest.
+  // null until the car has sessions on two different days.
+  dailyNeedKwh: number | null;
+  // Live kWh below the charge limit (cached state); null if SoC/limit unknown.
+  gapKwh: number | null;
+  // Tonight's 8h plan: daily need plus half of any gap beyond it, in 2A
+  // steps (min 6A Rivian / 5A Tesla, max 48A). null when dailyNeedKwh is.
+  tonightKwh: number | null;
+  tonightAmps: number | null;
 }
+
+// Charger-current bounds for tonightAmps. 5A is the Tesla's lowest setting;
+// 6A is the lowest J1772 current. 48A is the Wall Connector's maximum.
+const MIN_AMPS: Record<VehicleId, number> = { rivian: 6, tesla: 5 };
+const MAX_AMPS = 48;
 
 export interface EnergySessionSummary {
   vehicleName: string;
@@ -83,20 +100,26 @@ function localDateStr(d: Date): string {
  *     capacity in (1) understates it by a similar amount, so the two roughly
  *     cancel — but neither is modelled on purpose.
  */
-async function ratedMiPerKwh(cacheFile: string, packKwh: number): Promise<number | null> {
+interface CachedState { rangeMi?: number; chargePercent?: number; chargeLimit?: number }
+
+async function readCachedState(cacheFile: string): Promise<CachedState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, cacheFile);
   if (!existsSync(path)) return null;
   try {
-    const raw = JSON.parse(await readFile(path, 'utf-8')) as { state?: { rangeMi?: number; chargePercent?: number } };
-    const range = raw.state?.rangeMi ?? 0;
-    const soc = raw.state?.chargePercent ?? 0;
-    if (!(range > 0) || !(soc > 5)) return null;   // <5% SOC makes the ratio noisy
-    const eff = range / (packKwh * (soc / 100));
-    return eff > 0.5 && eff < 6 ? eff : null;      // sanity band for a road EV
+    const raw = JSON.parse(await readFile(path, 'utf-8')) as { state?: CachedState };
+    return raw.state ?? null;
   } catch {
     return null;
   }
+}
+
+function ratedMiPerKwh(state: CachedState | null, packKwh: number): number | null {
+  const range = state?.rangeMi ?? 0;
+  const soc = state?.chargePercent ?? 0;
+  if (!(range > 0) || !(soc > 5)) return null;   // <5% SOC makes the ratio noisy
+  const eff = range / (packKwh * (soc / 100));
+  return eff > 0.5 && eff < 6 ? eff : null;      // sanity band for a road EV
 }
 
 export async function GET() {
@@ -138,12 +161,16 @@ export async function GET() {
     daily[idFor(r)][i] += r.energyKwh;
   }
 
-  const [rivianEff, teslaEff, gas] = await Promise.all([
-    ratedMiPerKwh('rivian-state.json', COMPARABLES.rivian.packKwh),
-    ratedMiPerKwh('tesla-state.json', COMPARABLES.tesla.packKwh),
+  const [rivianState, teslaState, gas] = await Promise.all([
+    readCachedState('rivian-state.json'),
+    readCachedState('tesla-state.json'),
     fetchGasPriceUsdPerGallon(),
   ]);
-  const effFor: Record<VehicleId, number | null> = { rivian: rivianEff, tesla: teslaEff };
+  const stateFor: Record<VehicleId, CachedState | null> = { rivian: rivianState, tesla: teslaState };
+  const effFor: Record<VehicleId, number | null> = {
+    rivian: ratedMiPerKwh(rivianState, COMPARABLES.rivian.packKwh),
+    tesla: ratedMiPerKwh(teslaState, COMPARABLES.tesla.packKwh),
+  };
 
   // ── running 6-month daily average ──
   const SIX_MONTHS_MS = 182 * 24 * 60 * 60 * 1000;
@@ -165,15 +192,31 @@ export async function GET() {
     avgDailyKwh6moFor[id] = Math.round((sixMoKwh[id] / windowDays) * 100) / 100;
   }
 
-  const vehicles: EnergyVehicleSummary[] = (['rivian', 'tesla'] as const).map(id => ({
-    id,
-    name: cfg.vehicles[id].name,
-    dailyKwh: daily[id].map(k => Math.round(k * 100) / 100),
-    comparable: COMPARABLES[id].comparable,
-    mpg: COMPARABLES[id].mpg,
-    miPerKwh: effFor[id] === null ? null : Math.round(effFor[id]! * 100) / 100,
-    avgDailyKwh6mo: avgDailyKwh6moFor[id],
-  }));
+  const round2 = (x: number | null) => (x === null ? null : Math.round(x * 100) / 100);
+  const vehicles: EnergyVehicleSummary[] = (['rivian', 'tesla'] as const).map(id => {
+    const need = ewmaDailyKwh(rows.filter(r => idFor(r) === id));
+    const plan = need === null ? null : tonightPlan({
+      dailyKwh: need,
+      socPct: stateFor[id]?.chargePercent,
+      limitPct: stateFor[id]?.chargeLimit,
+      packKwh: COMPARABLES[id].packKwh,
+      minAmps: MIN_AMPS[id],
+      maxAmps: MAX_AMPS,
+    });
+    return {
+      id,
+      name: cfg.vehicles[id].name,
+      dailyKwh: daily[id].map(k => Math.round(k * 100) / 100),
+      comparable: COMPARABLES[id].comparable,
+      mpg: COMPARABLES[id].mpg,
+      miPerKwh: round2(effFor[id]),
+      avgDailyKwh6mo: avgDailyKwh6moFor[id],
+      dailyNeedKwh: round2(need),
+      gapKwh: round2(plan?.gapKwh ?? null),
+      tonightKwh: round2(plan?.tonightKwh ?? null),
+      tonightAmps: plan?.tonightAmps ?? null,
+    };
+  });
 
   // ── Savings, per session then totalled for the current calendar month ──
   // savings = (equivalent gas cost for the same miles) − (actual TOU electricity cost)

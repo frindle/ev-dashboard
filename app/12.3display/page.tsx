@@ -517,7 +517,9 @@ function DashboardInner() {
   useEffect(() => {
     const poll = () => fetch('/api/energy', { cache: 'no-store' }).then(r => r.json())
       .then((d: EnergySummary) => {
-        setAvgDailyKwh6mo(Object.fromEntries(d.vehicles.map(v => [v.id, v.avgDailyKwh6mo])));
+        // AVG/DAY tile: the recent daily need (lib/chargePlan.ts), falling
+        // back to the 6-month average until a car has two days of sessions.
+        setAvgDailyKwh6mo(Object.fromEntries(d.vehicles.map(v => [v.id, v.dailyNeedKwh ?? v.avgDailyKwh6mo])));
       }).catch(() => {});
     poll();
     const t = setInterval(poll, REFRESH_MS);

@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { readConfig, readTokens } from '@/lib/config';
 import { logError } from '@/lib/logger';
+import { recordVehicleState } from '@/lib/vehicleStateInflux';
 import {
   fetchVehicleState,
   fetchWallConnectorVitals,
@@ -1170,6 +1171,10 @@ async function handleGet(req: Request) {
     flags,
     garageDoorState,
   };
+
+  // SoC / limit / odometer history for both cars (throttled, never throws,
+  // no coordinates). Not awaited so a slow Influx can't delay the poll.
+  void recordVehicleState(vehicles);
 
   // Vacation Mode: strip every vehicle location field from the payload BEFORE
   // it is persisted or returned, so coordinates never reach the browser and

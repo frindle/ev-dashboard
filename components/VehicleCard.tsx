@@ -30,9 +30,10 @@ const ACCENT_SOFT = 'rgba(52,224,196,0.16)';
 // amount in the 8h window, overshooting by up to 2A worth is the safe side.
 const CHARGE_VOLTS = 240;
 const CHARGE_WINDOW_HOURS = 8;
-function ampsToAddIn8h(kwh: number): number {
+// minAmps: the car's lowest current setting (Tesla 5A).
+function ampsToAddIn8h(kwh: number, minAmps = 0): number {
   const amps = (kwh * 1000 / CHARGE_WINDOW_HOURS) / CHARGE_VOLTS;
-  return Math.ceil(amps / 2) * 2;
+  return Math.max(minAmps, Math.ceil(amps / 2) * 2);
 }
 
 const SEV: Record<Severity, { color: string; bg: string; border: string }> = {
@@ -79,7 +80,7 @@ export type Vehicle = {
   heading: number;          // degrees, 0-360 -- compass heading while driving
   lat: number | null;
   lon: number | null;
-  avgDailyKwh6mo: number | null; // running 6mo avg, see EnergyVehicleSummary in app/api/energy/route.ts
+  avgDailyKwh6mo: number | null; // daily need (dailyNeedKwh, else the 6mo avg), see EnergyVehicleSummary in app/api/energy/route.ts
   // Rivian only, from the separate Parallax service (server/parallax-monitor.js)
   // -- vehicleState has no power field at all, and Wall-Connector-reported
   // current can diverge from what the car is actually drawing (confirmed
@@ -776,7 +777,7 @@ export const VehicleCard: React.FC<VehicleCardProps> = (props) => {
             {/* Amp setting (2A steps) that adds this much energy in an 8h
                 overnight window -- e.g. plan tonight's charge-current cap
                 off the car's own real recent usage instead of guessing. */}
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, color: '#7d8893' }}>→ {ampsToAddIn8h(v.avgDailyKwh6mo)}A/8H</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: lg ? 10.5 : 9, color: '#7d8893' }}>→ {ampsToAddIn8h(v.avgDailyKwh6mo, v.id === 'tesla' ? 5 : 0)}A/8H</span>
           </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: colOutside }}>
