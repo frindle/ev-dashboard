@@ -1,6 +1,8 @@
 // Work days from the Work Shifts calendar, an ICS feed (the iCloud published
 // calendar now, Nextcloud's export URL later). A work day is the local start
-// date of a timed event at least MIN_SHIFT_HOURS long. Recurring events
+// date of a timed event whose title has a shift code, D<n>A or D<n>P (Penn,
+// 2026-11-07; 2026 has 212 P shifts, 10h from 10:00-14:00, and 3 A shifts,
+// 10h from 03:00 or 06:00). Other events are not shifts. Recurring events
 // (RRULE) are not expanded: the shift exporter writes single events.
 //
 // Env: SHIFTS_ICS_URL (webcal:// is fetched as https://), optional
@@ -8,7 +10,7 @@
 // password). The URL is a secret and is never logged.
 import { localDayNumber } from './chargePlan.ts';
 
-export const MIN_SHIFT_HOURS = 4;
+export const SHIFT_CODE = /D\d+[AP]/;
 const REFRESH_MS = 6 * 3_600_000;
 const RETRY_MS = 15 * 60_000;
 
@@ -47,21 +49,21 @@ export function workDaysFromIcs(ics: string): Set<number> {
   const days = new Set<number>();
   let depth = 0;   // inside VEVENT (1) or a component nested in it (>1)
   let start: ReturnType<typeof parseIcsTime> = null;
-  let end: ReturnType<typeof parseIcsTime> = null;
   let cancelled = false;
+  let summary = '';
   for (const line of lines) {
-    if (line === 'BEGIN:VEVENT') { depth = 1; start = end = null; cancelled = false; continue; }
+    if (line === 'BEGIN:VEVENT') { depth = 1; start = null; cancelled = false; summary = ''; continue; }
     if (!depth) continue;
     if (line.startsWith('BEGIN:')) { depth++; continue; }
     if (line.startsWith('END:')) {
-      if (--depth === 0 && start && end && !start.allDay && !cancelled && end.ms - start.ms >= MIN_SHIFT_HOURS * 3_600_000) {
+      if (--depth === 0 && start && !start.allDay && !cancelled && SHIFT_CODE.test(summary)) {
         days.add(localDayNumber(start.ms));
       }
       continue;
     }
     if (depth !== 1) continue;
     if (line.startsWith('DTSTART')) start = parseIcsTime(line);
-    else if (line.startsWith('DTEND')) end = parseIcsTime(line);
+    else if (/^SUMMARY[;:]/.test(line)) summary = line.slice(line.indexOf(':') + 1);
     else if (line.startsWith('STATUS:CANCELLED')) cancelled = true;
   }
   return days;
