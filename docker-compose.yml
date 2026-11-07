@@ -14,6 +14,8 @@ services:
       - KEYS_DIR=/app/keys
       - TELEMETRY_PORT=50051
       - TESLA_LOG_API_BODIES=1
+      # NV Energy TOU/EVRR buckets and daily charts use local time (getHours/toLocaleDateString)
+      - TZ=America/Los_Angeles
       # InfluxDB dual-write — set these (values live in .env, not here) to turn
       # on the telemetry->InfluxDB write path in server/telemetry-server.js.
       # All four required; any unset => disabled (no-op). See .env.example.
