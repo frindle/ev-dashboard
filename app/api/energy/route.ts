@@ -14,7 +14,7 @@ import {
   type VehicleId,
 } from '@/lib/rates';
 import { GAS_PRICE_LABEL, fetchGasPriceUsdPerGallon } from '@/lib/gasPrice';
-import { needEstimate, tonightPlan } from '@/lib/chargePlan';
+import { ARRIVAL_FLOOR_PCT, needEstimate, tonightPlan } from '@/lib/chargePlan';
 import { getWorkDays } from '@/lib/shiftCalendar';
 
 export const dynamic = 'force-dynamic';
@@ -50,9 +50,12 @@ export interface EnergyVehicleSummary {
   // Wall kWh to refill the live gap below the charge limit (cached state,
   // ~10% charging loss included); null if SoC/limit unknown.
   gapKwh: number | null;
-  // Tonight's 8h plan: daily need plus half of any gap beyond it, in 2A
-  // steps (min 6A Rivian / 5A Tesla, max 48A), from plannedNeedKwh. null
-  // when dailyNeedKwh is.
+  // Wall kWh tonight that gets home at ARRIVAL_FLOOR_PCT (25%) after a
+  // plannedNeedKwh day; null if SoC/limit unknown.
+  floorKwh: number | null;
+  // Tonight's 8h plan: planned need plus half of any gap beyond it, at least
+  // floorKwh, in 2A steps (min 6A Rivian / 5A Tesla, max 48A). null when
+  // dailyNeedKwh is.
   tonightKwh: number | null;
   tonightAmps: number | null;
 }
@@ -215,6 +218,7 @@ export async function GET() {
       packKwh: COMPARABLES[id].packKwh,
       minAmps: MIN_AMPS[id],
       maxAmps: MAX_AMPS,
+      arrivalFloorPct: ARRIVAL_FLOOR_PCT,
     });
     return {
       id,
@@ -230,6 +234,7 @@ export async function GET() {
       workKwh: round2(est?.rates?.workKwh ?? null),
       offKwh: round2(est?.rates?.offKwh ?? null),
       gapKwh: round2(plan?.gapKwh ?? null),
+      floorKwh: round2(plan?.floorKwh ?? null),
       tonightKwh: round2(plan?.tonightKwh ?? null),
       tonightAmps: plan?.tonightAmps ?? null,
     };

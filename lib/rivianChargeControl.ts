@@ -17,8 +17,9 @@ import { join } from 'path';
 import { readConfig } from '@/lib/config';
 import { readChargeHistory } from '@/lib/chargeHistory';
 import { vehicleIdResolver } from '@/lib/chargeSessionInflux';
-import { needEstimate, tonightPlan, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
+import { ARRIVAL_FLOOR_PCT, localDayNumber, needEstimate, tonightPlan, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
 import { getWorkDays } from '@/lib/shiftCalendar';
+import { recordPlan, recordShiftDays } from '@/lib/planInflux';
 import { overridePlan, type OverridePlan } from '@/lib/chargeOverride';
 import { readOverride, writeOverride, type StoredOverride } from '@/lib/rivianOverrideStore';
 import { decideAmps, EV_WINDOW, managedIndex, scheduleWithAmps, type AmpsDecision } from '@/lib/rivianSchedule';
@@ -77,13 +78,15 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
   };
   try {
     const idFor = vehicleIdResolver(readConfig());
-    const est = needEstimate((await readChargeHistory()).filter((r) => idFor(r) === 'rivian'), await getWorkDays(now), now);
+    const workDays = await getWorkDays(now);
+    void recordShiftDays(workDays, localDayNumber(now));
+    const est = needEstimate((await readChargeHistory()).filter((r) => idFor(r) === 'rivian'), workDays, now);
     const need = est?.plannedKwh ?? null;
     const st = await readCachedRivianState();
     const common = { socPct: st?.chargePercent, limitPct: st?.chargeLimit, packKwh: PACK_KWH, minAmps: MIN_AMPS, maxAmps: MAX_AMPS };
     status.dailyNeedKwh = need;
     status.need = est;
-    status.daily = need === null ? null : tonightPlan({ ...common, dailyKwh: need });
+    status.daily = need === null ? null : tonightPlan({ ...common, dailyKwh: need, arrivalFloorPct: ARRIVAL_FLOOR_PCT });
     status.override = await readOverride(now);
     status.overridePlan = status.override
       ? overridePlan({ ...common, override: status.override, nowMs: now, dailyKwh: need ?? 0, window: EV_WINDOW })
@@ -124,6 +127,17 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
   return status;
 }
 
+// Plan history for scoring it later (lib/planInflux.ts).
+function planFields(s: RivianChargeStatus) {
+  return {
+    ewma_kwh: s.need?.ewmaKwh, planned_kwh: s.need?.plannedKwh, work_kwh: s.need?.rates?.workKwh, off_kwh: s.need?.rates?.offKwh,
+    next_day_work: s.need?.nextDayWork ?? undefined, gap_kwh: s.daily?.gapKwh, floor_kwh: s.daily?.floorKwh,
+    tonight_kwh: s.daily?.tonightKwh, tonight_amps: s.daily?.tonightAmps,
+    override_target_pct: s.override?.targetPct, override_amps: s.overridePlan?.amps,
+    decided_amps: s.decision?.amps, car_amps: s.car?.amperage, wrote_amps: s.wrote, control_enabled: s.controlEnabled,
+  };
+}
+
 let last: RivianChargeStatus | null = null;
 let lastRunMs = 0;
 let inFlight: Promise<RivianChargeStatus> | null = null;
@@ -138,6 +152,6 @@ export async function runRivianChargeControl(opts: { force?: boolean } = {}): Pr
   const now = Date.now();
   if (!opts.force && last && now - lastRunMs < RUN_INTERVAL_MS) return last;
   lastRunMs = now;
-  inFlight = runOnce(now).then((s) => { last = s; return s; }).finally(() => { inFlight = null; });
+  inFlight = runOnce(now).then((s) => { last = s; void recordPlan('rivian', planFields(s), s.atMs); return s; }).finally(() => { inFlight = null; });
   return inFlight;
 }

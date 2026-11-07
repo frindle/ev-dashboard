@@ -23,6 +23,11 @@
 //    Since Sep 2026 that cut Rivian nights >5 kWh short from 11% to 5%, for
 //    ~1.5 kWh/night more on average. Using the rates both ways (also cutting
 //    before off days) tied the EWMA on error and left more short nights.
+//  - Arrival floor (Penn, 2026-11-07): tonight is at least enough that a day
+//    ARRIVAL_DRIVE_MARGIN x the planned size still gets home at
+//    ARRIVAL_FLOOR_PCT, capped at the charge limit. It only binds from a low
+//    SoC or a low limit; a day much bigger than that needs an override
+//    (chargeOverride.ts).
 //
 // Pure functions, no imports, so node:test can load this file directly.
 
@@ -40,6 +45,8 @@ export const USE_DAY_SHIFT_HOURS = 6;
 // Daily use comes from wall-side kWh, the SoC gap is pack-side. L2 charging
 // loses ~10%, so the gap is scaled up to the wall energy that refills it.
 export const CHARGE_EFFICIENCY = 0.9;
+export const ARRIVAL_FLOOR_PCT = 25;
+export const ARRIVAL_DRIVE_MARGIN = 1.1;   // floor plans for 10% more driving than predicted
 
 const DAY_MS = 86_400_000;
 
@@ -173,10 +180,15 @@ export interface TonightInput {
   packKwh: number;
   minAmps: number;
   maxAmps: number;
+  arrivalFloorPct?: number;   // get home after the next day at no less than this
 }
 
 export interface TonightPlan {
   gapKwh: number | null;   // wall kWh to refill the gap below the charge limit; null if SoC/limit unknown
+  // wall kWh that gets home at arrivalFloorPct after a day of
+  // ARRIVAL_DRIVE_MARGIN x dailyKwh (morning
+  // SoC capped at the limit); null if SoC/limit unknown or no floor given
+  floorKwh: number | null;
   tonightKwh: number;
   tonightAmps: number;
 }
@@ -187,6 +199,13 @@ export function tonightPlan(p: TonightInput): TonightPlan {
   const known = typeof soc === 'number' && typeof limit === 'number' && Number.isFinite(soc) && Number.isFinite(limit)
     && soc > 0 && limit > 0;
   const gapKwh = known ? Math.max(0, ((limit! - soc!) / 100) * p.packKwh) / CHARGE_EFFICIENCY : null;
-  const tonightKwh = p.dailyKwh + (gapKwh === null ? 0 : Math.max(0, gapKwh - p.dailyKwh) / CATCH_UP_NIGHTS);
-  return { gapKwh, tonightKwh, tonightAmps: ampsFor(tonightKwh, p.minAmps, p.maxAmps) };
+  const catchUpKwh = p.dailyKwh + (gapKwh === null ? 0 : Math.max(0, gapKwh - p.dailyKwh) / CATCH_UP_NIGHTS);
+  let floorKwh: number | null = null;
+  if (known && typeof p.arrivalFloorPct === 'number' && Number.isFinite(p.arrivalFloorPct)) {
+    const dayPct = (Math.max(0, p.dailyKwh) * ARRIVAL_DRIVE_MARGIN * CHARGE_EFFICIENCY / p.packKwh) * 100;
+    const morningPct = Math.min(limit!, p.arrivalFloorPct + dayPct);
+    floorKwh = Math.max(0, ((morningPct - soc!) / 100) * p.packKwh) / CHARGE_EFFICIENCY;
+  }
+  const tonightKwh = Math.max(catchUpKwh, floorKwh ?? 0);
+  return { gapKwh, floorKwh, tonightKwh, tonightAmps: ampsFor(tonightKwh, p.minAmps, p.maxAmps) };
 }

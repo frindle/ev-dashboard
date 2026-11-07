@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ampsFor, dailyUseSeries, ewmaDailyKwh, KWH_PER_AMP, localDayNumber, needEstimate, nextUseDay, tonightPlan, useDayNumber, workOffRates,
+  ampsFor, ARRIVAL_DRIVE_MARGIN, ARRIVAL_FLOOR_PCT, dailyUseSeries, ewmaDailyKwh, KWH_PER_AMP, localDayNumber, needEstimate, nextUseDay, tonightPlan, useDayNumber, workOffRates,
 } from './chargePlan.ts';
 
 const day = (iso: string) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86_400_000);
@@ -130,4 +130,26 @@ test('needEstimate: raises to the work rate before a work day, never lowers', ()
   assert.deepEqual(needEstimate(sessions, null, Date.parse('2026-11-29T21:00:00-08:00')),
     { ewmaKwh: ewma, rates: null, nextDayWork: null, plannedKwh: ewma });
   assert.equal(needEstimate([night('2026-11-01', 40)], work, Date.now()), null);
+});
+
+test('tonightPlan: arrival floor raises tonight only when the catch-up would get home under it', () => {
+  const base = { dailyKwh: 20.6, packKwh: 135, minAmps: 6, maxAmps: 48, arrivalFloorPct: ARRIVAL_FLOOR_PCT };
+  const dayPct = 20.6 * ARRIVAL_DRIVE_MARGIN * 0.9 / 135 * 100;          // planned day + 10%: 15.1% of the pack
+  const arrival = (p: { tonightKwh: number }, soc: number) => soc + p.tonightKwh * 0.9 / 135 * 100 - dayPct;
+  // Low limit, nearly empty: catch-up gets home (after a +10% day) at ~21%, floor lifts it to 25%
+  const low = tonightPlan({ ...base, socPct: 5, limitPct: 55 });
+  assert.ok(Math.abs(low.floorKwh! - (25 + dayPct - 5) / 100 * 135 / 0.9) < 1e-9);
+  assert.equal(low.tonightKwh, low.floorKwh);
+  assert.ok(Math.abs(arrival(low, 5) - 25) < 1e-9);
+  assert.equal(low.tonightAmps, 28);                                       // catch-up alone: 26A
+  assert.equal(tonightPlan({ ...base, arrivalFloorPct: undefined, socPct: 5, limitPct: 55 }).tonightAmps, 26);
+  // Normal night: catch-up is already above the floor
+  const ok = tonightPlan({ ...base, socPct: 45, limitPct: 70 });
+  assert.ok(ok.tonightKwh > ok.floorKwh! && arrival(ok, 45) > 40);
+  // Floor + a big day above the limit: capped at the limit (= the whole gap)
+  const cap = tonightPlan({ ...base, dailyKwh: 40, socPct: 20, limitPct: 50 });
+  assert.ok(Math.abs(cap.floorKwh! - cap.gapKwh!) < 1e-9);
+  assert.equal(cap.tonightKwh, cap.gapKwh);
+  // SoC unknown: no floor
+  assert.equal(tonightPlan({ ...base, socPct: null, limitPct: 70 }).floorKwh, null);
 });
