@@ -1525,3 +1525,50 @@ export function normalizeRivianServiceState(input: {
     fetchedAt: (input.now ?? new Date()).toISOString(),
   };
 }
+
+// ── Charging schedules (read + write) ─────────────────────────────────────────
+// setChargingSchedules replaces the car's whole schedule list. It needs only
+// the account session, unlike sendVehicleCommand (charge limit etc.), which
+// must be signed by an enrolled phone key. Schedules carry the home
+// coordinates: never log them.
+
+export interface RivianChargingSchedule {
+  weekDays: string[];
+  startTime: number;   // minutes after local midnight
+  duration: number;    // minutes
+  location: { latitude: number; longitude: number };
+  amperage: number;
+  enabled: boolean;
+}
+
+const GET_CHARGING_SCHEDULES = `query GetChargingSchedules($vehicleId: String!) {
+  getVehicle(id: $vehicleId) { chargingSchedules { weekDays startTime duration location { latitude longitude } amperage enabled } }
+}`;
+
+const SET_CHARGING_SCHEDULES = `mutation SetChargingSchedules($vehicleId: String!, $chargingSchedules: [InputChargingSchedule!]!) {
+  setChargingSchedules(vehicleId: $vehicleId, chargingSchedules: $chargingSchedules) { success }
+}`;
+
+// null when not connected or backing off; throws on an API error.
+export async function fetchRivianChargingSchedules(): Promise<RivianChargingSchedule[] | null> {
+  const tokens = readRivianTokens();
+  if (!tokens?.vehicleId || inBackoffWindow()) return null;
+  const data = await gql<{ getVehicle?: { chargingSchedules?: RivianChargingSchedule[] | null } | null }>(
+    GET_CHARGING_SCHEDULES, { vehicleId: tokens.vehicleId }, authHeaders(tokens),
+  );
+  return data.getVehicle?.chargingSchedules ?? [];
+}
+
+export async function setRivianChargingSchedules(schedules: RivianChargingSchedule[]): Promise<boolean> {
+  const tokens = readRivianTokens();
+  if (!tokens?.vehicleId || inBackoffWindow()) return false;
+  const chargingSchedules = schedules.map((s) => ({
+    weekDays: s.weekDays, startTime: s.startTime, duration: s.duration,
+    location: { latitude: s.location.latitude, longitude: s.location.longitude },
+    amperage: s.amperage, enabled: s.enabled,
+  }));
+  const data = await gql<{ setChargingSchedules?: { success?: boolean } | null }>(
+    SET_CHARGING_SCHEDULES, { vehicleId: tokens.vehicleId, chargingSchedules }, authHeaders(tokens),
+  );
+  return data.setChargingSchedules?.success === true;
+}

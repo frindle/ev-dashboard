@@ -4,6 +4,7 @@ import { join } from 'path';
 import { readConfig, readTokens } from '@/lib/config';
 import { logError } from '@/lib/logger';
 import { recordVehicleState } from '@/lib/vehicleStateInflux';
+import { runRivianChargeControl } from '@/lib/rivianChargeControl';
 import {
   fetchVehicleState,
   fetchWallConnectorVitals,
@@ -1175,6 +1176,7 @@ async function handleGet(req: Request) {
   // SoC / limit / odometer history for both cars (throttled, never throws,
   // no coordinates). Not awaited so a slow Influx can't delay the poll.
   void recordVehicleState(vehicles);
+  void runRivianChargeControl();   // throttled to every 15 min, never throws
 
   // Vacation Mode: strip every vehicle location field from the payload BEFORE
   // it is persisted or returned, so coordinates never reach the browser and

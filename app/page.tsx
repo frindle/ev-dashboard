@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DashboardErrorBoundary } from '@/components/DashboardErrorBoundary';
+import { RivianOverride } from '@/components/RivianOverride';
 import { circuitStatus } from '@/lib/circuitStatus';
 import { shouldShowFeedError } from '@/lib/feedFreshness';
 import type { DashboardData, VehicleData, WallConnectorData, DashboardFlags } from '@/app/api/dashboard/route';
@@ -729,6 +730,9 @@ function DashboardInner() {
           );
         })}
       </div>
+
+      {/* ── Rivian charge override ── */}
+      <RivianOverride />
 
       {/* ── Circuit Panel ── */}
       <CircuitPanel wallConnectors={wallConnectors} vehicles={vehicles} wcDataUnavailable={!!data?.flags.wcDataUnavailable} teslaConnected={data?.teslaConnected ?? false} />
