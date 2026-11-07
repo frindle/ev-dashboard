@@ -26,6 +26,14 @@ export interface WallConnectorConfig {
   localIp: string;
 }
 
+// Overnight plan floor (lib/chargePlan.ts tonightPlan): charge enough that a
+// day of arrivalDriveMargin x the planned driving still gets home at
+// arrivalFloorPct. null = no floor.
+export interface ArrivalFloorConfig {
+  arrivalFloorPct: number | null;
+  arrivalDriveMargin: number;
+}
+
 export interface AppConfig {
   display: {
     siteName: string;
@@ -38,14 +46,14 @@ export interface AppConfig {
       model: string;
       chargerSide: 'LEFT' | 'RIGHT';
       pollingEnabled: boolean; // manual kill switch for Fleet API calls — telemetry keeps flowing regardless
-    };
+    } & ArrivalFloorConfig;
     rivian: {
       name: string;
       model: string;
       chargerSide: 'LEFT' | 'RIGHT';
       email: string;
       password: string;
-    };
+    } & ArrivalFloorConfig;
   };
   energySite: {
     id: string;
@@ -125,6 +133,8 @@ const DEFAULT_CONFIG: AppConfig = {
       // with each other until caught by an Opus code review 2026-07-25.
       chargerSide: 'LEFT',
       pollingEnabled: true,
+      arrivalFloorPct: null,
+      arrivalDriveMargin: 1,
     },
     rivian: {
       name: 'Midknight',
@@ -135,6 +145,10 @@ const DEFAULT_CONFIG: AppConfig = {
       chargerSide: 'RIGHT',
       email: '',
       password: '',
+      // Penn 2026-11-07: get home at 25% minimum, planning for 10% more
+      // driving than predicted.
+      arrivalFloorPct: 25,
+      arrivalDriveMargin: 1.1,
     },
   },
   energySite: {

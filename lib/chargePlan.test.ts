@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ampsFor, ARRIVAL_DRIVE_MARGIN, ARRIVAL_FLOOR_PCT, dailyUseSeries, ewmaDailyKwh, KWH_PER_AMP, localDayNumber, needEstimate, nextUseDay, tonightPlan, useDayNumber, workOffRates,
+  ampsFor, arrivalFloorOf, dailyUseSeries, ewmaDailyKwh, KWH_PER_AMP, localDayNumber, needEstimate, nextUseDay, tonightPlan, useDayNumber, workOffRates,
 } from './chargePlan.ts';
 
 const day = (iso: string) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86_400_000);
@@ -133,8 +133,8 @@ test('needEstimate: raises to the work rate before a work day, never lowers', ()
 });
 
 test('tonightPlan: arrival floor raises tonight only when the catch-up would get home under it', () => {
-  const base = { dailyKwh: 20.6, packKwh: 135, minAmps: 6, maxAmps: 48, arrivalFloorPct: ARRIVAL_FLOOR_PCT };
-  const dayPct = 20.6 * ARRIVAL_DRIVE_MARGIN * 0.9 / 135 * 100;          // planned day + 10%: 15.1% of the pack
+  const base = { dailyKwh: 20.6, packKwh: 135, minAmps: 6, maxAmps: 48, arrivalFloorPct: 25, arrivalDriveMargin: 1.1 };
+  const dayPct = 20.6 * 1.1 * 0.9 / 135 * 100;                             // planned day + 10%: 15.1% of the pack
   const arrival = (p: { tonightKwh: number }, soc: number) => soc + p.tonightKwh * 0.9 / 135 * 100 - dayPct;
   // Low limit, nearly empty: catch-up gets home (after a +10% day) at ~21%, floor lifts it to 25%
   const low = tonightPlan({ ...base, socPct: 5, limitPct: 55 });
@@ -150,6 +150,18 @@ test('tonightPlan: arrival floor raises tonight only when the catch-up would get
   const cap = tonightPlan({ ...base, dailyKwh: 40, socPct: 20, limitPct: 50 });
   assert.ok(Math.abs(cap.floorKwh! - cap.gapKwh!) < 1e-9);
   assert.equal(cap.tonightKwh, cap.gapKwh);
-  // SoC unknown: no floor
+  // SoC unknown, or no floor for this vehicle: no floor
   assert.equal(tonightPlan({ ...base, socPct: null, limitPct: 70 }).floorKwh, null);
+  assert.equal(tonightPlan({ ...base, arrivalFloorPct: null, socPct: 5, limitPct: 55 }).floorKwh, null);
+  // No margin given: a planned-size day
+  const plain = tonightPlan({ ...base, arrivalDriveMargin: undefined, socPct: 5, limitPct: 55 });
+  assert.ok(Math.abs(plain.floorKwh! - (25 + 20.6 * 0.9 / 135 * 100 - 5) / 100 * 135 / 0.9) < 1e-9);
+});
+
+test('arrivalFloorOf: config values, bad ones dropped', () => {
+  assert.deepEqual(arrivalFloorOf({ arrivalFloorPct: 25, arrivalDriveMargin: 1.1 }), { arrivalFloorPct: 25, arrivalDriveMargin: 1.1 });
+  assert.deepEqual(arrivalFloorOf({ arrivalFloorPct: null, arrivalDriveMargin: 1 }), { arrivalFloorPct: null, arrivalDriveMargin: 1 });
+  for (const v of [undefined, null, {}, { arrivalFloorPct: '25', arrivalDriveMargin: 0.5 }, { arrivalFloorPct: 0 }, { arrivalFloorPct: 101 }, { arrivalFloorPct: NaN }]) {
+    assert.deepEqual(arrivalFloorOf(v as never), { arrivalFloorPct: null, arrivalDriveMargin: 1 }, JSON.stringify(v));
+  }
 });

@@ -17,7 +17,7 @@ import { join } from 'path';
 import { readConfig } from '@/lib/config';
 import { readChargeHistory } from '@/lib/chargeHistory';
 import { vehicleIdResolver } from '@/lib/chargeSessionInflux';
-import { ARRIVAL_FLOOR_PCT, localDayNumber, needEstimate, tonightPlan, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
+import { arrivalFloorOf, localDayNumber, needEstimate, tonightPlan, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
 import { getWorkDays } from '@/lib/shiftCalendar';
 import { recordPlan, recordShiftDays } from '@/lib/planInflux';
 import { overridePlan, type OverridePlan } from '@/lib/chargeOverride';
@@ -77,7 +77,8 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
     controlEnabled: process.env.RIVIAN_SCHEDULE_CONTROL === '1', car: null, decision: null, wrote: null, error: null,
   };
   try {
-    const idFor = vehicleIdResolver(readConfig());
+    const cfg = readConfig();
+    const idFor = vehicleIdResolver(cfg);
     const workDays = await getWorkDays(now);
     void recordShiftDays(workDays, localDayNumber(now));
     const est = needEstimate((await readChargeHistory()).filter((r) => idFor(r) === 'rivian'), workDays, now);
@@ -86,7 +87,7 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
     const common = { socPct: st?.chargePercent, limitPct: st?.chargeLimit, packKwh: PACK_KWH, minAmps: MIN_AMPS, maxAmps: MAX_AMPS };
     status.dailyNeedKwh = need;
     status.need = est;
-    status.daily = need === null ? null : tonightPlan({ ...common, dailyKwh: need, arrivalFloorPct: ARRIVAL_FLOOR_PCT });
+    status.daily = need === null ? null : tonightPlan({ ...common, dailyKwh: need, ...arrivalFloorOf(cfg.vehicles.rivian) });
     status.override = await readOverride(now);
     status.overridePlan = status.override
       ? overridePlan({ ...common, override: status.override, nowMs: now, dailyKwh: need ?? 0, window: EV_WINDOW })

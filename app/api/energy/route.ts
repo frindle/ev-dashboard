@@ -14,7 +14,7 @@ import {
   type VehicleId,
 } from '@/lib/rates';
 import { GAS_PRICE_LABEL, fetchGasPriceUsdPerGallon } from '@/lib/gasPrice';
-import { ARRIVAL_FLOOR_PCT, needEstimate, tonightPlan } from '@/lib/chargePlan';
+import { arrivalFloorOf, needEstimate, tonightPlan } from '@/lib/chargePlan';
 import { getWorkDays } from '@/lib/shiftCalendar';
 
 export const dynamic = 'force-dynamic';
@@ -50,8 +50,9 @@ export interface EnergyVehicleSummary {
   // Wall kWh to refill the live gap below the charge limit (cached state,
   // ~10% charging loss included); null if SoC/limit unknown.
   gapKwh: number | null;
-  // Wall kWh tonight that gets home at ARRIVAL_FLOOR_PCT (25%) after a
-  // plannedNeedKwh day; null if SoC/limit unknown.
+  // Wall kWh tonight that gets home at the vehicle's arrival floor (config
+  // arrivalFloorPct, after arrivalDriveMargin x plannedNeedKwh of driving);
+  // null if the vehicle has no floor or SoC/limit is unknown.
   floorKwh: number | null;
   // Tonight's 8h plan: planned need plus half of any gap beyond it, at least
   // floorKwh, in 2A steps (min 6A Rivian / 5A Tesla, max 48A). null when
@@ -218,7 +219,7 @@ export async function GET() {
       packKwh: COMPARABLES[id].packKwh,
       minAmps: MIN_AMPS[id],
       maxAmps: MAX_AMPS,
-      arrivalFloorPct: ARRIVAL_FLOOR_PCT,
+      ...arrivalFloorOf(cfg.vehicles[id]),
     });
     return {
       id,
