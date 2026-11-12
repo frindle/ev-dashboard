@@ -7,7 +7,7 @@ import { tripPlanLine } from './tripInflux.ts';
 const TODAY = Math.round(Date.UTC(2026, 10, 17) / 86_400_000);
 const day = (x: Partial<TripSummary> = {}): TripSummary => ({
   day: TODAY + 1, dateLabel: 'Wed 11/18', miles: 140, needPct: 56, targetPct: 81, byMs: new Date(2026, 10, 18, 7, 30).getTime(),
-  raise: true, multiDay: false, unplaced: 0, overlaps: 0, limitPct: 70, reachable: true, ...x,
+  raise: true, multiDay: false, unplaced: 0, unroutable: false, manual: false, overlaps: 0, limitPct: 70, reachable: true, ...x,
 });
 const ctx = (d: TripSummary[], x: Partial<TripAlertCtx> = {}): TripAlertCtx => ({
   nowMs: new Date(2026, 10, 17, 10, 0).getTime(), today: TODAY, serveDay: TODAY, sent: new Set(), days: d, openBefore: [],
@@ -55,4 +55,25 @@ test('privacy: push text and Influx line carry no title, place or coordinates', 
   const line = tripPlanLine({ day: TODAY, miles: 140.123, pct: 56.4, target: 81, byMs: 1_700_000_000_000 });
   assert.match(line, /^ev_trip_plan day=\d+,miles=140\.12,pct=56\.4,target=81,by_ms=1700000000000 \d+$/);
   assert.equal(tripPlanLine({ day: TODAY, miles: 1, pct: 1, target: 1, byMs: null }).includes('by_ms'), false);
+});
+
+test('unplaced / unroutable: tonight\'s day pushes at the evening update and again at 23:00; a typed need silences it', () => {
+  const night = new Date(2026, 10, 17, 22, 30).getTime();
+  const late = new Date(2026, 10, 17, 23, 10).getTime();
+  const u = day({ day: TODAY, unplaced: 1, raise: false });
+  assert.deepEqual(tripAlerts(ctx([u], { nowMs: night, slot: 'update' })).map((x) => x.key), [`trip-unplaced:${TODAY}`]);
+  assert.equal(tripAlerts(ctx([u], { nowMs: night, slot: null })).length, 0);
+  const l = tripAlerts(ctx([u], { nowMs: late, sent: new Set([`trip-unplaced:${TODAY}`]) }));
+  assert.deepEqual(l.map((x) => x.key), [`trip-unplaced-2300:${TODAY}:${TODAY}`]);
+  assert.equal(l[0].priority, 1);
+  assert.match(l[0].message, /set the % or miles the day needs/);
+  const r = tripAlerts(ctx([day({ unroutable: true, raise: false })]));
+  assert.deepEqual(r.map((x) => x.key), [`trip-unroutable:${TODAY + 1}`]);
+  assert.equal(r[0].link?.url, `http://dash.lan:3000/trips?day=${TODAY + 1}`);
+  assert.equal(tripAlerts(ctx([day({ unplaced: 1, unroutable: true, manual: true, raise: false })], { nowMs: late, slot: 'update' })).length, 0);
+});
+
+test('a typed need that raises the plan: no "trip planned" push, but the limit and unreachable nudges still go', () => {
+  const a = tripAlerts(ctx([day({ manual: true, reachable: false })]));
+  assert.deepEqual(a.map((x) => x.key.split(':')[0]), ['trip-limit', 'trip-unreachable']);
 });

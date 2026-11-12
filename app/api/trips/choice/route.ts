@@ -3,10 +3,13 @@
 //   { kind: 'toggle',  uid, day, value: 'home'|'straight'|'' }
 //   { kind: 'place',   uid | 'work', lat, lon, label? }   (a pick saved in keys/geo-overrides.json,
 //                                                         and written to the event when PERSONAL_CAL_WRITEBACK=1)
+//   { kind: 'need',    day, value, unit: 'pct'|'mi' }    (the day's driving, typed; value '' clears it)
 import { NextRequest } from 'next/server';
 import { writeBackPlace } from '@/lib/caldavWriteback';
+import { localDayNumber } from '@/lib/chargePlan';
 import { WORK_KEY } from '@/lib/geocode';
-import { setGeoOverride, mutateTripChoices } from '@/lib/tripStore';
+import { TRIP_DAYS_AHEAD } from '@/lib/personalCalendar';
+import { MANUAL_MAX, setGeoOverride, mutateTripChoices, validNeed } from '@/lib/tripStore';
 import { runRivianChargeControl } from '@/lib/rivianChargeControl';
 
 export const dynamic = 'force-dynamic';
@@ -46,6 +49,17 @@ export async function POST(req: NextRequest) {
     const label = typeof b.label === 'string' ? b.label.slice(0, 200) : '';
     await setGeoOverride(uid === 'work' ? WORK_KEY : uid, { lat, lon });
     if (uid !== 'work') result = await writeBackPlace(uid, { lat, lon, label });
+  } else if (b?.kind === 'need' && Number.isInteger(day)) {
+    const today = localDayNumber(Date.now());
+    if (day < today || day > today + TRIP_DAYS_AHEAD) return Response.json({ error: 'day out of range' }, { status: 400 });
+    const raw = String(b.value ?? '').trim();
+    const unit = b.unit === 'mi' ? 'mi' : 'pct';
+    const n = raw === '' ? null : validNeed({ value: Math.min(Number(raw), MANUAL_MAX[unit]), unit });
+    if (raw !== '' && !n) return Response.json({ error: 'value must be a number above 0' }, { status: 400 });
+    await mutateTripChoices((c) => {
+      for (const k of Object.keys(c.needs)) if (Number(k) < today) delete c.needs[k];
+      if (n) c.needs[String(day)] = n; else delete c.needs[String(day)];
+    });
   } else {
     return Response.json({ error: 'bad request' }, { status: 400 });
   }

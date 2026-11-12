@@ -36,7 +36,7 @@ export default function PlaceSearch({ uid, initial, button }: { uid: string; ini
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search for the place" aria-label="Search for the place" />
         <button type="submit" disabled={busy || !q.trim()}>{button ?? 'Search'}</button>
       </form>
-      {hits && !hits.length && <p className="trips-note">No match from the local geocoder. Try a street and city.</p>}
+      {hits && !hits.length && <p className="trips-note">No match. Try a street and city, or set what the day needs below.</p>}
       {hits && hits.length > 0 && (
         <ul>
           {hits.map((h, i) => (

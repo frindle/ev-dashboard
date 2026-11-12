@@ -3,7 +3,10 @@
 //                        places picked on /trips (the work location under a fixed key)
 //   trip-choices.json    { choices: { "<uid>@<day>": "skip"|"going"|"fix" },
 //                          toggles: { "<uid>@<day>": "home"|"straight" },
-//                          openDays: [day, ...] }   overlap days a push is open for
+//                          openDays: [day, ...],    overlap days a push is open for
+//                          needs: { "<day>": { value, unit: "pct"|"mi" } } }
+//                                                   a day's driving typed on /trips (a place
+//                                                   that cannot be found, or any day)
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GeoOverrides } from './geocode.ts';
@@ -38,19 +41,34 @@ export async function setGeoOverride(key: string, p: { lat: number; lon: number 
   await writeJson(join(dir(), 'geo-overrides.json'), all);
 }
 
+export interface ManualNeed { value: number; unit: 'pct' | 'mi' }
+export const MANUAL_MAX: Record<ManualNeed['unit'], number> = { pct: 100, mi: 600 };
+
+export function validNeed(v: unknown): ManualNeed | null {
+  const x = v as Partial<ManualNeed> | null;
+  if (!x || (x.unit !== 'pct' && x.unit !== 'mi') || typeof x.value !== 'number' || !Number.isFinite(x.value)) return null;
+  if (x.value <= 0 || x.value > MANUAL_MAX[x.unit]) return null;
+  return { value: Math.round(x.value), unit: x.unit };
+}
+
 export interface TripChoices {
   choices: Record<string, OverlapChoice>;
   toggles: Record<string, HomeTag>;
   openDays: number[];
+  needs: Record<string, ManualNeed>;
 }
 
 export async function readTripChoices(): Promise<TripChoices> {
-  const out: TripChoices = { choices: {}, toggles: {}, openDays: [] };
+  const out: TripChoices = { choices: {}, toggles: {}, openDays: [], needs: {} };
   try {
     const raw = JSON.parse(await readFile(join(dir(), 'trip-choices.json'), 'utf-8')) as Partial<TripChoices>;
     for (const [k, v] of Object.entries(raw.choices ?? {})) if (v === 'skip' || v === 'going' || v === 'fix') out.choices[k] = v;
     for (const [k, v] of Object.entries(raw.toggles ?? {})) if (v === 'home' || v === 'straight') out.toggles[k] = v;
     out.openDays = (raw.openDays ?? []).filter((d) => Number.isInteger(d));
+    for (const [k, v] of Object.entries(raw.needs ?? {})) {
+      const n = validNeed(v);
+      if (n && Number.isInteger(Number(k))) out.needs[k] = n;
+    }
   } catch { /* none yet */ }
   return out;
 }

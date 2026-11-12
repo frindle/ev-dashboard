@@ -917,3 +917,9 @@ input[type="email"].form-input { font-family: 'Space Grotesk', sans-serif; }
 .trips-search input { flex: 1; min-width: 0; }
 .trips-search ul { list-style: none; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .trips-search li button { width: 100%; text-align: left; }
+.trips select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-height: 44px; }
+.trips select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.trips-need { display: flex; flex-wrap: wrap; gap: 8px; }
+.trips-need input[name="value"] { width: 7em; }
+.trips-needbox { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.trips-needbox.attention { border-top-color: var(--orange); }

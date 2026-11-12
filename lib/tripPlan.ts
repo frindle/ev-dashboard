@@ -242,6 +242,21 @@ export function adjustForTrip(p: { isWork: boolean; baseNeedPct: number; miles: 
   return { tripPct, needPct: Math.max(base, tripNeed), targetPct: Math.min(100, ARRIVAL_FLOOR_PCT + tripNeed), raise: tripNeed > base };
 }
 
+// A need typed on /trips for a day (a place that cannot be found, a route that
+// cannot be worked out, or any day): the day's whole driving as % of battery.
+// It replaces the trip estimate for that day, with the same margin and floor;
+// it only ever raises the plan.
+export function manualAdjust(p: { baseNeedPct: number; pct: number }): Adjusted {
+  const base = Math.max(0, p.baseNeedPct);
+  const tripNeed = Math.round(TRIP_MARGIN * Math.max(0, p.pct));
+  return { tripPct: p.pct, needPct: Math.max(base, tripNeed), targetPct: Math.min(100, ARRIVAL_FLOOR_PCT + tripNeed), raise: tripNeed > base };
+}
+
+// % of battery for a typed mileage on a day with high highF (parked drain added).
+export function pctForMiles(miles: number, highF: number | null): number {
+  return miles / milesPerPct(highF) + PARKED_PCT;
+}
+
 // Days covered by a multi-day trip after its first (nothing is planned while away).
 export function awayDays(events: { day: number; startMs: number; endMs: number; multiDay: boolean }[], dayOf: (ms: number) => number): Set<number> {
   const s = new Set<number>();

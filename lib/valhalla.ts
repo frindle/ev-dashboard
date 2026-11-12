@@ -1,5 +1,8 @@
-// Route miles and seconds from the self-hosted Valhalla (VALHALLA_URL, LAN),
-// and the traffic rule for a leg's time (EV charge plan #8).
+// Route miles and seconds from the self-hosted Valhalla (VALHALLA_URL, LAN,
+// Nevada only) or, for a leg with an end outside Nevada or one the LAN copy
+// cannot route, the FOSSGIS Valhalla (lib/onlineGeo.ts: end points rounded to
+// about 1 km, off with GEO_ONLINE=0); and the traffic rule for a leg's time
+// (EV charge plan #8).
 //
 // Routes are cached in keys/route-cache.json by a hash of the rounded
 // coordinates (HMAC with the drive-cell salt when given); raw coordinates are
@@ -17,6 +20,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { hashCell } from './driveCell.ts';
 import type { LatLon } from './ics.ts';
+import { inNevada, ONLINE_UA, onlineGeo, round2, spaced } from './onlineGeo.ts';
 
 export interface Leg { miles: number; seconds: number }
 
@@ -66,35 +70,49 @@ export function fileRouteCache(path = join(process.env.KEYS_DIR ?? join(process.
 type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }) =>
   Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
-// Driving miles and seconds from a to b with no traffic; null when VALHALLA_URL
-// is unset, unreachable or finds no route.
+async function valhalla(base: string, a: LatLon, b: LatLon, online: boolean, f: FetchLike): Promise<Leg | null> {
+  const pt = (p: LatLon) => (online ? { lat: round2(p.lat), lon: round2(p.lon) } : { lat: p.lat, lon: p.lon });
+  const url = `${base.replace(/\/+$/, '')}/route`;
+  try {
+    const call = () => f(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(online ? { 'User-Agent': ONLINE_UA } : {}) },
+      body: JSON.stringify({ locations: [pt(a), pt(b)], costing: 'auto', units: 'miles' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const res = online ? await spaced(url, call) : await call();
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const s = ((await res.json()) as { trip?: { summary?: { length?: number; time?: number } } }).trip?.summary;
+    if (!s || !Number.isFinite(s.length) || !Number.isFinite(s.time)) throw new Error('no route');
+    return { miles: s.length as number, seconds: s.time as number };
+  } catch (e) {
+    console.error(`[trips] ${online ? 'online ' : ''}route failed:`, (e instanceof Error ? e.name : 'error'));
+    return null;
+  }
+}
+
+// Driving miles and seconds from a to b with no traffic. Both ends in Nevada:
+// the LAN Valhalla, then the online one if that fails. An end outside Nevada:
+// the online one first (the LAN tiles would snap it to a Nevada road), then
+// the LAN one. null when neither is set, reachable or finds a route.
 export async function routeLeg(
   a: LatLon, b: LatLon,
   deps: { env?: Record<string, string | undefined>; fetchImpl?: FetchLike; cache: RouteCache; salt?: Buffer | string },
 ): Promise<Leg | null> {
   const env = deps.env ?? process.env;
-  const base = env.VALHALLA_URL;
-  if (!base) return null;
+  const local = env.VALHALLA_URL || null;
+  const online = onlineGeo(env).valhalla;
+  if (!local && !online) return null;
   const key = routeKey(a, b, deps.salt);
   const hit = deps.cache.get(key);
   if (hit) return hit;
-  try {
-    const f = deps.fetchImpl ?? (fetch as unknown as FetchLike);
-    const res = await f(`${base.replace(/\/+$/, '')}/route`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ locations: [{ lat: a.lat, lon: a.lon }, { lat: b.lat, lon: b.lon }], costing: 'auto', units: 'miles' }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const s = ((await res.json()) as { trip?: { summary?: { length?: number; time?: number } } }).trip?.summary;
-    if (!s || !Number.isFinite(s.length) || !Number.isFinite(s.time)) throw new Error('no route');
-    const leg = { miles: s.length as number, seconds: s.time as number };
-    await deps.cache.set(key, leg);
-    return leg;
-  } catch (e) {
-    console.error('[trips] route failed:', (e instanceof Error ? e.name : 'error'));
-    return null;
+  const f = deps.fetchImpl ?? (fetch as unknown as FetchLike);
+  const order: [string | null, boolean][] = inNevada(a) && inNevada(b) ? [[local, false], [online, true]] : [[online, true], [local, false]];
+  for (const [base, isOnline] of order) {
+    if (!base) continue;
+    const leg = await valhalla(base, a, b, isOnline, f);
+    if (leg) { await deps.cache.set(key, leg); return leg; }
   }
+  return null;
 }
 
 export interface OwnDrive { start: string; end: string; start_cell?: string | null; end_cell?: string | null }

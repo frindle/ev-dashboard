@@ -1,7 +1,7 @@
 // Run: TZ=America/Los_Angeles node --experimental-strip-types --test lib/tripPlan.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adjustForTrip, awayDays, choiceKey, metersBetween, milesPerPct, planTripDay, type TripDayInput, type TripEvent } from './tripPlan.ts';
+import { adjustForTrip, awayDays, choiceKey, metersBetween, milesPerPct, planTripDay, type TripDayInput, type TripEvent, manualAdjust, pctForMiles } from './tripPlan.ts';
 import type { LatLon } from './ics.ts';
 
 const DAY = Math.round(Date.UTC(2026, 10, 17) / 86_400_000);
@@ -142,4 +142,16 @@ test('an unroutable leg marks the day, no miles invented', async () => {
   const d = (await planTripDay(input([ev('a', 12, 13, A)], { route: async () => null })))!;
   assert.equal(d.unroutable, true);
   assert.equal(d.miles, 0);
+});
+
+test('manualAdjust: the typed day need with the trip margin and floor; raise only above the base', () => {
+  assert.deepEqual(manualAdjust({ baseNeedPct: 16, pct: 40 }), { tripPct: 40, needPct: 44, targetPct: 69, raise: true });
+  const low = manualAdjust({ baseNeedPct: 16, pct: 10 });
+  assert.equal(low.raise, false);
+  assert.equal(low.needPct, 16);
+  assert.equal(manualAdjust({ baseNeedPct: 10, pct: 95 }).targetPct, 100);
+  // Miles: by the day's miles per % (cold days use more) plus parked drain.
+  const mild = pctForMiles(120, 70), cold = pctForMiles(120, 30);
+  assert.ok(Math.abs(mild - (120 / milesPerPct(70) + 2)) < 1e-9);
+  assert.ok(cold > mild);
 });

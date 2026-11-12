@@ -8,7 +8,7 @@
 // no stored one). No event title, place or coordinate reaches a push, a log
 // line or Influx; the /trips page (LAN-only) is the one place places show.
 import { readConfig } from '@/lib/config';
-import { dayTimeMs, localDayNumber, plannedFor } from '@/lib/chargePlan';
+import { dayTimeMs, DEPART_BUFFER_MIN, localDayNumber, plannedFor } from '@/lib/chargePlan';
 import { overridePlan, validOverride, OVERRIDE_MIN_PCT, type ChargeOverride } from '@/lib/chargeOverride';
 import { influxTarget, writeLines } from '@/lib/chargeSessionInflux';
 import type { Alert } from '@/lib/planAlerts';
@@ -22,8 +22,8 @@ import { EV_WINDOW } from '@/lib/rivianSchedule';
 import { dailyNeedKwhOf, fetchForecast, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import { tripAlerts, type TripSummary } from '@/lib/tripAlerts';
 import { tripPlanLine } from '@/lib/tripInflux';
-import { adjustForTrip, awayDays, planTripDay, type Adjusted, type RouteFn, type TripDay, type TripEvent } from '@/lib/tripPlan';
-import { mutateTripChoices, readGeoOverrides, readTripChoices } from '@/lib/tripStore';
+import { adjustForTrip, ALL_DAY_START_HOUR, awayDays, manualAdjust, pctForMiles, planTripDay, type Adjusted, type RouteFn, type TripDay, type TripEvent } from '@/lib/tripPlan';
+import { mutateTripChoices, readGeoOverrides, readTripChoices, type ManualNeed } from '@/lib/tripStore';
 import { cellOf, fileRouteCache, legTraffic, readTrafficProfile, routeLeg } from '@/lib/valhalla';
 
 export interface EventView {
@@ -49,6 +49,8 @@ export interface DayView {
   adj: Adjusted | null;
   baseNeedPct: number;
   highF: number | null;
+  manual: ManualNeed | null;              // the day's need typed on /trips: replaces the trip estimate
+  byMs: number | null;                    // when the car must be ready (the plan's departure, else a default for a typed need)
 }
 
 export interface TripLayer {
@@ -88,7 +90,7 @@ export async function computeTrips(run: RivianPlanRun, nowMs: number, opts: { re
   const homePt: LatLon = { lat: home.lat, lon: home.lon };
   const within = eventsWithin(all, nowMs);
   const overrides = await readGeoOverrides();
-  const { choices, toggles } = await readTripChoices();
+  const { choices, toggles, needs } = await readTripChoices();
   const work = await placeWork(nowMs);
   await routeCache.load();
   const salt = await driveCellSalt();
@@ -139,7 +141,18 @@ export async function computeTrips(run: RivianPlanRun, nowMs: number, opts: { re
         adj = adjustForTrip({ isWork, baseNeedPct, miles: plan.miles, extraMiles: plan.extraMiles, highF });
       }
     }
-    days.push({ day, dateLabel: new Date(dayTimeMs(day, 12)).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }), isWork, away: isAway, events: views, plan, adj, baseNeedPct, highF });
+    // A need typed on /trips wins over the trip estimate (and covers a place
+    // that cannot be found or a route that cannot be worked out).
+    const manual = needs[String(day)] ?? null;
+    if (manual) {
+      highF = highF ?? await highFor(day, nowMs);
+      adj = manualAdjust({ baseNeedPct, pct: manual.unit === 'mi' ? pctForMiles(manual.value, highF) : manual.value });
+    }
+    const timed = dayEvents.filter((e) => !e.allDay).map((e) => e.startMs);
+    const byMs = plan?.departMs ?? (manual
+      ? (shift ? shift.startMs - DEPART_BUFFER_MIN * 60_000 : timed.length ? Math.min(...timed) - 3_600_000 : dayTimeMs(day, ALL_DAY_START_HOUR))
+      : null);
+    days.push({ day, dateLabel: new Date(dayTimeMs(day, 12)).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }), isWork, away: isAway, events: views, plan, adj, baseNeedPct, highF, manual, byMs });
   }
 
   // The summaries behind pushes, and the soonest raising trip as the override.
@@ -148,12 +161,12 @@ export async function computeTrips(run: RivianPlanRun, nowMs: number, opts: { re
   let override: ChargeOverride | null = null;
   const summaries: TripSummary[] = [];
   for (const d of days) {
-    if (!d.plan) continue;
-    const raise = !!d.adj?.raise && d.plan.departMs !== null && !d.plan.needsWork;
+    if (!d.plan && !d.manual) continue;
+    const raise = !!d.adj?.raise && d.byMs !== null && (!!d.manual || !d.plan?.needsWork);
     let reachable: boolean | null = null;
     let ov: ChargeOverride | null = null;
-    if (raise && d.adj && d.plan.departMs !== null) {
-      ov = validOverride({ targetPct: Math.max(OVERRIDE_MIN_PCT, Math.min(100, Math.round(d.adj.targetPct))), byMs: d.plan.departMs }, nowMs);
+    if (raise && d.adj && d.byMs !== null) {
+      ov = validOverride({ targetPct: Math.max(OVERRIDE_MIN_PCT, Math.min(100, Math.round(d.adj.targetPct))), byMs: d.byMs }, nowMs);
       if (ov) {
         const op = overridePlan({
           override: ov, nowMs, socPct: state?.chargePercent, limitPct: state?.chargeLimit, packKwh,
@@ -164,9 +177,10 @@ export async function computeTrips(run: RivianPlanRun, nowMs: number, opts: { re
       }
     }
     summaries.push({
-      day: d.day, dateLabel: d.dateLabel, miles: d.plan.miles, needPct: d.adj?.needPct ?? 0, targetPct: d.adj?.targetPct ?? 0,
-      byMs: d.plan.departMs, raise: raise && !!ov, multiDay: d.plan.multiDay, unplaced: d.plan.unplaced.length,
-      overlaps: d.plan.overlaps.length, limitPct: state?.chargeLimit ?? null, reachable,
+      day: d.day, dateLabel: d.dateLabel, miles: d.plan?.miles ?? 0, needPct: d.adj?.needPct ?? 0, targetPct: d.adj?.targetPct ?? 0,
+      byMs: d.byMs, raise: raise && !!ov, multiDay: d.plan?.multiDay ?? false, unplaced: d.plan?.unplaced.length ?? 0,
+      unroutable: !!d.plan?.unroutable, manual: !!d.manual,
+      overlaps: d.plan?.overlaps.length ?? 0, limitPct: state?.chargeLimit ?? null, reachable,
     });
   }
   return { days, workKnown: !!work, override, summaries };

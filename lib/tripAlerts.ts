@@ -16,6 +16,8 @@ export interface TripSummary {
   raise: boolean;              // the trip drives the plan
   multiDay: boolean;
   unplaced: number;            // events that could not be placed
+  unroutable: boolean;         // a leg could not be routed
+  manual: boolean;             // the day's need was typed on /trips
   overlaps: number;            // events overlapping the shift, still open
   limitPct: number | null;     // the car's charge limit
   reachable: boolean | null;   // overridePlan feasible, when it could be worked out
@@ -46,8 +48,10 @@ export function tripAlerts(c: TripAlertCtx): Alert[] {
     if (t.day < c.today) continue;
     const l = link(c.dashboardUrl, t.day, 'Open trips');
     if (t.raise && t.byMs !== null) {
-      add({ key: `trip-planned:${t.day}`, title: T, priority: 0, link: l,
-        message: `Trip planned for ${t.dateLabel}: about ${Math.round(t.miles)} mi, ${Math.round(t.targetPct)}% by ${hhmm(t.byMs)}.` });
+      if (!t.manual) {
+        add({ key: `trip-planned:${t.day}`, title: T, priority: 0, link: l,
+          message: `Trip planned for ${t.dateLabel}: about ${Math.round(t.miles)} mi, ${Math.round(t.targetPct)}% by ${hhmm(t.byMs)}.` });
+      }
       if (t.limitPct !== null && t.targetPct > t.limitPct) {
         add({ key: `trip-limit:${t.day}:${Math.round(t.targetPct)}`, title: T, priority: 0, link: l,
           message: `Raise the charge limit to ${Math.round(t.targetPct)}% in the Rivian app for ${t.dateLabel}, then set it back to 70% after.` });
@@ -61,9 +65,19 @@ export function tripAlerts(c: TripAlertCtx): Alert[] {
       add({ key: `trip-multiday:${t.day}`, title: T, priority: 0, link: l,
         message: `Multi-day trip starting ${t.dateLabel}: only the outbound leg is planned. Charging while away is not planned.` });
     }
-    if (t.unplaced > 0 && daytime) {
-      add({ key: `trip-unplaced:${t.day}`, title: T, priority: 0, link: link(c.dashboardUrl, t.day, 'Place it'),
-        message: `${t.unplaced === 1 ? 'An event' : `${t.unplaced} events`} on ${t.dateLabel} ${t.unplaced === 1 ? 'has a location' : 'have locations'} that could not be placed. Pick the place on the trips page.` });
+    // A place that cannot be found or a route that cannot be worked out: the
+    // plan cannot count that drive, so ask for the place or the day's need.
+    // Daytime, or tonight's charge at the evening update; a 23:00 reminder for
+    // tonight's charge. Nothing once a need is typed for the day.
+    if (!t.manual && (t.unplaced > 0 || t.unroutable)) {
+      const kind = t.unplaced > 0 ? 'trip-unplaced' : 'trip-unroutable';
+      const fl = link(c.dashboardUrl, t.day, 'Fix it');
+      const msg = t.unplaced > 0
+        ? `${t.unplaced === 1 ? 'An event' : `${t.unplaced} events`} on ${t.dateLabel} ${t.unplaced === 1 ? 'has a place' : 'have places'} that could not be found, so the plan cannot count the drive. Pick the place, or set the % or miles the day needs, on the trips page.`
+        : `A route for ${t.dateLabel} could not be worked out, so the plan cannot count the drive. Set the % or miles the day needs on the trips page.`;
+      const tonight = t.day === c.serveDay;
+      if (daytime || (tonight && c.slot === 'update')) add({ key: `${kind}:${t.day}`, title: T, priority: 0, link: fl, message: msg });
+      if (tonight && min >= 23 * 60) add({ key: `${kind}-2300:${c.today}:${t.day}`, title: T, priority: 1, link: fl, message: `Still open at 23:00. ${msg}` });
     }
     if (t.overlaps > 0) {
       const ol = link(c.dashboardUrl, t.day, 'Choose');
