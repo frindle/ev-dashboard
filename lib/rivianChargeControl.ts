@@ -28,7 +28,7 @@ import { fetchRivianChargingSchedules, setRivianChargingSchedules } from '@/lib/
 import { sendPush } from '@/lib/pushover';
 import { planAlerts, pruneSent } from '@/lib/planAlerts';
 import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertStore';
-import { fetchForecast, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
+import { dailyNeedKwhOf, fetchForecast, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import type { NightPlan } from '@/lib/chargePlan';
 import { packKwhFor, RIVIAN_PACK_KWH_DEFAULT } from '@/lib/packKwh';
 import { runTripLayer } from '@/lib/tripRun';
@@ -117,11 +117,7 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
     const plan = built?.result.plan ?? null;
     status.need = run.est;
     status.need7 = run.need7;
-    // The serve day's expected use (no margin, like plannedKwh); from the
-    // daily-use need when it planned the night, else the charge history.
-    status.dailyNeedKwh = built && run.need7
-      ? (run.workDays?.has(built.serveDay) ? built.usePctWork : built.usePctOff) * run.kwhPerPct
-      : run.est?.plannedKwh ?? null;
+    status.dailyNeedKwh = dailyNeedKwhOf(run);
     status.night = plan;
     status.conflict = built?.result.conflict ?? false;
     status.pluggedIn = run.state?.isPluggedIn ?? null;

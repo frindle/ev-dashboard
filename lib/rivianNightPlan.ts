@@ -93,6 +93,14 @@ export interface RivianPlanRun {
   need7: LiveNeed | null;   // the daily-use need (EV plan #7); null = charge history planned it
 }
 
+// The serve day's expected use in kWh (no margin, like plannedKwh): from the
+// daily-use need when it planned the night, else the charge history.
+export function dailyNeedKwhOf(run: RivianPlanRun): number | null {
+  const b = run.built;
+  if (b && run.need7) return (run.workDays?.has(b.serveDay) ? b.usePctWork : b.usePctOff) * run.kwhPerPct;
+  return run.est?.plannedKwh ?? null;
+}
+
 // opts.refreshCalendar re-reads the ICS now (the 23:00 slot, an open conflict).
 // opts.forecastHighF: a cached high; undefined = none known.
 // opts.forecastTemps: cached 3-hourly forecast temperatures (drive-time temps).

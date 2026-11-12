@@ -11,6 +11,15 @@ import { runRivianChargeControl } from '@/lib/rivianChargeControl';
 
 export const dynamic = 'force-dynamic';
 
+// Back to the page the form was on, only on this host (never an outside referer).
+function sameOriginPath(req: NextRequest): string {
+  try {
+    const r = new URL(req.headers.get('referer') ?? '');
+    if (r.host === req.nextUrl.host) return r.pathname + r.search;
+  } catch { /* no or bad referer */ }
+  return '/trips';
+}
+
 export async function POST(req: NextRequest) {
   const isForm = (req.headers.get('content-type') ?? '').includes('form');
   let b: Record<string, unknown> | null = null;
@@ -41,6 +50,6 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'bad request' }, { status: 400 });
   }
   void runRivianChargeControl({ force: true });
-  if (isForm) return new Response(null, { status: 303, headers: { Location: req.headers.get('referer') ?? '/trips' } });
+  if (isForm) return new Response(null, { status: 303, headers: { Location: sameOriginPath(req) } });
   return Response.json({ ok: true, writeback: result });
 }

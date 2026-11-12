@@ -19,7 +19,7 @@ import { placeEvent, WORK_KEY, searchPlaces } from '@/lib/geocode';
 import type { LatLon } from '@/lib/ics';
 import { eventsWithin, getPersonalEvents, personalCalendarOn, TRIP_DAYS_AHEAD, type PersonalEvent } from '@/lib/personalCalendar';
 import { EV_WINDOW } from '@/lib/rivianSchedule';
-import { fetchForecastHigh, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
+import { dailyNeedKwhOf, fetchForecast, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import { tripAlerts, type TripSummary } from '@/lib/tripAlerts';
 import { tripPlanLine } from '@/lib/tripInflux';
 import { adjustForTrip, awayDays, planTripDay, type Adjusted, type RouteFn, type TripDay, type TripEvent } from '@/lib/tripPlan';
@@ -62,7 +62,7 @@ const highCache = new Map<number, { highF: number | null; atMs: number }>();
 async function highFor(day: number, nowMs: number): Promise<number | null> {
   const c = highCache.get(day);
   if (c && nowMs - c.atMs < 3 * 3_600_000) return c.highF;
-  const highF = await fetchForecastHigh(day);
+  const highF = (await fetchForecast(day))?.highF ?? null;
   highCache.set(day, { highF, atMs: nowMs });
   return highF;
 }
@@ -121,7 +121,11 @@ export async function computeTrips(run: RivianPlanRun, nowMs: number, opts: { re
       });
     }
     const kwhPerPct = run.kwhPerPct > 0 ? run.kwhPerPct : 1.44;
-    const baseNeedPct = run.est ? plannedFor(run.est, isWork) / kwhPerPct : (isWork ? 20 : 10);
+    // The same expected use the night plan uses: the daily-use need (#7) when it
+    // has one for this kind of day, else the charge history, else 20% / 10%.
+    const n7 = isWork ? run.need7?.work : run.need7?.off;
+    const baseNeedPct = typeof n7 === 'number' && Number.isFinite(n7) ? n7
+      : run.est ? plannedFor(run.est, isWork) / kwhPerPct : (isWork ? 20 : 10);
     let plan: TripDay | null = null;
     let adj: Adjusted | null = null;
     let highF: number | null = null;
@@ -153,7 +157,7 @@ export async function computeTrips(run: RivianPlanRun, nowMs: number, opts: { re
       if (ov) {
         const op = overridePlan({
           override: ov, nowMs, socPct: state?.chargePercent, limitPct: state?.chargeLimit, packKwh,
-          dailyKwh: run.est?.plannedKwh ?? 0, window: EV_WINDOW, minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS,
+          dailyKwh: dailyNeedKwhOf(run) ?? 0, window: EV_WINDOW, minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS,
         });
         reachable = op ? op.feasible : null;
         if (!override) override = ov;
