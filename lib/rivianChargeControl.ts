@@ -30,6 +30,8 @@ import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertSt
 import { fetchForecastHigh, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import type { NightPlan } from '@/lib/chargePlan';
 import { packKwhFor, RIVIAN_PACK_KWH_DEFAULT } from '@/lib/packKwh';
+import { runTripLayer } from '@/lib/tripRun';
+import type { Alert } from '@/lib/planAlerts';
 
 const RUN_INTERVAL_MS = 15 * 60_000;
 
@@ -125,10 +127,14 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
     if (slot !== null && plan?.targetPct != null && built) store.target = { day: built.serveDay, pct: plan.targetPct };
 
     status.override = await readOverride(now);
-    status.overridePlan = status.override
+    // Personal-calendar trips (#8): inert unless PERSONAL_CAL_URL is set. Its
+    // automatic "N% by departure" target is used only when no manual override is stored.
+    const trips = await runTripLayer(run, now, { sent: new Set(Object.keys(store.sent)), slot, serveDay, refresh: slot === 'update' });
+    const activeOverride = status.override ?? trips?.layer.override ?? null;
+    status.overridePlan = activeOverride
       ? overridePlan({
         socPct: run.state?.chargePercent, limitPct: run.state?.chargeLimit, packKwh: packKwhFor(run.state?.batteryCapacityKwh, readConfig().vehicles.rivian.packKwh, RIVIAN_PACK_KWH_DEFAULT),
-        minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS, override: status.override, nowMs: now,
+        minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS, override: activeOverride, nowMs: now,
         dailyKwh: status.dailyNeedKwh ?? 0, window: EV_WINDOW,
       })
       : null;
@@ -168,7 +174,7 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
       limitPct: run.state?.chargeLimit ?? null, notChargingPush,
       serveDay: built?.serveDay ?? today, dashboardUrl: process.env.DASHBOARD_URL ?? null,
     });
-    for (const a of alerts) {
+    for (const a of [...alerts, ...(trips?.alerts ?? [])] as Alert[]) {
       if (await sendPush(a.title, a.message, a.priority, a.link)) store.sent[a.key] = now;
     }
     store.conflictOpenDay = status.conflict && built ? built.serveDay : null;
