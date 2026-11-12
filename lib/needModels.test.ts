@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildNeedData, coverageOk, curveValue, ewmaNeed, fitTempCurve, miPerPctAt, modelA, modelB, overridesFromPass1, planNeed, refitDateFor,
+  buildNeedData, coverageOk, curveValue, ewmaNeed, fitTempCurve, liveNeed, miPerPctAt, modelA, modelB, overridesFromPass1, planNeed, refitDateFor,
   ruleFromShorts, simulate, tempNeed, walkDates, windowHoursFor, type DailyUse, type DriveIn,
 } from './needModels.ts';
 import { ampsFor, nightPlan } from './chargePlan.ts';
@@ -209,4 +209,26 @@ test('simulate live mode follows nightPlan (put-back, catch-up, heat top-up cap)
   // pct 5: reach 30.5; day 14 from 25 -> put-back 30.5; arrival 10.5; day 15 from 10.5 -> reach 30.5
   assert.ok(Math.abs(s3[0].morning - 30.5) < 1e-9);
   assert.ok(s3.every((d) => d.short));   // actual 20 > 5.5 each day
+});
+
+test('liveNeed: null under 5-of-7 coverage; worst drive-time temperature wins; off day from (a)', () => {
+  const rows: DailyUse[] = [], work: string[] = [], drives: DriveIn[] = [];
+  for (let i = 0; i < 60; i++) {
+    const isWork = i % 7 < 5;
+    const t = [35, 50, 65][i % 3];                               // three well-filled bands (the fit needs 3 temps)
+    rows.push(row(i, isWork ? 18 : 8, { miles: isWork ? 40 : 5 }));
+    if (isWork) work.push(date(i));
+    drives.push(drive(i, trueCurve(t) * 8, 8, t), drive(i, trueCurve(t) * 8, 8, t));
+  }
+  const mid = liveNeed(rows, drives, work, date(56), [65])!;      // 56%7=0, a work day
+  assert.ok(mid && mid.work !== null && mid.off !== null);
+  assert.equal(mid.tempF, 65);
+  assert.equal(mid.workSource, 'curve');
+  const both = liveNeed(rows, drives, work, date(56), [65, 35])!;
+  assert.ok(both.work! > mid.work!);                              // 35F drives get fewer mi/%
+  assert.equal(both.tempF, 35);
+  const none = liveNeed(rows, drives, work, date(56), [])!;        // no forecast: curve at no temperature
+  assert.ok(none && none.work !== null);
+  const gappy = rows.map((r, i) => (i >= 51 && i <= 53 ? { ...r, unknown: true, used_pct: null } : r));
+  assert.equal(liveNeed(gappy, drives, work, date(56), [65]), null);
 });

@@ -12,7 +12,7 @@ export interface PlanStore {
   target: { day: number; pct: number } | null;        // SoC the coming morning should reach
   lateSeen: number | null;                            // serve day the car was found not charging at start + 15
   replanned: number | null;                           // serve day the late-start replan ran
-  forecast: { day: number; highF: number } | null;
+  forecast: { day: number; highF: number | null; temps?: Array<{ ms: number; tempF: number }> } | null;
   conflictOpenDay: number | null;
 }
 

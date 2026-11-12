@@ -272,9 +272,12 @@ export function tempFor(data: NeedData, date: string): number | null {
 
 export interface TempNeed { pct: number; tempF: number; band: number; source: CurveSource }
 
-export function tempNeed(data: NeedData, asOf: string, curve: TempCurve | null, overrides?: BandOverrides): TempNeed | null {
+// tempOverride: the forecast temperature to plan with (live); absent = tempFor.
+export function tempNeed(
+  data: NeedData, asOf: string, curve: TempCurve | null, overrides?: BandOverrides, tempOverride?: number | null,
+): TempNeed | null {
   if (!curve) return null;
-  const tempF = tempFor(data, asOf);
+  const tempF = typeof tempOverride === 'number' && Number.isFinite(tempOverride) ? tempOverride : tempFor(data, asOf);
   if (tempF === null) return null;
   const miles: number[] = [], parked: number[] = [];
   for (const r of data.rows) {
@@ -326,6 +329,46 @@ export function planNeed(
   if (!b) return a ? { pct: a.pct, rule: 'a-fallback' } : null;
   if (rule.workDay === 'max' && a) return { pct: Math.max(a.pct, b.pct), rule: 'max' };
   return { pct: b.pct, rule: 'b' };
+}
+
+// ---- live use (EV plan #7 winner) ----------------------------------------
+
+// Backtest 2026-11-12 (Roamer seed, 142 scored days, inferred work days): in
+// reach mode (b) with these bands on their 25th-percentile mi/% missed 10.2% of
+// work days vs 20.5% for (a) and for the bare curve, so NEED_RULE stays 'b'.
+// Live nightPlan: 1 short morning in 142 for every model, amps mean ~14, p90 20.
+// Re-run scripts/backtest-need.mjs monthly and update this map.
+export const LIVE_BAND_OVERRIDES: BandOverrides = new Map([[70, 0.25], [80, 0.25], [90, 0.25], [100, 0.25]]);
+
+export interface LiveNeed {
+  work: number | null;          // % per work day, no margin
+  off: number | null;           // % per day off, no margin
+  workSource: string;           // 'curve' | 'sparse' | 'override' | 'max' | 'a-fallback'
+  tempF: number | null;         // temperature the work need was planned at
+}
+
+// The need for day `asOf` from the daily-use log. tempsF: forecast temperatures
+// at the drive times; the worst one (highest need) wins; empty = tempFor.
+// null when daily use covers < 5 of the last 7 days (caller keeps the
+// charge-history estimate).
+export function liveNeed(
+  rows: DailyUse[], drives: DriveIn[], workdays: string[], asOf: string, tempsF: number[], rule: NeedRule = NEED_RULE,
+): LiveNeed | null {
+  const data = buildNeedData(rows, drives, workdays);
+  if (!coverageOk(data, asOf)) return null;
+  const curve = fitTempCurve(data, asOf);
+  const temps = tempsF.filter((t) => Number.isFinite(t));
+  let b: TempNeed | null = null;
+  for (const t of temps.length ? temps : [null]) {
+    const n = tempNeed(data, asOf, curve, LIVE_BAND_OVERRIDES, t);
+    if (n && (!b || n.pct > b.pct)) b = n;
+  }
+  const aw = ewmaNeed(data, asOf, true);
+  const ao = ewmaNeed(data, asOf, false);
+  let work: number | null = b ? b.pct : aw?.pct ?? null;
+  let workSource = b ? b.source : 'a-fallback';
+  if (b && rule.workDay === 'max' && aw && aw.pct > b.pct) { work = aw.pct; workSource = 'max'; }
+  return { work, off: ao?.pct ?? null, workSource, tempF: b?.tempF ?? null };
 }
 
 // ---- walk-forward simulation -------------------------------------------

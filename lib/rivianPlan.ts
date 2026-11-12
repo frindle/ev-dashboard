@@ -24,6 +24,9 @@ export interface BuildInput {
   forecastHighF: number | null;   // the high of the day the charge serves
   minAmps: number;
   maxAmps: number;
+  // EV plan #7: expected use in % from the daily-use log (lib/needModels.ts
+  // liveNeed). A null kind falls back to the charge-history estimate.
+  useOverride?: { work: number | null; off: number | null } | null;
 }
 
 export interface BuiltPlan {
@@ -31,6 +34,7 @@ export interface BuiltPlan {
   socUsed: number | null;       // the SoC the plan started from (after the day's use is taken off)
   usePctWork: number;
   usePctOff: number;
+  needSource: { work: 'daily-use' | 'charge-history'; off: 'daily-use' | 'charge-history' };
   result: TonightResult;
 }
 
@@ -51,10 +55,18 @@ export function socForPlan(
 }
 
 export function buildRivianPlan(p: BuildInput): BuiltPlan | null {
-  if (!p.est || !(p.kwhPerPct > 0)) return null;
+  if (!(p.kwhPerPct > 0)) return null;
+  const est = p.est;
+  const hist = (isWork: boolean): number | null => (est ? plannedFor(est, isWork) / p.kwhPerPct : null);
+  const ow = p.useOverride?.work, oo = p.useOverride?.off;
+  const usePctWork = typeof ow === 'number' && Number.isFinite(ow) ? ow : hist(true);
+  const usePctOff = typeof oo === 'number' && Number.isFinite(oo) ? oo : hist(false);
+  if (usePctWork === null || usePctOff === null) return null;
+  const needSource = {
+    work: usePctWork === ow ? 'daily-use' as const : 'charge-history' as const,
+    off: usePctOff === oo ? 'daily-use' as const : 'charge-history' as const,
+  };
   const serveDay = nextUseDay(p.nowMs);
-  const usePctWork = plannedFor(p.est, true) / p.kwhPerPct;
-  const usePctOff = plannedFor(p.est, false) / p.kwhPerPct;
   const todayIsWork = !!p.workDays?.has(localDayNumber(p.nowMs));
   const todayUse = todayIsWork ? usePctWork : usePctOff;
   const rawSoc = typeof p.state?.chargePercent === 'number' && p.state.chargePercent > 0 ? p.state.chargePercent : null;
@@ -64,7 +76,39 @@ export function buildRivianPlan(p: BuildInput): BuiltPlan | null {
     socPct: socUsed, limitPct: p.state?.chargeLimit, margin: p.margin, floorPct: p.floorPct,
     topUpLimitPct: topUpLimitFor(p.forecastHighF), kwhPerPct: p.kwhPerPct, minAmps: p.minAmps, maxAmps: p.maxAmps,
   });
-  return { serveDay, socUsed, usePctWork, usePctOff, result };
+  return { serveDay, socUsed, usePctWork, usePctOff, needSource, result };
+}
+
+export interface ForecastTemp { ms: number; tempF: number }
+
+// OpenWeatherMap 5-day/3-hour entries as (time, temperature) pairs.
+export function forecastTempsFrom(list: Array<{ dt?: number; main?: { temp?: number } }>): ForecastTemp[] {
+  const out: ForecastTemp[] = [];
+  for (const e of list) {
+    const t = e.main?.temp;
+    if (typeof e.dt === 'number' && typeof t === 'number' && Number.isFinite(t)) out.push({ ms: e.dt * 1000, tempF: t });
+  }
+  return out;
+}
+
+// EV plan Rev 9: the forecast at the drive times (leaving and coming home),
+// not the day's high. For each time, the nearest forecast entry within 3h;
+// empty when there are no shifts that day or no entry is close enough.
+export function driveTimeTemps(temps: ForecastTemp[], shifts: Shift[], day: number, departBufferMin = 60): number[] {
+  const out: number[] = [];
+  const near = (ms: number) => {
+    let best: ForecastTemp | null = null;
+    for (const t of temps) if (!best || Math.abs(t.ms - ms) < Math.abs(best.ms - ms)) best = t;
+    return best && Math.abs(best.ms - ms) <= 3 * 3_600_000 ? best.tempF : null;
+  };
+  for (const s of shifts) {
+    if (s.day !== day) continue;
+    for (const ms of [s.startMs - departBufferMin * 60_000, s.endMs]) {
+      const t = near(ms);
+      if (t !== null) out.push(t);
+    }
+  }
+  return out;
 }
 
 // Highest forecast temperature (F) among OpenWeatherMap 5-day/3-hour entries
