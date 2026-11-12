@@ -95,7 +95,10 @@ test('alerts: unplugged after shift, day off 20:00, shortfall, not charging, lim
   assert.ok(keys(ctx({ done, isOffDay: true, atHome: true, plugged: false, needsCharge: true, nowMs: at('2026-11-12T20:00:00-08:00') })).includes('unplugged-day-off'));
   assert.ok(!keys(ctx({ done, isOffDay: true, atHome: true, plugged: true, needsCharge: true, nowMs: at('2026-11-12T20:00:00-08:00') })).includes('unplugged-day-off'));
   assert.ok(keys(ctx({ done, shortfall: true, nowMs: at('2026-11-12T08:15:00-08:00') })).includes('shortfall'));
-  assert.ok(keys(ctx({ done, notChargingPush: true })).includes('not-charging'));
+  assert.ok(keys(ctx({ done, notChargingPush: true, plugged: true, needsCharge: true })).includes('not-charging'));
+  assert.ok(!keys(ctx({ done, notChargingPush: true, plugged: true, needsCharge: false })).includes('not-charging'));
+  assert.ok(!keys(ctx({ done, notChargingPush: true, plugged: false, needsCharge: true })).includes('not-charging'));
+  assert.ok(!keys(ctx({ done, notChargingPush: true, plugged: null, needsCharge: true })).includes('not-charging'));
   assert.ok(keys(ctx({ done, limitPct: 80, nowMs: at('2026-11-12T08:15:00-08:00') })).includes('limit-high'));
   assert.ok(!keys(ctx({ done, limitPct: 70, nowMs: at('2026-11-12T08:15:00-08:00') })).includes('limit-high'));
 });

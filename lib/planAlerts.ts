@@ -78,7 +78,9 @@ export function planAlerts(c: AlertCtx): Alert[] {
     add({ key: `shortfall:${c.today}`, title: T, priority: 0,
       message: 'Tonight and tomorrow cannot be fully charged at 48A in the hours available.' });
   }
-  if (c.notChargingPush) {
+  // Only when it should be charging: plugged in and tonight's plan wants kWh.
+  // A full car (at its limit) or one away from home is not a problem.
+  if (c.notChargingPush && c.plugged === true && c.needsCharge) {
     add({ key: `not-charging:${c.serveDay}`, title: T, priority: 1,
       message: 'The Rivian is not charging 30 minutes after the planned start.' });
   }
