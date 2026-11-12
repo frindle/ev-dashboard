@@ -5,7 +5,7 @@ import {
   buildNeedData, coverageOk, curveValue, ewmaNeed, fitTempCurve, miPerPctAt, modelA, modelB, overridesFromPass1, planNeed, refitDateFor,
   ruleFromShorts, simulate, tempNeed, walkDates, windowHoursFor, type DailyUse, type DriveIn,
 } from './needModels.ts';
-import { ampsFor } from './chargePlan.ts';
+import { ampsFor, nightPlan } from './chargePlan.ts';
 
 const d0 = Date.UTC(2026, 5, 1);
 const date = (i: number) => new Date(d0 + i * 86_400_000).toISOString().slice(0, 10);
@@ -145,7 +145,7 @@ test('simulate: short-morning counting on a 5-day hand-computed case', () => {
   const rows = used.map((u, i) => row(i, u));
   const data = buildNeedData(rows, [], []);
   assert.equal(walkDates(data).length, 5);
-  const days = simulate(data, modelA(data), { limit: 70, floor: 25, kwhPerPct: 1.44 });
+  const days = simulate(data, modelA(data), { limit: 70, floor: 25, kwhPerPct: 1.44, margin: 1 });
   assert.equal(days.length, 5);
   // need = 10 each day. chain starts at arrival=floor=25.
   // d1: morning max(25, 35)=35, arrive 25, charged 10 -> 14.4 kWh
@@ -158,23 +158,55 @@ test('simulate: short-morning counting on a 5-day hand-computed case', () => {
   assert.deepEqual(days.map((d) => d.amps), [8, 8, 8, 24, 8]);
   assert.equal(days.filter((d) => d.nudge).length, 0);
   // a low limit forces nudges: floor 25 + 10 > 30
-  const nudged = simulate(data, modelA(data), { limit: 30, floor: 25 });
+  const nudged = simulate(data, modelA(data), { limit: 30, floor: 25, margin: 1 });
   assert.equal(nudged.filter((d) => d.nudge).length, 5);
   assert.equal(windowHoursFor(date(3), true), 8);
   assert.equal(windowHoursFor(date(3), false), 8);
   // pass-1 override selection: band missing > 10% with enough days
-  const fake = Array.from({ length: 10 }, (_, i) => ({ date: date(i), isWork: true, need: 1, actual: 1, short: i < 2, amps: 0, nudge: false, band: 70, source: '' }));
+  const fake = Array.from({ length: 10 }, (_, i) => ({ date: date(i), isWork: true, need: 1, actual: 1, short: i < 2, amps: 0, nudge: false, band: 70, source: '', morning: 0, arrival: 0 }));
   assert.deepEqual([...overridesFromPass1(fake).keys()], [70]);
   assert.equal(overridesFromPass1(fake.slice(0, 4)).size, 0);
 });
 
-test('tempNeed: commute / curve x 1.1 + parked', () => {
+test('tempNeed: commute / curve + parked (no margin; the planner applies it)', () => {
   const rows: DailyUse[] = [], work: string[] = [], drives: DriveIn[] = [];
   for (let i = 0; i < 30; i++) { rows.push(row(i, 15, { miles: 40, parked_pct: 2 })); work.push(date(i)); drives.push(drive(i, 3 * 8, 8, 70 + (i % 8))); }
   const data = buildNeedData(rows, drives, work);
   const curve = fitTempCurve(data, date(30))!;
   const need = tempNeed(data, date(30), curve)!;
   const v = miPerPctAt(curve, need.tempF).value;
-  assert.ok(Math.abs(need.pct - ((40 / v) * 1.1 + 2)) < 1e-9);
+  assert.ok(Math.abs(need.pct - (40 / v + 2)) < 1e-9);
   assert.ok(Math.abs(v - 3) < 0.05);
+});
+
+test('simulate reach mode applies the margin to the minimum', () => {
+  const rows = Array.from({ length: 19 }, (_, i) => row(i, 10));
+  const data = buildNeedData(rows, [], []);
+  const days = simulate(data, modelA(data), { limit: 70, floor: 25 });   // default margin 1.1
+  assert.ok(Math.abs(days[0].morning - 36) < 1e-9);                       // 25 + 10 x 1.1
+  assert.ok(days.every((d) => !d.short));
+});
+
+test('simulate live mode follows nightPlan (put-back, catch-up, heat top-up cap)', () => {
+  // 14 history days + 3 scored work days of 20%; scored day 15 is 95F (heat cap 60%)
+  const rows: DailyUse[] = [], work: string[] = [], drives: DriveIn[] = [];
+  for (let i = 0; i < 17; i++) { rows.push(row(i, 20)); work.push(date(i)); drives.push(drive(i, 40, 15, i === 15 ? 95 : 70)); }
+  const data = buildNeedData(rows, drives, work);
+  const live = simulate(data, modelA(data), { limit: 70, floor: 25, mode: 'live' });
+  assert.equal(live.length, 3);
+  // day 14: from 25%, need 20 -> reach 25 + 22 = 47 and put-back 25 + 22 = 47
+  const p0 = nightPlan({ isWork: true, socPct: 25, limitPct: 70, usePct: 20, margin: 1.1, floorPct: 25, windowHours: 8, kwhPerPct: 1.44, minAmps: 6, maxAmps: 48 });
+  assert.ok(Math.abs(live[0].morning - (25 + p0.totalPct)) < 1e-9);
+  assert.equal(live[0].amps, p0.amps);
+  // day 15 starts at 27%; put-back 27 + 22 = 49 < 60 cap, so the cap doesn't bind yet
+  assert.ok(Math.abs(live[1].morning - 49) < 1e-9);
+  // a run that starts high on a hot day stops at 60, not 70
+  const s2 = simulate(data, () => ({ pct: 40 }), { limit: 70, floor: 25, mode: 'live' });
+  // day 14: reach 25 + 44 = 69; day 15 (95F): from 49, put-back min(49 + 44, 60) = 60, reach 69 -> 69 (reach wins over the cap)
+  assert.ok(Math.abs(s2[0].morning - 69) < 1e-9);
+  assert.ok(Math.abs(s2[1].morning - 69) < 1e-9);
+  const s3 = simulate(data, () => ({ pct: 5 }), { limit: 70, floor: 25, mode: 'live' });
+  // pct 5: reach 30.5; day 14 from 25 -> put-back 30.5; arrival 10.5; day 15 from 10.5 -> reach 30.5
+  assert.ok(Math.abs(s3[0].morning - 30.5) < 1e-9);
+  assert.ok(s3.every((d) => d.short));   // actual 20 > 5.5 each day
 });

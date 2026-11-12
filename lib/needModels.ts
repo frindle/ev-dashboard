@@ -4,7 +4,9 @@
 //
 //   (a) ewmaNeed  recency-weighted mean of daily % used, split work/off.
 //   (b) tempNeed  work-day commute miles / (mi per 1% at the day's temperature)
-//                 x 1.1 + parked drain. Curve choice: a quadratic in temperature
+//                 + parked drain. No margin here: like needEstimate, models return
+//                 the expected use and the planner (nightPlan) applies the 1.1
+//                 margin to the put-back and the reach. Curve choice: a quadratic in temperature
 //                 fitted to per-drive mi/% by weighted least squares, weights =
 //                 the drive's % drop (so it estimates sum(miles)/sum(%), not a
 //                 mean of noisy 1%-resolution ratios), made robust with 4 Huber
@@ -12,14 +14,20 @@
 //                 never extrapolated) and the result to [1.2, 5] mi/%.
 //   planNeed      work days use (b) (or max(a,b), see NeedRule), off days (a),
 //                 null when daily use covers < 5 of the last 7 days.
+//   simulate      two modes: 'reach' leaves every morning at only the minimum
+//                 (floor + use x margin), which scores how often the estimate
+//                 itself is beaten; 'live' runs the real nightPlan (put-back /
+//                 catch-up, heat top-up cap, 6-48A), which is what the car does.
 //
 // Day keys are local 'YYYY-MM-DD' strings; they sort chronologically, so
 // `date < D` is "known before the night that plans day D".
-import { ampsFor, CHARGE_WINDOW_HOURS, dayTimeMs, EWMA_HALF_LIFE_DAYS, MIN_DAYS_PER_KIND, nightWindow, WORK_RATE_HALF_LIFE_DAYS } from './chargePlan.ts';
+import { ampsFor, CHARGE_WINDOW_HOURS, dayTimeMs, EWMA_HALF_LIFE_DAYS, MIN_DAYS_PER_KIND, nightPlan, nightWindow, topUpLimitFor, WORK_RATE_HALF_LIFE_DAYS } from './chargePlan.ts';
 import { KWH_PER_PCT_SEED } from './kwhPerPct.ts';
 import { localDate } from './rivianDailyUse.ts';
 
-export const WORK_MARGIN = 1.1;
+export const WORK_MARGIN = 1.1;   // the Rivian's arrivalDriveMargin (lib/config.ts)
+export const LIVE_MIN_AMPS = 6;   // RIVIAN_MIN_AMPS / RIVIAN_MAX_AMPS (rivianNightPlan.ts imports server-only modules)
+export const LIVE_MAX_AMPS = 48;
 export const SPARSE_BAND_MIN_DRIVES = 10;
 export const SPARSE_MI_PER_PCT = 1.95;
 export const BAND_MISS_THRESHOLD = 0.10;
@@ -71,6 +79,7 @@ export interface NeedData {
   rowByDate: Map<string, DailyUse>;
   drives: FitDrive[];                     // valid for fitting (drop >= 2, miles >= 3, temp known), sorted by date
   dayTemp: Map<string, number>;           // mean drive temp_f per local day
+  dayTempMax: Map<string, number>;        // hottest drive temp_f per local day (stands in for the forecast high)
   workDays: Set<string>;
 }
 
@@ -98,9 +107,9 @@ export function buildNeedData(rows: DailyUse[], drives: DriveIn[], workdays: str
     fit.push({ date, miPerPct: d.miles / drop, dropPct: drop, tempF: d.temp_f, work: workDays.has(date) });
   }
   fit.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  const dayTemp = new Map<string, number>();
-  for (const [date, l] of temps) dayTemp.set(date, l.reduce((s, x) => s + x, 0) / l.length);
-  return { rows: sorted, rowByDate: new Map(sorted.map((r) => [r.date, r])), drives: fit, dayTemp, workDays };
+  const dayTemp = new Map<string, number>(), dayTempMax = new Map<string, number>();
+  for (const [date, l] of temps) { dayTemp.set(date, l.reduce((s, x) => s + x, 0) / l.length); dayTempMax.set(date, Math.max(...l)); }
+  return { rows: sorted, rowByDate: new Map(sorted.map((r) => [r.date, r])), drives: fit, dayTemp, dayTempMax, workDays };
 }
 
 const knownUse = (r: DailyUse): r is DailyUse & { used_pct: number } => !r.unknown && isNum(r.used_pct);
@@ -278,7 +287,7 @@ export function tempNeed(data: NeedData, asOf: string, curve: TempCurve | null, 
   if (commute === null || miles.length < 3) return null;
   const park = rollingMedian(parked, ROLLING_DAYS) ?? 0;
   const { value, source } = miPerPctAt(curve, tempF, overrides);
-  return { pct: (commute / value) * WORK_MARGIN + park, tempF, band: bandOf(tempF), source };
+  return { pct: commute / value + park, tempF, band: bandOf(tempF), source };
 }
 
 // ---- combined -----------------------------------------------------------
@@ -321,11 +330,15 @@ export function planNeed(
 
 // ---- walk-forward simulation -------------------------------------------
 
+export type SimMode = 'reach' | 'live';
+
 export interface WalkOptions {
   limit?: number;
   floor?: number;
   kwhPerPct?: number;
   minHistoryDays?: number;
+  margin?: number;          // default WORK_MARGIN
+  mode?: SimMode;           // default 'reach'
 }
 
 export interface SimDay {
@@ -338,6 +351,8 @@ export interface SimDay {
   nudge: boolean;
   band: number | null;
   source: string;
+  morning: number;
+  arrival: number;
 }
 
 export type NeedFn = (date: string, isWork: boolean, curve: TempCurve | null) => { pct: number; band?: number | null; source?: string } | null;
@@ -368,13 +383,19 @@ export function windowHoursFor(date: string, isWork: boolean): number {
 }
 
 // Each scoreable day is predicted from earlier data only; SoC is simulated
-// arrival(D-1) -> morning(D) = max(arrival, min(limit, floor + need)) ->
-// arrival(D) = morning - actual. The chain restarts at `floor` after any day
-// with unknown use (or no prediction). Short morning = arrival(D) < floor.
+// arrival(D-1) -> morning(D) -> arrival(D) = morning - actual.
+//   reach: morning = max(arrival, min(limit, floor + need x margin)).
+//   live:  morning = arrival + nightPlan(...).totalPct (no next-night buffer;
+//          the backtest has no shift times), heat top-up cap from the day's
+//          hottest drive temperature, amps from nightPlan (6-48A, 2A steps).
+// The chain restarts at `floor` after any day with unknown use (or no
+// prediction). Short morning = arrival(D) < floor.
 export function simulate(data: NeedData, needFn: NeedFn, opts: WalkOptions = {}): SimDay[] {
   const limit = opts.limit ?? DEFAULT_LIMIT_PCT;
   const floor = opts.floor ?? DEFAULT_FLOOR_PCT;
   const kwhPerPct = opts.kwhPerPct ?? KWH_PER_PCT_SEED;
+  const margin = opts.margin ?? WORK_MARGIN;
+  const mode: SimMode = opts.mode ?? 'reach';
   const dates = walkDates(data, opts.minHistoryDays ?? MIN_HISTORY_DAYS);
   if (!dates.length) return [];
   const start = dates[0];
@@ -392,14 +413,27 @@ export function simulate(data: NeedData, needFn: NeedFn, opts: WalkOptions = {})
     const isWork = data.workDays.has(date);
     const n = needFn(date, isWork, curves.get(refit)!);
     if (!n) { prevArrival = floor; continue; }
-    const target = floor + n.pct;
-    const morning = Math.max(prevArrival, Math.min(limit, target));
+    const hours = windowHoursFor(date, isWork);
+    let morning: number, amps: number, nudge: boolean;
+    if (mode === 'live') {
+      const p = nightPlan({
+        isWork, socPct: Math.max(0.01, prevArrival), limitPct: limit, usePct: n.pct, margin, floorPct: floor,
+        topUpLimitPct: isWork ? topUpLimitFor(data.dayTempMax.get(date)) : null, windowHours: hours, kwhPerPct,
+        minAmps: LIVE_MIN_AMPS, maxAmps: LIVE_MAX_AMPS,
+      });
+      morning = Math.max(0.01, prevArrival) + p.totalPct;
+      amps = p.amps ?? 0;
+      nudge = p.raiseLimitTo !== null;
+    } else {
+      const target = floor + n.pct * margin;
+      morning = Math.max(prevArrival, Math.min(limit, target));
+      amps = ampsFor((morning - prevArrival) * kwhPerPct, 0, 48, hours);
+      nudge = target > limit;
+    }
     const arrival = morning - row.used_pct;
-    const kwh = (morning - prevArrival) * kwhPerPct;
     out.push({
       date, isWork, need: n.pct, actual: row.used_pct, short: arrival < floor,
-      amps: ampsFor(kwh, 0, 48, windowHoursFor(date, isWork)), nudge: target > limit,
-      band: n.band ?? null, source: n.source ?? '',
+      amps, nudge, band: n.band ?? null, source: n.source ?? '', morning, arrival,
     });
     prevArrival = arrival;
   }
