@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { decideAmps, lateStartStep, writeSlot } from './rivianSchedule.ts';
 import { planAlerts, pruneSent, type AlertCtx } from './planAlerts.ts';
 import { applyIgnored, validChoice } from './shiftChoices.ts';
-import { buildRivianPlan, forecastHighFor, socForPlan } from './rivianPlan.ts';
+import { buildRivianPlan, driveTimeTemps, forecastHighFor, forecastTempsFrom, socForPlan } from './rivianPlan.ts';
 import { dayTimeMs, localDayNumber, type Shift } from './chargePlan.ts';
 
 const at = (s: string) => Date.parse(s);
@@ -147,6 +147,44 @@ test('buildRivianPlan: no history -> null; with history, tomorrow work day plans
   assert.equal(b.result.plan.amps, 14);
   const hot = buildRivianPlan({ ...common, est, state: { chargePercent: 50, chargeLimit: 70, isPluggedIn: true }, forecastHighF: 95 })!;
   assert.ok(hot.result.plan.targetPct! <= 60 + 1e-9);
+});
+
+test('buildRivianPlan: daily-use override plans without history; a null side falls back to history', () => {
+  const now = at('2026-11-12T23:00:00-08:00');
+  const tomorrow = localDayNumber(now) + 1;
+  const est = { ewmaKwh: 22, plannedKwh: 22, rates: { workKwh: 22.3, offKwh: 14 }, nextDayWork: true } as any;
+  const common = {
+    nowMs: now, shifts: [], workDays: new Set([tomorrow]), state: { chargePercent: 50, chargeLimit: 70, isPluggedIn: true },
+    kwhPerPct: 1.44, floorPct: 25, margin: 1.1, forecastHighF: null, minAmps: 6, maxAmps: 48,
+  };
+  const o = buildRivianPlan({ ...common, est: null, useOverride: { work: 20, off: 8 } })!;
+  assert.equal(o.usePctWork, 20);
+  assert.equal(o.usePctOff, 8);
+  assert.deepEqual(o.needSource, { work: 'daily-use', off: 'daily-use' });
+  assert.equal(buildRivianPlan({ ...common, est: null, useOverride: { work: 20, off: null } }), null);
+  const mixed = buildRivianPlan({ ...common, est, useOverride: { work: null, off: 8 } })!;
+  assert.deepEqual(mixed.needSource, { work: 'charge-history', off: 'daily-use' });
+  assert.ok(Math.abs(mixed.usePctWork - 22.3 / 1.44) < 1e-9);
+  const hist = buildRivianPlan({ ...common, est, useOverride: null })!;
+  assert.deepEqual(hist.needSource, { work: 'charge-history', off: 'charge-history' });
+});
+
+test('driveTimeTemps: nearest forecast to leaving (start - 1h) and coming home, within 3h, that day only', () => {
+  const d = localDayNumber(at('2026-11-13T12:00:00-08:00'));
+  const shifts: Shift[] = [
+    { day: d, startMs: at('2026-11-13T11:00:00-08:00'), endMs: at('2026-11-13T19:30:00-08:00') },
+    { day: d + 1, startMs: at('2026-11-14T11:00:00-08:00'), endMs: at('2026-11-14T19:30:00-08:00') },
+  ];
+  const temps = forecastTempsFrom([
+    { dt: at('2026-11-13T09:00:00-08:00') / 1000, main: { temp: 41 } },
+    { dt: at('2026-11-13T12:00:00-08:00') / 1000, main: { temp: 55 } },
+    { dt: at('2026-11-13T18:00:00-08:00') / 1000, main: { temp: 48 } },
+    { dt: at('2026-11-14T03:00:00-08:00') / 1000, main: {} },
+  ]);
+  assert.equal(temps.length, 3);
+  assert.deepEqual(driveTimeTemps(temps, shifts, d), [41, 48]);     // leave 10:00 -> 09:00 (1h, vs 12:00 at 2h); home 19:30 -> 18:00
+  assert.deepEqual(driveTimeTemps(temps, shifts, d + 1), []);       // nothing within 3h of the 14th's times
+  assert.deepEqual(driveTimeTemps(temps, [], d), []);
 });
 
 test('forecastHighFor: highest reading on the local day', () => {

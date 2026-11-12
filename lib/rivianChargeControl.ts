@@ -16,6 +16,7 @@
 // throttled to RUN_INTERVAL_MS; override changes force a run. Never throws.
 import { readConfig } from '@/lib/config';
 import { localDayNumber, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
+import type { LiveNeed } from '@/lib/needModels';
 import { recordPlan, recordShiftDays } from '@/lib/planInflux';
 import { overridePlan, type OverridePlan } from '@/lib/chargeOverride';
 import { readOverride, writeOverride, type StoredOverride } from '@/lib/rivianOverrideStore';
@@ -27,7 +28,7 @@ import { fetchRivianChargingSchedules, setRivianChargingSchedules } from '@/lib/
 import { sendPush } from '@/lib/pushover';
 import { planAlerts, pruneSent } from '@/lib/planAlerts';
 import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertStore';
-import { fetchForecastHigh, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
+import { fetchForecast, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import type { NightPlan } from '@/lib/chargePlan';
 import { packKwhFor, RIVIAN_PACK_KWH_DEFAULT } from '@/lib/packKwh';
 import { runTripLayer } from '@/lib/tripRun';
@@ -39,6 +40,7 @@ export interface RivianChargeStatus {
   atMs: number;
   dailyNeedKwh: number | null;   // the plan's need (work-day raise included)
   need: NeedEstimate | null;
+  need7: LiveNeed | null;        // EV plan #7 daily-use need; null = charge history planned it
   daily: TonightPlan | null;     // tonight's kWh and amps, in the shape the UI reads
   night: NightPlan | null;       // the full night plan (window hours, buffer, shortfall...)
   conflict: boolean;
@@ -88,7 +90,7 @@ function atHomeOf(run: RivianPlanRun): boolean | null {
 
 async function runOnce(now: number): Promise<RivianChargeStatus> {
   const status: RivianChargeStatus = {
-    atMs: now, dailyNeedKwh: null, need: null, daily: null, night: null, conflict: false, slot: null,
+    atMs: now, dailyNeedKwh: null, need: null, need7: null, daily: null, night: null, conflict: false, slot: null,
     override: null, overridePlan: null, controlEnabled: process.env.RIVIAN_SCHEDULE_CONTROL === '1',
     car: null, decision: null, wrote: null, pluggedIn: null, kwhPerPct: null, error: null,
   };
@@ -100,20 +102,26 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
     const slot = writeSlot(now, store.done);
     status.slot = slot;
 
-    // The forecast high is fetched once in a slot, then reused until it is for another day.
+    // The forecast (high + 3-hourly temps) is fetched once in a slot, then reused until it is for another day.
     const serveDay = localDayNumber(now + (hour < 8 ? 0 : 24) * 3_600_000);
     if (slot !== null && store.forecast?.day !== serveDay) {
-      const highF = await fetchForecastHigh(serveDay);
-      if (highF !== null) store.forecast = { day: serveDay, highF };
+      const f = await fetchForecast(serveDay);
+      if (f && (f.highF !== null || f.temps.length)) store.forecast = { day: serveDay, highF: f.highF, temps: f.temps };
     }
     const forecastHighF = store.forecast?.day === serveDay ? store.forecast.highF : null;
+    const forecastTemps = store.forecast?.day === serveDay ? store.forecast.temps ?? [] : [];
     const refreshCalendar = slot === 'update' || (store.conflictOpenDay !== null && hour < 8);
-    const run = await rivianNightPlan(now, { refreshCalendar, forecastHighF });
+    const run = await rivianNightPlan(now, { refreshCalendar, forecastHighF, forecastTemps });
     if (run.calendar) void recordShiftDays(run.calendar.workDays, today, process.env, undefined, { shifts: run.calendar.shifts, timeOffDays: run.timeOffDays });
     const built = run.built;
     const plan = built?.result.plan ?? null;
     status.need = run.est;
-    status.dailyNeedKwh = run.est?.plannedKwh ?? null;
+    status.need7 = run.need7;
+    // The serve day's expected use (no margin, like plannedKwh); from the
+    // daily-use need when it planned the night, else the charge history.
+    status.dailyNeedKwh = built && run.need7
+      ? (run.workDays?.has(built.serveDay) ? built.usePctWork : built.usePctOff) * run.kwhPerPct
+      : run.est?.plannedKwh ?? null;
     status.night = plan;
     status.conflict = built?.result.conflict ?? false;
     status.pluggedIn = run.state?.isPluggedIn ?? null;
