@@ -15,16 +15,20 @@ Nothing in this document was run. Image names and variables were checked against
 |---|---|---|
 | Source extracts (4 x .osm.pbf) | about 1.8 GB (CA 1.2 GB, NV 118 MB, UT 163 MB, AZ 290 MB) | Geofabrik listing |
 | Valhalla tiles + tar + admin/timezone DBs + elevation | about 6-10 GB | estimate, not documented; measure after the first build |
-| Nominatim database + flatnode | about 25-40 GB | estimate (roughly 10-15x the PBF); not documented |
-| Rebuild headroom | double the above while the side folder builds | the swap keeps the live copy until the new one is ready |
+| Nominatim database | about 20-30 GB for all four states; a few GB for Nevada alone | estimate (roughly 10-15x the PBF); not documented |
+| Rebuild headroom | double the above while the side folder builds | only during a manual rebuild; the swap keeps the live copy until the new one is ready |
 | Valhalla RAM | 4 GB comfortable | estimate; lower `server_threads` if the build is killed (documented) |
 | Nominatim RAM | 2 GB is the hard minimum (documented); plan 8 GB for a 1.8 GB extract | estimate |
 
-Budget about 100 GB of SSD/NVMe cache for both services with the rebuild headroom. The Nominatim docs recommend fast disks; put the data on cache, not the array.
+**Where it lives: the array, not cache.** The dashboard asks these services only when a new calendar event or a new route shows up: routes are cached on disk and place lookups in memory, so a normal day makes few or no requests. On a spun-down array disk the first lookup waits a few seconds for the spin-up, which the planner does not mind. Make an array-only share named `geo` (Primary storage: Array, no cache) and keep everything below in `/mnt/user/geo`. About 30-40 GB for all four states, plus the same again only while a manual rebuild runs. The Nominatim docs recommend fast disks for *imports*; the one-time import on the array is slow (hours), not broken.
+
+**Smaller:** listing only the states you actually drive in cuts this a lot (Nevada alone is a 118 MB extract, about a tenth of California). Edit the `tile_urls` list and the state list in the rebuild script.
+
+**No flatnode file:** the Nominatim docs suggest it only for very large imports (continents, planet); for a few states it costs disk and gains nothing, so it is left out here.
 
 ## docker-compose
 
-Valhalla needs one merged build input list; Nominatim wants one PBF, so the rebuild script merges the four extracts into `region.osm.pbf` first (see the script). Save as `/mnt/user/appdata/geo/docker-compose.yml`. Use your LAN address in place of `192.168.1.10`.
+Valhalla needs one merged build input list; Nominatim wants one PBF, so the rebuild script merges the four extracts into `region.osm.pbf` first (see the script). Save as `/mnt/user/geo/docker-compose.yml`. Use your LAN address in place of `192.168.1.10`.
 
 ```yaml
 services:
@@ -35,7 +39,7 @@ services:
     ports:
       - "192.168.1.10:8002:8002"
     volumes:
-      - /mnt/user/appdata/geo/valhalla:/custom_files
+      - /mnt/user/geo/valhalla:/custom_files
     environment:
       tile_urls: >-
         https://download.geofabrik.de/north-america/us/california-latest.osm.pbf
@@ -58,14 +62,13 @@ services:
     ports:
       - "192.168.1.10:8080:8080"
     volumes:
-      - /mnt/user/appdata/geo/nominatim-pbf:/nominatim/data:ro
-      - /mnt/user/appdata/geo/nominatim-db:/var/lib/postgresql/16/main
-      - /mnt/user/appdata/geo/nominatim-flat:/nominatim/flatnode
+      - /mnt/user/geo/nominatim-pbf:/nominatim/data:ro
+      - /mnt/user/geo/nominatim-db:/var/lib/postgresql/16/main
     environment:
       PBF_PATH: /nominatim/data/region.osm.pbf
       NOMINATIM_PASSWORD: "change-me"   # the image's documented default is public; set your own
       THREADS: "4"
-      UPDATE_MODE: none                 # the weekly rebuild replaces the data instead of replicating
+      UPDATE_MODE: none                 # a manual rebuild replaces the data; no replication (keeps the disk asleep)
 ```
 
 Dashboard environment:
@@ -82,17 +85,17 @@ Notes:
 - Valhalla's first start downloads the four extracts and builds; allow a long first run (tens of minutes to a couple of hours on a small server, an estimate). Nominatim's first import is longer.
 - The old `gis-ops/docker-valhalla` repo is archived. The maintained image is the one above under the Valhalla organisation; its variables are the same.
 
-## Weekly rebuild (Sunday 03:00)
+## Rebuild (manual, a few times a year)
 
-The script builds into a side folder with a throwaway container, swaps only when the build produced a working service, keeps the previous copy as `*.old`, and sends a Pushover on any failure. It needs `osmium-tool` for the merge (the one piece not verified against an official image; install it through NerdTools or run any osmium container), and your Pushover token and user key in `/mnt/user/appdata/geo/pushover.env`.
+The script builds into a side folder with a throwaway container, swaps only when the build produced a working service, keeps the previous copy as `*.old`, and sends a Pushover on any failure. It needs `osmium-tool` for the merge (the one piece not verified against an official image; install it through NerdTools or run any osmium container), and your Pushover token and user key in `/mnt/user/geo/pushover.env`.
 
-`/mnt/user/appdata/geo/rebuild.sh`:
+`/mnt/user/geo/rebuild.sh`:
 
 ```bash
 #!/bin/bash
 # Rebuild Valhalla + Nominatim data in side folders; swap only on success.
 set -uo pipefail
-G=/mnt/user/appdata/geo
+G=/mnt/user/geo
 . "$G/pushover.env"            # PUSHOVER_TOKEN=... PUSHOVER_USER=...
 STAMP=$(date +%Y%m%d)
 BASE=https://download.geofabrik.de/north-america/us
@@ -101,7 +104,7 @@ fail() {
   curl -fsS -o /dev/null --form-string "token=$PUSHOVER_TOKEN" --form-string "user=$PUSHOVER_USER" \
     --form-string "title=Map data rebuild failed" --form-string "message=$1. The previous data is still in use." \
     https://api.pushover.net/1/messages.json
-  rm -rf "$G/valhalla.new" "$G/nominatim-db.new" "$G/nominatim-pbf.new" "$G/nominatim-flat.new"
+  rm -rf "$G/valhalla.new" "$G/nominatim-db.new" "$G/nominatim-pbf.new"
   exit 1
 }
 
@@ -122,9 +125,9 @@ docker run --rm -v "$G/valhalla.new:/custom_files" \
 [ -s "$G/valhalla.new/valhalla_tiles.tar" ] || fail "valhalla tiles missing"
 
 # 3. Nominatim: import into a side database, using the same image, then stop.
-mkdir -p "$G/nominatim-db.new" "$G/nominatim-flat.new"
+mkdir -p "$G/nominatim-db.new"
 cid=$(docker run -d -v "$G/nominatim-pbf.new:/nominatim/data:ro" -v "$G/nominatim-db.new:/var/lib/postgresql/16/main" \
-  -v "$G/nominatim-flat.new:/nominatim/flatnode" -e PBF_PATH=/nominatim/data/region.osm.pbf \
+  -e PBF_PATH=/nominatim/data/region.osm.pbf \
   -e NOMINATIM_PASSWORD="$NOMINATIM_PASSWORD" -e UPDATE_MODE=none --shm-size=2g -p 127.0.0.1:18080:8080 mediagis/nominatim:5.3) || fail "nominatim start"
 ok=0
 for i in $(seq 1 720); do   # up to 6 hours
@@ -137,7 +140,7 @@ docker stop "$cid" >/dev/null; docker rm "$cid" >/dev/null
 
 # 4. Swap: stop services, rotate folders, start.
 cd "$G" && docker compose stop valhalla nominatim
-for d in valhalla nominatim-db nominatim-flat nominatim-pbf; do
+for d in valhalla nominatim-db nominatim-pbf; do
   rm -rf "$d.old"; [ -e "$d" ] && mv "$d" "$d.old"; mv "$d.new" "$d" || fail "swap $d (restore from $d.old)"
 done
 docker compose up -d valhalla nominatim || fail "restart after swap"
@@ -147,9 +150,9 @@ echo "rebuilt $STAMP"
 
 In the live service the Valhalla container keeps `use_tiles_ignore_pbf: "True"`, so on restart it serves the swapped-in tiles without rebuilding. The `NOMINATIM_PASSWORD` must match the compose file; export it in `pushover.env`.
 
-### Schedule (Unraid User Scripts)
+### Running it (Unraid User Scripts)
 
-Install the User Scripts plugin, add a script named `geo-rebuild` containing `bash /mnt/user/appdata/geo/rebuild.sh`, set the schedule to Custom with cron `0 3 * * 0`. Run it once by hand the first time and watch for the Pushover on failure.
+Install the User Scripts plugin and add a script named `geo-rebuild` containing `bash /mnt/user/geo/rebuild.sh`. Leave the schedule on "Schedule Disabled" and run it by hand when you want fresher roads (new roads and addresses change slowly; a few times a year is plenty). It spins up the array disk for the hours it runs. Watch for the Pushover on failure.
 
 ## Sources checked
 

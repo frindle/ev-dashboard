@@ -21,7 +21,7 @@ export interface PlaceHit extends LatLon { label: string }
 
 const cache = new Map<string, { hits: PlaceHit[]; atMs: number }>();
 const HIT_TTL_MS = 7 * 86_400_000;
-const MISS_TTL_MS = 30 * 60_000;
+const MISS_TTL_MS = 12 * 3_600_000;   // an unplaceable event retries twice a day, so an array disk can sleep
 
 export function clearGeocodeCache(): void { cache.clear(); }
 
