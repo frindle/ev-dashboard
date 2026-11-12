@@ -14,8 +14,8 @@ import {
   type VehicleId,
 } from '@/lib/rates';
 import { GAS_PRICE_LABEL, fetchGasPriceUsdPerGallon } from '@/lib/gasPrice';
-import { arrivalFloorOf, needEstimate, tonightPlan } from '@/lib/chargePlan';
-import { getWorkDays } from '@/lib/shiftCalendar';
+import { arrivalFloorOf, needEstimate, sinceHistoryStart, tonightPlan } from '@/lib/chargePlan';
+import { rivianNightPlan } from '@/lib/rivianNightPlan';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,6 +59,15 @@ export interface EnergyVehicleSummary {
   // dailyNeedKwh is.
   tonightKwh: number | null;
   tonightAmps: number | null;
+  // Rivian night plan (lib/rivianPlan.ts), null for the Tesla: hours the charge
+  // can use tonight and on the next night, the short-night buffer (% of
+  // battery), shift conflict, can't-reach flag, and the trip hook (#8, not built).
+  windowHours: number | null;
+  nextWindowHours: number | null;
+  bufferPct: number | null;
+  conflict: boolean | null;
+  shortfall: boolean | null;
+  trip: null;
 }
 
 // Charger-current bounds for tonightAmps. 5A is the Tesla's lowest setting;
@@ -209,10 +218,16 @@ export async function GET() {
   const round2 = (x: number | null) => (x === null ? null : Math.round(x * 100) / 100);
   // The shift calendar is the Rivian's: the backtest that chose it was the
   // Rivian's history (lib/chargePlan.ts).
-  const workDays = await getWorkDays();
+  // The Rivian plan is the shared night plan (lib/rivianNightPlan.ts): same
+  // numbers the schedule writer uses. Its history starts at historySince (the
+  // current Rivian only); the sparkline and savings below keep every row.
+  const rivianRun = await rivianNightPlan(nowMs);
+  const rv = rivianRun.built?.result ?? null;
   const vehicles: EnergyVehicleSummary[] = (['rivian', 'tesla'] as const).map(id => {
-    const est = needEstimate(rows.filter(r => idFor(r) === id), id === 'rivian' ? workDays : null, nowMs);
-    const plan = est === null ? null : tonightPlan({
+    const est = id === 'rivian'
+      ? rivianRun.est
+      : needEstimate(sinceHistoryStart(rows.filter(r => idFor(r) === id), cfg.vehicles.tesla.historySince), null, nowMs);
+    const plan = id === 'rivian' || est === null ? null : tonightPlan({
       dailyKwh: est.plannedKwh,
       socPct: stateFor[id]?.chargePercent,
       limitPct: stateFor[id]?.chargeLimit,
@@ -234,10 +249,17 @@ export async function GET() {
       nextDayWork: est?.nextDayWork ?? null,
       workKwh: round2(est?.rates?.workKwh ?? null),
       offKwh: round2(est?.rates?.offKwh ?? null),
-      gapKwh: round2(plan?.gapKwh ?? null),
+      gapKwh: round2(id === 'rivian'
+        ? (rv?.plan.gapPct == null ? null : rv.plan.gapPct * rivianRun.kwhPerPct) : plan?.gapKwh ?? null),
       floorKwh: round2(plan?.floorKwh ?? null),
-      tonightKwh: round2(plan?.tonightKwh ?? null),
-      tonightAmps: plan?.tonightAmps ?? null,
+      tonightKwh: round2(id === 'rivian' ? rv?.plan.kwh ?? null : plan?.tonightKwh ?? null),
+      tonightAmps: id === 'rivian' ? rv?.plan.amps ?? null : plan?.tonightAmps ?? null,
+      windowHours: id === 'rivian' ? rv?.plan.windowHours ?? null : null,
+      nextWindowHours: id === 'rivian' ? rv?.plan.nextWindowHours ?? null : null,
+      bufferPct: id === 'rivian' ? round2(rv?.plan.bufferPct ?? null) : null,
+      conflict: id === 'rivian' ? rv?.conflict ?? null : null,
+      shortfall: id === 'rivian' ? rv?.plan.shortfall ?? null : null,
+      trip: null,   // the drive-log trip hook (#8) is not built yet
     };
   });
 

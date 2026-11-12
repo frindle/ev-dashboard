@@ -165,9 +165,11 @@ export function needEstimate(sessions: PlanSession[], workDays: Set<number> | nu
   return { ewmaKwh, rates, nextDayWork, plannedKwh };
 }
 
-// Amps (2A steps, rounded up) that add `kwh` in the 8h window, clamped.
-export function ampsFor(kwh: number, minAmps = 0, maxAmps = 48): number {
-  const raw = Math.ceil(Math.max(0, kwh) / KWH_PER_AMP / 2) * 2;
+// Amps (2A steps, rounded up) that add `kwh` over `hours` (default the 8h
+// window), clamped. Zero hours can't charge anything: maxAmps.
+export function ampsFor(kwh: number, minAmps = 0, maxAmps = 48, hours = CHARGE_WINDOW_HOURS): number {
+  if (!(hours > 0)) return maxAmps;
+  const raw = Math.ceil(Math.max(0, kwh) / ((CHARGE_VOLTS / 1000) * hours) / 2) * 2;
   return Math.min(maxAmps, Math.max(minAmps, raw));
 }
 
@@ -220,4 +222,285 @@ export function tonightPlan(p: TonightInput): TonightPlan {
   }
   const tonightKwh = Math.max(catchUpKwh, floorKwh ?? 0);
   return { gapKwh, floorKwh, tonightKwh, tonightAmps: ampsFor(tonightKwh, p.minAmps, p.maxAmps) };
+}
+
+// ---------------------------------------------------------------------------
+// Shift-aware night plan, in battery % (EV charge plan #1/#2, Penn 2026-11-12).
+//
+// The car's schedule is always 00:00-08:00; the plan only *counts* the hours
+// Penn can really charge in. The Rivian plan works in % and turns it into wall
+// kWh with kwhPerPct (measured at the charger, so it already holds pack size
+// and charging losses; the Tesla keeps tonightPlan above).
+//
+//  - Work night: put back the day x margin and be at floor + day x margin by
+//    morning, whichever is more (floor = the arrival floor, 25%).
+//  - Off night: the day plus half of the rest of the gap to the limit, and at
+//    least the floor (today's tonightPlan logic, in %).
+//  - Never above the limit; a reach target above it sets raiseLimitTo.
+//  - Short-night buffer: when the next night has < 8 planned hours, tonight
+//    adds next need x hours lost / 8, if the limit has room.
+// A peak cap (EV charge plan #9b) belongs in ampsForNeed, the one place the
+// needed amps are computed.
+// ---------------------------------------------------------------------------
+
+export const HOME_BUFFER_MIN = 20;       // home this long after a shift ends
+export const DEPART_BUFFER_MIN = 60;     // leaves this long before a shift starts
+export const HEAT_FORECAST_HIGH_F = 90;  // Rev 11: at or above this tomorrow...
+export const HEAT_TOPUP_LIMIT_PCT = 60;  // ...work nights stop topping up here
+const HOUR_MS = 3_600_000;
+const MIN_MS = 60_000;
+
+export interface Shift {
+  day: number;       // local start date (days since 1970-01-01)
+  startMs: number;
+  endMs: number;
+  uid?: string;
+}
+
+// Local wall-clock time on a day number, as epoch ms.
+export function dayTimeMs(day: number, hour = 0, minute = 0): number {
+  const d = new Date(day * DAY_MS);
+  return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hour, minute).getTime();
+}
+
+export interface WindowReading {
+  startMs: number;
+  endMs: number;
+  hours: number;
+}
+
+export interface NightWindow extends WindowReading {
+  conflict: boolean;           // shifts on the day (or the day before) disagree
+  readings: WindowReading[];   // one per reading of the calendar; the safe one is the top-level window
+}
+
+function distinctShifts(list: Shift[]): Shift[] {
+  const seen = new Set<string>();
+  return list.filter((s) => {
+    const k = `${s.startMs}|${s.endMs}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+// The hours counted for the charge that serves `day` (the 00:00-08:00 window
+// on the morning of `day`): from the previous day's shift end + 20 min (never
+// before 00:00) to the day's shift start - 1h (never after 08:00). Several
+// shifts that disagree set `conflict` and give one reading each; the
+// top-level window is the safe one, the fewest hours.
+export function nightWindow(day: number, shifts: Shift[]): NightWindow {
+  const midnight = dayTimeMs(day, 0);
+  const eight = dayTimeMs(day, 8);
+  const today = distinctShifts(shifts.filter((s) => s.day === day));
+  const prev = distinctShifts(shifts.filter((s) => s.day === day - 1 && s.endMs + HOME_BUFFER_MIN * MIN_MS > midnight));
+  const starts = prev.length ? prev.map((s) => s.endMs + HOME_BUFFER_MIN * MIN_MS) : [midnight];
+  const ends = today.length ? today.map((s) => s.startMs - DEPART_BUFFER_MIN * MIN_MS) : [eight];
+  const readings: WindowReading[] = [];
+  const seen = new Set<string>();
+  for (const a of starts) {
+    for (const b of ends) {
+      const startMs = Math.max(midnight, a);
+      const endMs = Math.min(eight, b);
+      const hours = Math.max(0, Math.min(CHARGE_WINDOW_HOURS, (endMs - startMs) / HOUR_MS));
+      const k = `${startMs}|${endMs}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      readings.push({ startMs, endMs, hours });
+    }
+  }
+  const safe = readings.reduce((best, r) => (r.hours < best.hours ? r : best), readings[0]);
+  return { ...safe, conflict: today.length > 1 || prev.length > 1, readings };
+}
+
+// The one place the needed amps come from (see the note above).
+export function ampsForNeed(kwh: number, hours: number, minAmps: number, maxAmps: number): number {
+  return ampsFor(kwh, minAmps, maxAmps, hours);
+}
+
+export interface NightNext {
+  hours: number;     // next night's planned hours
+  usePct: number;    // next day's expected use, % of the battery
+  isWork: boolean;
+}
+
+export interface NightPlanInput {
+  isWork: boolean;
+  socPct: number | null | undefined;     // SoC the plan starts from
+  limitPct: number | null | undefined;
+  usePct: number;                        // the day's expected use in %, no margin
+  margin?: number;                       // x use for put-back and reach (default 1)
+  floorPct?: number | null;              // arrival floor; null/absent = none
+  topUpLimitPct?: number | null;         // work nights stop topping up here (heat cap); the reach still applies
+  windowHours: number;
+  next?: NightNext | null;
+  kwhPerPct: number;
+  minAmps: number;
+  maxAmps: number;
+}
+
+export interface NightPlan {
+  isWork: boolean;
+  windowHours: number;
+  nextWindowHours: number | null;
+  needPct: number;            // own need, % gained
+  bufferPct: number;          // short-night buffer added
+  totalPct: number;
+  targetPct: number | null;   // SoC the morning should reach (soc + totalPct)
+  gapPct: number | null;      // limit - soc
+  kwh: number;                // totalPct x kwhPerPct, wall kWh
+  amps: number | null;        // null when the window has no hours
+  raiseLimitTo: number | null;
+  shortfallPct: number;       // what can't be put in at maxAmps (tonight + the short night)
+  shortfall: boolean;
+}
+
+const known = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
+
+function needFor(p: {
+  isWork: boolean; soc: number | null; limit: number | null; usePct: number; margin: number;
+  floorPct: number | null; topUp: number | null;
+}): { needPct: number; reachTargetPct: number | null; gapPct: number | null } {
+  const day = Math.max(0, p.usePct);
+  const reach = p.floorPct === null ? null : p.floorPct + day * p.margin;
+  if (p.soc === null || p.limit === null) {
+    return { needPct: p.isWork ? day * p.margin : day, reachTargetPct: reach, gapPct: null };
+  }
+  const gap = Math.max(0, p.limit - p.soc);
+  let target: number;
+  if (p.isWork) {
+    const cap = p.topUp === null ? p.limit : Math.min(p.limit, p.topUp);
+    const putBack = Math.min(p.soc + day * p.margin, cap);
+    target = Math.max(putBack, reach === null ? 0 : Math.min(reach, p.limit));
+  } else {
+    const catchUp = day + Math.max(0, gap - day) / CATCH_UP_NIGHTS;
+    target = Math.max(p.soc + catchUp, reach === null ? 0 : Math.min(reach, p.limit));
+    target = Math.min(target, Math.max(p.limit, p.soc));
+  }
+  return { needPct: Math.max(0, target - p.soc), reachTargetPct: reach, gapPct: gap };
+}
+
+export function nightPlan(p: NightPlanInput): NightPlan {
+  const soc = known(p.socPct) ? p.socPct : null;
+  const limit = known(p.limitPct) ? p.limitPct : null;
+  const margin = typeof p.margin === 'number' && p.margin >= 1 ? p.margin : 1;
+  const floorPct = typeof p.floorPct === 'number' && p.floorPct > 0 ? p.floorPct : null;
+  const topUp = p.isWork && typeof p.topUpLimitPct === 'number' ? p.topUpLimitPct : null;
+  const own = needFor({ isWork: p.isWork, soc, limit, usePct: p.usePct, margin, floorPct, topUp });
+
+  const raiseLimitTo = own.reachTargetPct !== null && limit !== null && own.reachTargetPct > limit
+    ? Math.min(100, Math.ceil(own.reachTargetPct)) : null;
+
+  const hours = Math.max(0, p.windowHours);
+  const maxPct = (h: number) => (p.maxAmps * (CHARGE_VOLTS / 1000) * h) / p.kwhPerPct;
+  const tonightMaxPct = maxPct(hours);
+
+  // Short-night buffer: the next night's need, from the SoC left after tonight
+  // and the day between, in proportion to the hours it loses.
+  let bufferPct = 0, nextShort = 0;
+  if (p.next) {
+    const after = soc !== null && limit !== null
+      ? Math.min(soc + own.needPct, Math.max(limit, soc)) - Math.max(0, p.usePct) * margin : null;
+    const nextNeed = needFor({
+      isWork: p.next.isWork, soc: after === null ? null : Math.max(0, after), limit, usePct: p.next.usePct, margin, floorPct, topUp,
+    }).needPct;
+    const lost = Math.max(0, CHARGE_WINDOW_HOURS - p.next.hours);
+    if (lost > 0 && soc !== null && limit !== null) {
+      const room = Math.max(0, limit - (soc + own.needPct));
+      const canCharge = Math.max(0, tonightMaxPct - own.needPct);
+      bufferPct = Math.min((nextNeed * lost) / CHARGE_WINDOW_HOURS, room, canCharge);
+    }
+    nextShort = Math.max(0, nextNeed - maxPct(Math.max(0, p.next.hours)) - bufferPct);
+  }
+
+  const totalPct = own.needPct + bufferPct;
+  const kwh = totalPct * p.kwhPerPct;
+  const shortfallPct = Math.max(0, own.needPct - tonightMaxPct) + nextShort;
+  return {
+    isWork: p.isWork,
+    windowHours: hours,
+    nextWindowHours: p.next ? p.next.hours : null,
+    needPct: own.needPct,
+    bufferPct,
+    totalPct,
+    targetPct: soc === null ? null : soc + totalPct,
+    gapPct: own.gapPct,
+    kwh,
+    amps: hours > 0 ? ampsForNeed(kwh, hours, p.minAmps, p.maxAmps) : null,
+    raiseLimitTo,
+    shortfallPct,
+    shortfall: shortfallPct > 1e-9,
+  };
+}
+
+// Work-day or off-day expected kWh from a NeedEstimate (raise-only vs the EWMA).
+export function plannedFor(est: Pick<NeedEstimate, 'ewmaKwh' | 'rates'>, isWork: boolean): number {
+  return est.rates ? Math.max(est.ewmaKwh, isWork ? est.rates.workKwh : est.rates.offKwh) : est.ewmaKwh;
+}
+
+// Rev 11: work nights top up only to 60% when tomorrow's forecast high is 90F+.
+export function topUpLimitFor(forecastHighF: number | null | undefined): number | null {
+  return typeof forecastHighF === 'number' && forecastHighF >= HEAT_FORECAST_HIGH_F ? HEAT_TOPUP_LIMIT_PCT : null;
+}
+
+export interface TonightInputs {
+  day: number;                   // the day the coming charge serves
+  shifts: Shift[];
+  workDays: Set<number> | null;  // null = no calendar: every day plans as an off day
+  usePctWork: number;            // expected use per kind of day, in %
+  usePctOff: number;
+  socPct: number | null | undefined;
+  limitPct: number | null | undefined;
+  margin?: number;
+  floorPct?: number | null;
+  topUpLimitPct?: number | null;
+  kwhPerPct: number;
+  minAmps: number;
+  maxAmps: number;
+}
+
+export interface TonightResult {
+  day: number;
+  isWork: boolean;
+  window: NightWindow;
+  nextWindow: NightWindow;
+  conflict: boolean;
+  plan: NightPlan;        // tonight's: the reading that needs the most amps
+  readings: NightPlan[];  // one per reading of the calendar
+}
+
+// nightPlan for tonight, run once per reading of a conflicting calendar
+// (window and next night); tonight uses whichever needs the most charge.
+export function planTonight(p: TonightInputs): TonightResult {
+  const isWork = !!p.workDays?.has(p.day);
+  const nextIsWork = !!p.workDays?.has(p.day + 1);
+  const window = nightWindow(p.day, p.shifts);
+  const nextWindow = nightWindow(p.day + 1, p.shifts);
+  const readings: NightPlan[] = [];
+  for (const w of window.readings) {
+    for (const n of nextWindow.readings) {
+      readings.push(nightPlan({
+        isWork, socPct: p.socPct, limitPct: p.limitPct, usePct: isWork ? p.usePctWork : p.usePctOff,
+        margin: p.margin, floorPct: p.floorPct, topUpLimitPct: p.topUpLimitPct, windowHours: w.hours,
+        next: { hours: n.hours, usePct: nextIsWork ? p.usePctWork : p.usePctOff, isWork: nextIsWork },
+        kwhPerPct: p.kwhPerPct, minAmps: p.minAmps, maxAmps: p.maxAmps,
+      }));
+    }
+  }
+  const rank = (x: NightPlan) => (x.amps === null ? -1 : x.amps);
+  const plan = readings.reduce((best, r) => (rank(r) > rank(best) || (rank(r) === rank(best) && r.totalPct > best.totalPct) ? r : best), readings[0]);
+  return { day: p.day, isWork, window, nextWindow, conflict: window.conflict || nextWindow.conflict, plan, readings };
+}
+
+// #6b: Midknight-only history. Rows from before `since` (YYYY-MM-DD, local
+// midnight) are the previous Rivian's. No/garbled `since` keeps everything.
+export function historyStartMs(since: unknown): number | null {
+  const m = typeof since === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(since) : null;
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() : null;
+}
+
+export function sinceHistoryStart<T extends { startedAt: string }>(rows: T[], since: unknown): T[] {
+  const from = historyStartMs(since);
+  if (from === null) return rows;
+  return rows.filter((r) => Date.parse(r.startedAt) >= from);
 }

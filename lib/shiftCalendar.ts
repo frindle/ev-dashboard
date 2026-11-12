@@ -8,7 +8,9 @@
 // Env: SHIFTS_ICS_URL (webcal:// is fetched as https://), optional
 // SHIFTS_ICS_USER + SHIFTS_ICS_PASSWORD for basic auth (a Nextcloud app
 // password). The URL is a secret and is never logged.
-import { localDayNumber } from './chargePlan.ts';
+import { localDayNumber, type Shift } from './chargePlan.ts';
+
+export type { Shift };
 
 export const SHIFT_CODE = /D\d+[AP]/;
 const REFRESH_MS = 6 * 3_600_000;
@@ -44,48 +46,88 @@ function parseIcsTime(line: string): { ms: number; allDay: boolean } | null {
   return { ms: zonedMs(+y, +mo - 1, +d, +h, +mi, +s, tz), allDay: false };
 }
 
-export function workDaysFromIcs(ics: string): Set<number> {
+export const TIME_OFF = /\b(PTO|VC|TDO|OFF|FLOAT)\b|time ?off/i;
+const OPEN_SHIFT = /^CATEGORIES[;:].*\bopen[ -]?shift\b/i;
+const DEFAULT_SHIFT_MS = 10 * 3_600_000;   // a shift with no DTEND (they are 10h)
+
+export interface ShiftCalendar {
+  workDays: Set<number>;      // shift days minus time-off days; one stable Set per fetch
+  shifts: Shift[];            // timed D<n>A / D<n>P shifts on workDays, with their end
+  timeOffDays: Set<number>;
+}
+
+export function parseShiftCalendar(ics: string): ShiftCalendar {
   const lines = ics.replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '').split('\n');
-  const days = new Set<number>();
+  const shiftDays = new Set<number>();
+  const timeOffDays = new Set<number>();
+  const all: Shift[] = [];
   let depth = 0;   // inside VEVENT (1) or a component nested in it (>1)
   let start: ReturnType<typeof parseIcsTime> = null;
+  let end: ReturnType<typeof parseIcsTime> = null;
   let cancelled = false;
+  let open = false;
   let summary = '';
+  let uid = '';
   for (const line of lines) {
-    if (line === 'BEGIN:VEVENT') { depth = 1; start = null; cancelled = false; summary = ''; continue; }
+    if (line === 'BEGIN:VEVENT') { depth = 1; start = null; end = null; cancelled = false; open = false; summary = ''; uid = ''; continue; }
     if (!depth) continue;
     if (line.startsWith('BEGIN:')) { depth++; continue; }
     if (line.startsWith('END:')) {
-      if (--depth === 0 && start && !start.allDay && !cancelled && SHIFT_CODE.test(summary)) {
-        days.add(localDayNumber(start.ms));
+      if (--depth === 0 && start && !cancelled && !open) {
+        if (TIME_OFF.test(summary) && !SHIFT_CODE.test(summary)) {   // a coded shift title is a shift even if it says "float"
+          // DTEND is exclusive for all-day entries; a timed one covers the
+          // day of its last instant.
+          const last = end && end.ms > start.ms ? localDayNumber(end.ms - 1) : localDayNumber(start.ms);
+          for (let d = localDayNumber(start.ms); d <= Math.max(last, localDayNumber(start.ms)); d++) timeOffDays.add(d);
+        } else if (!start.allDay && SHIFT_CODE.test(summary)) {
+          const day = localDayNumber(start.ms);
+          shiftDays.add(day);
+          all.push({ day, startMs: start.ms, endMs: end && end.ms > start.ms ? end.ms : start.ms + DEFAULT_SHIFT_MS, ...(uid ? { uid } : {}) });
+        }
       }
       continue;
     }
     if (depth !== 1) continue;
     if (line.startsWith('DTSTART')) start = parseIcsTime(line);
+    else if (line.startsWith('DTEND')) end = parseIcsTime(line);
     else if (/^SUMMARY[;:]/.test(line)) summary = line.slice(line.indexOf(':') + 1);
+    else if (line.startsWith('UID:')) uid = line.slice(4);
+    else if (OPEN_SHIFT.test(line)) open = true;
     else if (line.startsWith('STATUS:CANCELLED')) cancelled = true;
   }
-  return days;
+  const workDays = new Set([...shiftDays].filter((d) => !timeOffDays.has(d)));
+  return { workDays, shifts: all.filter((s) => workDays.has(s.day)), timeOffDays };
+}
+
+export function workDaysFromIcs(ics: string): Set<number> {
+  return parseShiftCalendar(ics).workDays;
 }
 
 type FetchLike = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) =>
   Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
-// One cache per process: refreshed every REFRESH_MS; on a failed fetch the
-// last good set is kept and the next try waits RETRY_MS. Never throws.
-export function createWorkDaysSource() {
-  let cache: { days: Set<number>; atMs: number } | null = null;
+export interface SourceOptions {
+  refresh?: boolean;   // fetch now, ignoring the 6h cache and the retry wait (the 08:15 / 23:00 slots)
+}
+
+// One cache per process: refreshed every REFRESH_MS (or on `refresh`); on a
+// failed fetch the last good calendar is kept and the next unforced try waits
+// RETRY_MS. Never throws.
+export function createShiftCalendarSource() {
+  let cache: { cal: ShiftCalendar; atMs: number } | null = null;
   let lastTryMs = -Infinity;
-  return async function getWorkDays(
+  return async function getShiftCalendar(
     now = Date.now(),
     env: Record<string, string | undefined> = process.env,
     fetchImpl: FetchLike = fetch as unknown as FetchLike,
-  ): Promise<Set<number> | null> {
+    opts: SourceOptions = {},
+  ): Promise<ShiftCalendar | null> {
     const raw = env.SHIFTS_ICS_URL;
     if (!raw) return null;
-    if (cache && now - cache.atMs < REFRESH_MS) return cache.days;
-    if (now - lastTryMs < RETRY_MS) return cache?.days ?? null;
+    if (!opts.refresh) {
+      if (cache && now - cache.atMs < REFRESH_MS) return cache.cal;
+      if (now - lastTryMs < RETRY_MS) return cache?.cal ?? null;
+    }
     lastTryMs = now;
     const url = raw.replace(/^webcal:\/\//i, 'https://');
     try {
@@ -95,15 +137,26 @@ export function createWorkDaysSource() {
       }
       const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(15_000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const days = workDaysFromIcs(await res.text());
-      cache = { days, atMs: now };
-      return days;
+      const cal = parseShiftCalendar(await res.text());
+      cache = { cal, atMs: now };
+      return cal;
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e).split(url).join('<url>').split(raw).join('<url>').slice(0, 160);
       console.error('[shifts] calendar fetch failed:', msg);
-      return cache?.days ?? null;
+      return cache?.cal ?? null;
     }
   };
 }
 
-export const getWorkDays = createWorkDaysSource();
+type CalendarSource = ReturnType<typeof createShiftCalendarSource>;
+
+// Work days only, as before, from any calendar source.
+export function createWorkDaysSource(source: CalendarSource = createShiftCalendarSource()) {
+  return async function getWorkDays(...args: Parameters<CalendarSource>): Promise<Set<number> | null> {
+    return (await source(...args))?.workDays ?? null;
+  };
+}
+
+// One shared cache for the process: both exports read the same fetch.
+export const getShiftCalendar = createShiftCalendarSource();
+export const getWorkDays = createWorkDaysSource(getShiftCalendar);

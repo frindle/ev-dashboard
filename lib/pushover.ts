@@ -13,7 +13,12 @@ export function pushoverConfigured(): boolean {
   return !!(process.env.PUSHOVER_APP_TOKEN && process.env.PUSHOVER_USER_KEY);
 }
 
-export async function sendPush(title: string, message: string, priority = 0): Promise<boolean> {
+export interface PushLink {
+  url: string;        // Pushover's tap-through link
+  urlTitle?: string;
+}
+
+export async function sendPush(title: string, message: string, priority = 0, link?: PushLink): Promise<boolean> {
   const token = process.env.PUSHOVER_APP_TOKEN;
   const user = process.env.PUSHOVER_USER_KEY;
   if (!token || !user) return false;
@@ -22,7 +27,7 @@ export async function sendPush(title: string, message: string, priority = 0): Pr
     const res = await loggedFetch('pushover', 'messages', PUSHOVER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, user, title, message, priority }),
+      body: JSON.stringify({ token, user, title, message, priority, ...(link?.url ? { url: link.url, ...(link.urlTitle ? { url_title: link.urlTitle } : {}) } : {}) }),
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {

@@ -34,6 +34,15 @@ export interface ArrivalFloorConfig {
   arrivalDriveMargin: number;
 }
 
+// Charge-plan history (lib/chargePlan.ts): charge sessions before
+// historySince (YYYY-MM-DD, local) belong to a previous car and are ignored by
+// the need estimate; kwhPerPct is the measured wall kWh per 1% gained (the
+// Rivian plan works in %). null = no cutoff / not a %-planned vehicle.
+export interface PlanHistoryConfig {
+  historySince: string | null;
+  kwhPerPct: number | null;
+}
+
 export interface AppConfig {
   display: {
     siteName: string;
@@ -46,14 +55,14 @@ export interface AppConfig {
       model: string;
       chargerSide: 'LEFT' | 'RIGHT';
       pollingEnabled: boolean; // manual kill switch for Fleet API calls — telemetry keeps flowing regardless
-    } & ArrivalFloorConfig;
+    } & ArrivalFloorConfig & PlanHistoryConfig;
     rivian: {
       name: string;
       model: string;
       chargerSide: 'LEFT' | 'RIGHT';
       email: string;
       password: string;
-    } & ArrivalFloorConfig;
+    } & ArrivalFloorConfig & PlanHistoryConfig;
   };
   energySite: {
     id: string;
@@ -135,6 +144,8 @@ const DEFAULT_CONFIG: AppConfig = {
       pollingEnabled: true,
       arrivalFloorPct: null,
       arrivalDriveMargin: 1,
+      historySince: null,
+      kwhPerPct: null,
     },
     rivian: {
       name: 'Midknight',
@@ -149,6 +160,10 @@ const DEFAULT_CONFIG: AppConfig = {
       // driving than predicted.
       arrivalFloorPct: 25,
       arrivalDriveMargin: 1.1,
+      // Midknight's first charge was 2026-05-06 (Roamer); earlier sessions are
+      // the previous Rivian. 1.44 kWh from the charger per 1% gained (Roamer).
+      historySince: '2026-05-06',
+      kwhPerPct: 1.44,
     },
   },
   energySite: {

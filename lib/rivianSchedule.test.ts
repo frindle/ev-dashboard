@@ -35,15 +35,15 @@ test('inEvWindow: midnight to 08:00 local', () => {
 test('decideAmps: outside the window syncs to max(daily, override); inside only an override raises', () => {
   const day = at('2026-11-09T21:00:00-08:00');
   const night = at('2026-11-10T02:00:00-08:00');
-  assert.deepEqual(decideAmps({ nowMs: day, current: sch(), dailyAmps: 14, overrideAmps: null }), { amps: 14, reason: 'daily plan' });
-  assert.deepEqual(decideAmps({ nowMs: day, current: sch(), dailyAmps: 14, overrideAmps: 32 }), { amps: 32, reason: 'override' });
-  assert.deepEqual(decideAmps({ nowMs: day, current: sch(), dailyAmps: 12, overrideAmps: null }).amps, null);
-  assert.equal(decideAmps({ nowMs: day, current: sch({ startTime: 1380 }), dailyAmps: 12, overrideAmps: null }).amps, 12);
-  assert.equal(decideAmps({ nowMs: day, current: null, dailyAmps: 12, overrideAmps: null }).amps, null);
-  assert.equal(decideAmps({ nowMs: day, current: sch(), dailyAmps: null, overrideAmps: null }).amps, null);
+  assert.deepEqual(decideAmps({ slot: 'update', nowMs: day, current: sch(), dailyAmps: 14, overrideAmps: null }), { amps: 14, reason: 'update slot, daily plan' });
+  assert.deepEqual(decideAmps({ slot: 'update', nowMs: day, current: sch(), dailyAmps: 14, overrideAmps: 32 }), { amps: 32, reason: 'update slot, override' });
+  assert.deepEqual(decideAmps({ slot: 'update', nowMs: day, current: sch(), dailyAmps: 12, overrideAmps: null }).amps, null);
+  assert.equal(decideAmps({ slot: 'update', nowMs: day, current: sch({ startTime: 1380 }), dailyAmps: 12, overrideAmps: null }).amps, 12);
+  assert.equal(decideAmps({ slot: 'update', nowMs: day, current: null, dailyAmps: 12, overrideAmps: null }).amps, null);
+  assert.equal(decideAmps({ slot: 'update', nowMs: day, current: sch(), dailyAmps: null, overrideAmps: null }).amps, null);
   // In the window: daily plan frozen, override may raise but never lower
-  assert.equal(decideAmps({ nowMs: night, current: sch(), dailyAmps: 6, overrideAmps: null }).amps, null);
-  assert.deepEqual(decideAmps({ nowMs: night, current: sch(), dailyAmps: 6, overrideAmps: 20 }), { amps: 20, reason: 'override, raised mid-window' });
-  assert.equal(decideAmps({ nowMs: night, current: sch(), dailyAmps: 6, overrideAmps: 8 }).amps, null);
-  assert.equal(decideAmps({ nowMs: night, current: sch({ startTime: 1380 }), dailyAmps: 6, overrideAmps: 20 }).amps, null);
+  assert.equal(decideAmps({ slot: null, nowMs: night, current: sch(), dailyAmps: 6, overrideAmps: null }).amps, null);
+  assert.deepEqual(decideAmps({ slot: null, nowMs: night, current: sch(), dailyAmps: 6, overrideAmps: 20 }), { amps: 20, reason: 'override, raised mid-window' });
+  assert.equal(decideAmps({ slot: null, nowMs: night, current: sch(), dailyAmps: 6, overrideAmps: 8 }).amps, null);
+  assert.equal(decideAmps({ slot: null, nowMs: night, current: sch({ startTime: 1380 }), dailyAmps: 6, overrideAmps: 20 }).amps, null);
 });
