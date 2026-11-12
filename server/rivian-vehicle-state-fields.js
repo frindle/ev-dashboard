@@ -22,6 +22,7 @@ const VEHICLE_STATE_FIELDS = `
     batteryLevel { timeStamp value }
     distanceToEmpty { timeStamp value }
     batteryLimit { timeStamp value }
+    batteryCapacity { timeStamp value }
     timeToEndOfCharge { timeStamp value }
     chargerState { timeStamp value }
     chargerStatus { timeStamp value }

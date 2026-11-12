@@ -118,7 +118,7 @@ export const COMPARABLES = {
     // would understate the comparison.
     comparable: '2026 Jeep Grand Cherokee L 4WD 3.6 V6',
     mpg: 21,
-    packKwh: 135,
+    packKwh: 124.5,   // fallback; config packKwh / the car's live batteryCapacity win (lib/packKwh.ts)
   },
   tesla: {
     // Tesla Model 3: compact sport sedan. The 2026 Mazda 3 4-Door 2WD 2.5L

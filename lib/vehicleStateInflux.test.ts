@@ -88,3 +88,8 @@ test('recorder: overlapping polls do not double-write', async () => {
   assert.equal(await first, 1);
   assert.equal(calls.length, 1);
 });
+
+test('vehicleStateLine: capacity_kwh from the live batteryCapacity, absent when unknown', () => {
+  assert.ok(vehicleStateLine(riv({ batteryCapacityKwh: 131.2 }), T0)!.includes(',capacity_kwh=131.2,'));
+  assert.ok(!vehicleStateLine(riv({ batteryCapacityKwh: null }), T0)!.includes('capacity_kwh'));
+});

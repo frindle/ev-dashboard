@@ -41,6 +41,9 @@ export interface ArrivalFloorConfig {
 export interface PlanHistoryConfig {
   historySince: string | null;
   kwhPerPct: number | null;
+  // Usable pack size (kWh) the plan works with until the car reports its own
+  // batteryCapacity. null = fall back to the comparables table.
+  packKwh: number | null;
 }
 
 export interface AppConfig {
@@ -146,6 +149,7 @@ const DEFAULT_CONFIG: AppConfig = {
       arrivalDriveMargin: 1,
       historySince: null,
       kwhPerPct: null,
+      packKwh: null,
     },
     rivian: {
       name: 'Midknight',
@@ -164,6 +168,8 @@ const DEFAULT_CONFIG: AppConfig = {
       // the previous Rivian. 1.44 kWh from the charger per 1% gained (Roamer).
       historySince: '2026-05-06',
       kwhPerPct: 1.44,
+      // Until the live batteryCapacity arrives (lib/packKwh.ts).
+      packKwh: 124.5,
     },
   },
   energySite: {

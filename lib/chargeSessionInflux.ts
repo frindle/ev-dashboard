@@ -3,7 +3,7 @@
 // /api/admin/influx-backfill.
 //
 // Point: ev_charge_session,side=LEFT|RIGHT,vehicle=rivian|tesla|unknown
-//        energy_kwh=<float>[,duration_min=<float>] <startedAt ms>
+//        energy_kwh=<float>[,duration_min=<float>][,start_soc,end_soc,avg_kw,peak_kw] <startedAt ms>
 // Same measurement + tags + timestamp overwrites in Influx, so writing a
 // session twice (live mirror + backfill, or a re-run backfill) is harmless.
 //
@@ -70,6 +70,10 @@ export function sessionLine(row: ChargeHistoryRow, vehicle: SessionVehicleId): s
   }
   const fields = [`energy_kwh=${energy}`];
   if (duration !== null) fields.push(`duration_min=${duration}`);
+  for (const [name, v] of [['start_soc', row.startSoc], ['end_soc', row.endSoc], ['avg_kw', row.avgKw], ['peak_kw', row.peakKw]] as const) {
+    const x = finite(v);
+    if (x !== null && x >= 0) fields.push(`${name}=${x}`);
+  }
   return `${MEASUREMENT},side=${escapeTag(row.side)},vehicle=${escapeTag(vehicle)} ${fields.join(',')} ${Math.round(ts)}`;
 }
 

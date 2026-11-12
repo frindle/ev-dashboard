@@ -5,7 +5,7 @@
 // power_kw_parallax has a bool/float type conflict).
 //
 // Point: ev_vehicle_state,vehicle=rivian|tesla soc=..,charge_limit=..,odometer=..,
-//        range_mi=..,plugged_in=0|1,charging=0|1,online=0|1,at_home=0|1 <ms>
+//        range_mi=..,capacity_kwh=..,plugged_in=0|1,charging=0|1,online=0|1,at_home=0|1 <ms>
 // Every field is a float (booleans as 0/1) so a field's type can never
 // conflict. No coordinates are written.
 //
@@ -25,6 +25,7 @@ export interface VehicleStateInput {
     chargeLimit?: number;
     odometer?: number;
     rangeMi?: number;
+    batteryCapacityKwh?: number | null;
     isPluggedIn?: boolean;
     isCharging?: boolean;
     online?: boolean;
@@ -51,6 +52,7 @@ export function vehicleStateLine(v: VehicleStateInput, ms: number): string | nul
     if (typeof x === 'number' && Number.isFinite(x) && x > 0) fields.push(`${name}=${x}`);
   }
   if (typeof s.rangeMi === 'number' && Number.isFinite(s.rangeMi) && s.rangeMi >= 0) fields.push(`range_mi=${s.rangeMi}`);
+  if (typeof s.batteryCapacityKwh === 'number' && Number.isFinite(s.batteryCapacityKwh) && s.batteryCapacityKwh > 0) fields.push(`capacity_kwh=${s.batteryCapacityKwh}`);
   for (const [name, key] of FLAGS) {
     const x = s[key];
     if (typeof x === 'boolean') fields.push(`${name}=${x ? 1 : 0}`);

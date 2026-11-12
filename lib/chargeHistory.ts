@@ -16,6 +16,11 @@ export interface ChargeHistoryRow {
   endedAt: string;     // ISO
   durationMin: number;
   energyKwh: number;
+  // Added with the drive log (#6); rows written before it don't have them.
+  startSoc?: number;
+  endSoc?: number;
+  avgKw?: number;
+  peakKw?: number;
 }
 
 function historyPath(): string {

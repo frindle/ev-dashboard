@@ -36,6 +36,8 @@ import { appendChargeHistory, type ChargeHistoryRow } from '@/lib/chargeHistory'
 import { logWcDiagnostic } from '@/lib/wcDiagnostics';
 import { readGarageDoorState, type GarageDoorState } from '@/lib/ratgdo';
 import { redactDashboardLocation } from '@/lib/vacation';
+import { recordRivianDrivePoll, refreshRivianDailyUse } from '@/lib/rivianDriveRunner';
+import { finishStats, startStats, stepStats, type SessionStats } from '@/lib/chargeSessionStats';
 
 export const dynamic = 'force-dynamic';
 
@@ -540,6 +542,7 @@ interface SessionRecord {
   sessionStartedAt: number; // ms epoch — 0 when no session in progress
   wasThrottled: boolean;    // true if derate was seen at any point during the CURRENT session
   endedThrottled: boolean;  // sticky: session ended while wasThrottled — cleared on next session start
+  stats?: SessionStats;     // start SoC + kW accumulators for the session in progress (#6)
 }
 interface SessionFile { left: SessionRecord; right: SessionRecord; }
 function emptySession(): SessionRecord {
@@ -554,6 +557,7 @@ async function updateSessionKwh(
   rightPowerW: number, rightInUse: boolean,
   leftVehicleName: string, rightVehicleName: string,
   leftThrottled: boolean, rightThrottled: boolean,
+  leftSoc: unknown, rightSoc: unknown, leftKw: number, rightKw: number,
 ): Promise<{ left: SessionRecord; right: SessionRecord }> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
   const path = join(dir, 'charge-sessions.json');
@@ -567,12 +571,12 @@ async function updateSessionKwh(
   const today = localDateStr();
   const endedSessions: Array<{ side: 'LEFT' | 'RIGHT'; row: ChargeHistoryRow }> = [];
 
-  function step(rec: SessionRecord, side: 'LEFT' | 'RIGHT', vehicleName: string, powerW: number, inUse: boolean, isThrottledNow: boolean): SessionRecord {
+  function step(rec: SessionRecord, side: 'LEFT' | 'RIGHT', vehicleName: string, powerW: number, inUse: boolean, isThrottledNow: boolean, soc: unknown, kw: number): SessionRecord {
     // Roll over today bucket at local midnight
     if (rec.todayDate !== today) { rec = { ...rec, todayKwh: 0, todayDate: today }; }
     // Idle → active: start new session, clearing any "was slowed" alert from
     // the previous one — a fresh session gets a fresh read on throttling.
-    if (inUse && !rec.lastInUse) { rec = { ...rec, sessionKwh: 0, sessionStartedAt: now, wasThrottled: false, endedThrottled: false }; }
+    if (inUse && !rec.lastInUse) { rec = { ...rec, sessionKwh: 0, sessionStartedAt: now, wasThrottled: false, endedThrottled: false, stats: startStats(soc) }; }
     // Active → idle: log the completed session if it had any energy, and
     // stick the "was slowed" flag if derate was seen at any point during it
     // — surfaced as a banner so a short-of-goal charge isn't a mystery.
@@ -585,6 +589,7 @@ async function updateSessionKwh(
           endedAt:   new Date(now).toISOString(),
           durationMin: Math.floor((now - rec.sessionStartedAt) / 60_000),
           energyKwh: Math.round(rec.sessionKwh * 100) / 100,
+          ...finishStats(rec.stats ?? startStats(null), soc),
         },
       });
       if (rec.wasThrottled) rec = { ...rec, endedThrottled: true };
@@ -595,13 +600,14 @@ async function updateSessionKwh(
       const elapsedHours = (now - rec.lastUpdate) / 3_600_000;
       const kwh = (powerW / 1000) * elapsedHours;
       rec = { ...rec, sessionKwh: rec.sessionKwh + kwh, todayKwh: rec.todayKwh + kwh };
+      rec.stats = stepStats(rec.stats ?? startStats(null), kw, (now - rec.lastUpdate) / 1000);
     }
     if (inUse && isThrottledNow) rec = { ...rec, wasThrottled: true };
     return { ...rec, lastInUse: inUse, lastUpdate: now };
   }
 
-  const left  = step(file.left,  'LEFT',  leftVehicleName,  leftPowerW,  leftInUse,  leftThrottled);
-  const right = step(file.right, 'RIGHT', rightVehicleName, rightPowerW, rightInUse, rightThrottled);
+  const left  = step(file.left,  'LEFT',  leftVehicleName,  leftPowerW,  leftInUse,  leftThrottled,  leftSoc,  leftKw);
+  const right = step(file.right, 'RIGHT', rightVehicleName, rightPowerW, rightInUse, rightThrottled, rightSoc, rightKw);
 
   // Dirty-check before writing every poll cycle: lastUpdate always changes
   // (it's stamped "now" on every call) so it's excluded from the comparison
@@ -616,6 +622,8 @@ async function updateSessionKwh(
   }
 
   for (const { row } of endedSessions) await appendChargeHistory(row);
+  // A finished session closes a between-charges segment: refresh the daily use (#6).
+  if (endedSessions.length) void refreshRivianDailyUse();
 
   return { left, right };
 }
@@ -672,6 +680,12 @@ interface RivianCache {
 }
 
 const RIVIAN_CHARGE_START_GRACE_MS = 180_000;
+
+// Any gear but P (drive, reverse, neutral) is a drive for polling and the drive
+// log; an empty gear means unknown, not driving.
+function notInPark(gear: string | undefined): boolean {
+  return !!gear && gear !== 'park';
+}
 
 // Peek at whether Rivian's own poll recently observed a charging-start
 // transition, without triggering a fetch. Replaces a blind "poll Tesla's
@@ -771,7 +785,7 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
     // use the faster tier too, not idle — otherwise a fresh plug-in event
     // can be masked by a stale "unplugged" cache for up to 5 minutes.
     const justParked = cache.parkedAt != null && (Date.now() - cache.parkedAt) < RIVIAN_PARKED_GRACE_MS;
-    const interval = (cache.state.gearStatus === 'drive' || justParked) ? RIVIAN_INTERVAL_DRIVING_MS
+    const interval = (notInPark(cache.state.gearStatus) || justParked) ? RIVIAN_INTERVAL_DRIVING_MS
       : (cache.state.isCharging || cache.state.isPluggedIn) ? RIVIAN_INTERVAL_CHARGING_MS
       : RIVIAN_INTERVAL_IDLE_MS;
     if (ageMs < interval) {
@@ -815,9 +829,9 @@ async function fetchRivianWithGpsCache(force = false): Promise<RivianVehicleStat
   if ((fresh.lat === null || !gnssTrustworthy) && cachedGps.lat !== null) fresh.lat = cachedGps.lat;
   if ((fresh.lon === null || !gnssTrustworthy) && cachedGps.lon !== null) fresh.lon = cachedGps.lon;
 
-  const justStoppedDriving = cache.state?.gearStatus === 'drive' && fresh.gearStatus !== 'drive';
+  const justStoppedDriving = notInPark(cache.state?.gearStatus) && !notInPark(fresh.gearStatus);
   const parkedAt = justStoppedDriving ? Date.now()
-    : fresh.gearStatus === 'drive' ? undefined
+    : notInPark(fresh.gearStatus) ? undefined
     : cache.parkedAt;
   // Precise, event-driven replacement for a blind "poll fast near midnight"
   // guess -- fires whenever Rivian's own poll actually observes a
@@ -989,6 +1003,10 @@ async function handleGet(req: Request) {
   const darkEnough = isDarkEnoughForLights(weather);
   if (rivianState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive' && darkEnough, rivianHome.fresh ? rivianApproaching : null, 'rivian');
 
+  // Drive + daily-use log (#6). Location only decides at_home and a salted
+  // cell hash inside the logger; nothing here is stored or returned.
+  if (rivianState) void recordRivianDrivePoll(rivianState, rivianAtHome, weather?.temp ?? null, rivianHome.fresh);
+
   const teslaHome = computeAtHome('tesla', teslaState?.lat, teslaState?.lon, !!(teslaState && (teslaState as { _gpsFresh?: boolean })._gpsFresh));
   const teslaAtHome = teslaHome.atHome;
   // Now that Gear telemetry exposes a real gearStatus (see telemetry-server.js),
@@ -1056,12 +1074,20 @@ async function handleGet(req: Request) {
   // wired to rather than assumed.
   const leftThrottled  = cfg.vehicles.rivian.chargerSide === 'LEFT'  ? !!rivianState?.isThrottled : !!teslaState?.isThrottled;
   const rightThrottled = cfg.vehicles.rivian.chargerSide === 'RIGHT' ? !!rivianState?.isThrottled : !!teslaState?.isThrottled;
+  // SoC and kW for the charge-session stats (#6): the Rivian side reads the car's
+  // SoC and parallax powerKw (wall connector power as a fallback); Tesla's side
+  // reads its own SoC and the connector power.
+  const socFor = (side: 'LEFT' | 'RIGHT'): unknown =>
+    side === cfg.vehicles.rivian.chargerSide ? rivianState?.chargePercent : teslaState?.chargePercent;
+  const kwFor = (side: 'LEFT' | 'RIGHT', powerW: number): number =>
+    side === cfg.vehicles.rivian.chargerSide ? (vehicles[0].parallaxPowerKw ?? powerW / 1000) : powerW / 1000;
   const sessions = teslaConnected
     ? await updateSessionKwh(
         wcLeft?.powerW ?? 0,  wcLeft?.vehicleCharging ?? false,
         wcRight?.powerW ?? 0, wcRight?.vehicleCharging ?? false,
         leftVehicleName, rightVehicleName,
         leftThrottled, rightThrottled,
+        socFor('LEFT'), socFor('RIGHT'), kwFor('LEFT', wcLeft?.powerW ?? 0), kwFor('RIGHT', wcRight?.powerW ?? 0),
       )
     : { left: { sessionKwh: 0, todayKwh: 0, endedThrottled: false }, right: { sessionKwh: 0, todayKwh: 0, endedThrottled: false } };
 

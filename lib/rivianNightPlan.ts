@@ -9,6 +9,7 @@ import { readConfig } from '@/lib/config';
 import { readChargeHistory } from '@/lib/chargeHistory';
 import { vehicleIdResolver } from '@/lib/chargeSessionInflux';
 import { arrivalFloorOf, needEstimate, sinceHistoryStart, type NeedEstimate, type Shift } from '@/lib/chargePlan';
+import { KWH_PER_PCT_SEED, measuredKwhPerPct } from '@/lib/kwhPerPct';
 import { getShiftCalendar } from '@/lib/shiftCalendar';
 import { applyIgnored } from '@/lib/shiftChoices';
 import { readIgnored } from '@/lib/shiftChoicesStore';
@@ -21,6 +22,7 @@ export interface RivianCachedState extends PlanState {
   lat?: number | null;
   lon?: number | null;
   isCharging?: boolean | null;
+  batteryCapacityKwh?: number | null;
 }
 
 export async function readRivianCachedState(): Promise<RivianCachedState | null> {
@@ -71,10 +73,13 @@ export async function rivianNightPlan(
   const cfg = readConfig();
   const v = cfg.vehicles.rivian;
   const idFor = vehicleIdResolver(cfg);
-  const kwhPerPct = typeof v.kwhPerPct === 'number' && v.kwhPerPct > 0 ? v.kwhPerPct : 1.44;
   const cal = await getShiftCalendar(nowMs, process.env, undefined, { refresh: !!opts.refreshCalendar });
   const { shifts, workDays } = applyIgnored(cal?.shifts ?? [], cal?.workDays ?? null, await readIgnored());
   const rows = sinceHistoryStart((await readChargeHistory()).filter((r) => idFor(r) === 'rivian'), v.historySince);
+  // Measured from the Rivian's own sessions (median of the last 20 that gained
+  // >= 10%), seeded with the configured value until there are enough.
+  const seed = typeof v.kwhPerPct === 'number' && v.kwhPerPct > 0 ? v.kwhPerPct : KWH_PER_PCT_SEED;
+  const kwhPerPct = measuredKwhPerPct(rows, seed);
   const est = needEstimate(rows, workDays, nowMs);
   const state = await readRivianCachedState();
   const floor = arrivalFloorOf(v);

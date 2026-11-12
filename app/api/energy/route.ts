@@ -16,6 +16,7 @@ import {
 import { GAS_PRICE_LABEL, fetchGasPriceUsdPerGallon } from '@/lib/gasPrice';
 import { arrivalFloorOf, needEstimate, sinceHistoryStart, tonightPlan } from '@/lib/chargePlan';
 import { rivianNightPlan } from '@/lib/rivianNightPlan';
+import { packKwhFor } from '@/lib/packKwh';
 
 export const dynamic = 'force-dynamic';
 
@@ -112,7 +113,7 @@ function localDateStr(d: Date): string {
  *
  * APPROXIMATIONS — this is an estimate tile, not a billing figure:
  *  1. packKwh in COMPARABLES is a hardcoded *nominal* pack size that assumes a
- *     specific trim (R1S Large 135, Model 3 Long Range 82). A Standard-pack
+ *     specific trim (R1S 124.5, Model 3 Long Range 82). A Standard-pack
  *     car would make this read low — e.g. a 60 kWh Model 3 RWD comes out ~27%
  *     under — and the sanity band below is far too wide to catch that. If
  *     either vehicle is ever swapped, update COMPARABLES.
@@ -123,7 +124,7 @@ function localDateStr(d: Date): string {
  *     capacity in (1) understates it by a similar amount, so the two roughly
  *     cancel — but neither is modelled on purpose.
  */
-interface CachedState { rangeMi?: number; chargePercent?: number; chargeLimit?: number }
+interface CachedState { rangeMi?: number; chargePercent?: number; chargeLimit?: number; batteryCapacityKwh?: number | null }
 
 async function readCachedState(cacheFile: string): Promise<CachedState | null> {
   const dir = process.env.KEYS_DIR ?? join(process.cwd(), 'keys');
@@ -190,9 +191,15 @@ export async function GET() {
     fetchGasPriceUsdPerGallon(),
   ]);
   const stateFor: Record<VehicleId, CachedState | null> = { rivian: rivianState, tesla: teslaState };
+  // Live batteryCapacity when the car reports it, else the configured packKwh,
+  // else the comparables table (lib/packKwh.ts).
+  const packFor: Record<VehicleId, number> = {
+    rivian: packKwhFor(rivianState?.batteryCapacityKwh, cfg.vehicles.rivian.packKwh, COMPARABLES.rivian.packKwh),
+    tesla: packKwhFor(null, cfg.vehicles.tesla.packKwh, COMPARABLES.tesla.packKwh),
+  };
   const effFor: Record<VehicleId, number | null> = {
-    rivian: ratedMiPerKwh(rivianState, COMPARABLES.rivian.packKwh),
-    tesla: ratedMiPerKwh(teslaState, COMPARABLES.tesla.packKwh),
+    rivian: ratedMiPerKwh(rivianState, packFor.rivian),
+    tesla: ratedMiPerKwh(teslaState, packFor.tesla),
   };
 
   // ── running 6-month daily average ──
@@ -231,7 +238,7 @@ export async function GET() {
       dailyKwh: est.plannedKwh,
       socPct: stateFor[id]?.chargePercent,
       limitPct: stateFor[id]?.chargeLimit,
-      packKwh: COMPARABLES[id].packKwh,
+      packKwh: packFor[id],
       minAmps: MIN_AMPS[id],
       maxAmps: MAX_AMPS,
       ...arrivalFloorOf(cfg.vehicles[id]),

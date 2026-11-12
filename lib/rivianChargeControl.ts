@@ -29,8 +29,8 @@ import { planAlerts, pruneSent } from '@/lib/planAlerts';
 import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertStore';
 import { fetchForecastHigh, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import type { NightPlan } from '@/lib/chargePlan';
+import { packKwhFor, RIVIAN_PACK_KWH_DEFAULT } from '@/lib/packKwh';
 
-const PACK_KWH = 135;   // what the one-off override plans with (COMPARABLES.rivian.packKwh)
 const RUN_INTERVAL_MS = 15 * 60_000;
 
 export interface RivianChargeStatus {
@@ -127,7 +127,7 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
     status.override = await readOverride(now);
     status.overridePlan = status.override
       ? overridePlan({
-        socPct: run.state?.chargePercent, limitPct: run.state?.chargeLimit, packKwh: PACK_KWH,
+        socPct: run.state?.chargePercent, limitPct: run.state?.chargeLimit, packKwh: packKwhFor(run.state?.batteryCapacityKwh, readConfig().vehicles.rivian.packKwh, RIVIAN_PACK_KWH_DEFAULT),
         minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS, override: status.override, nowMs: now,
         dailyKwh: status.dailyNeedKwh ?? 0, window: EV_WINDOW,
       })

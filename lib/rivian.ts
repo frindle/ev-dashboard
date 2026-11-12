@@ -151,6 +151,8 @@ export interface RivianVehicleState {
   climateOn: boolean;
   rangeMi: number;            // distanceToEmpty.value (kilometers) → miles
   odometer: number;           // vehicleMileage.value (miles)
+  odometerMiExact?: number | null; // unrounded miles, for drive distances (the drive log never stores it)
+  batteryCapacityKwh?: number | null; // batteryCapacity.value, the live pack size (kWh)
   chargeRateMph: number;      // not reported by Rivian API — always 0
   addedRangeMi: number;       // not reported by Rivian API — always 0
   minutesToFull: number;      // timeToEndOfCharge.value
@@ -546,6 +548,7 @@ interface RawVehicleState {
   batteryLevel: { value: number } | null;
   distanceToEmpty: { value: number } | null;
   batteryLimit: { value: number } | null;
+  batteryCapacity: { value: number | string } | null;
   timeToEndOfCharge: { value: number } | null;
   chargerState: { value: string; timeStamp?: string } | null;
   chargerStatus: { value: string; timeStamp?: string } | null;
@@ -774,6 +777,8 @@ export function mapRawVehicleState(vs: RawVehicleState, source: 'poll' | 'push' 
     rangeMi: vs.distanceToEmpty?.value ? Math.round(vs.distanceToEmpty.value / 1.609344) : 0,
     // vehicleMileage is returned in meters; convert to miles
     odometer: Math.round((vs.vehicleMileage?.value ?? 0) / 1609.344),
+    odometerMiExact: vs.vehicleMileage?.value ? vs.vehicleMileage.value / 1609.344 : null,
+    batteryCapacityKwh: (() => { const c = Number(vs.batteryCapacity?.value); return Number.isFinite(c) && c > 0 ? c : null; })(),
     minutesToFull: vs.timeToEndOfCharge?.value ?? 0,
     chargeRateMph: 0,
     addedRangeMi: 0,
