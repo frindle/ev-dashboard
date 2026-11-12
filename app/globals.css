@@ -856,3 +856,31 @@ input[type="email"].form-input { font-family: 'Space Grotesk', sans-serif; }
   cursor: pointer;
   padding: 2px;
 }
+
+/* ── NV Energy import (/energy-upload) ── */
+.nve-drop {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+  padding: 32px 16px; border: 1px dashed var(--text-muted); border-radius: 12px;
+  color: var(--text-dim); cursor: pointer; transition: border-color 0.15s, color 0.15s;
+}
+.nve-drop:hover, .nve-drop:focus-within { border-color: var(--accent); color: var(--text); }
+.nve-drop.busy { cursor: progress; animation: evpulse 1.6s ease-in-out infinite; }
+.nve-drop input { font-size: 12px; color: var(--text-dim); max-width: 100%; }
+.nve-drop-title { font-size: 15px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.nve-error {
+  margin-bottom: 16px; padding: 12px 16px; border-radius: 10px; font-size: 13px;
+  border: 1px solid var(--red); background: rgba(224,85,85,0.08); color: var(--red);
+}
+.nve-peak { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.nve-peak-num { font-size: 44px; font-weight: 600; color: var(--accent); line-height: 1; }
+.nve-peak-unit { font-size: 12px; color: var(--text-dim); }
+.nve-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px 20px; }
+.nve-k { font-size: 11px; color: var(--text-dim); }
+.nve-v { font-size: 14px; margin-top: 2px; overflow-wrap: anywhere; }
+.nve-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+.nve-chip { padding: 2px 8px; border-radius: 6px; font-size: 11px; background: var(--surface2); border: 1px solid var(--orange); color: var(--orange); }
+.nve-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+@media (max-width: 600px) {
+  .admin-page { padding: 16px; }
+  .nve-peak-num { font-size: 36px; }
+}
