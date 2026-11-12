@@ -99,12 +99,12 @@ test('summary: range, estimated, missing whole day, highest kW; bad files fail l
   assert.throws(() => parse([[IH, irow(1, 'Delivered', 'KWH_DEL', 'garbage', 'Actual', 1)].join('\n')]), /unparseable/);
 });
 
-test('re-upload gives identical lines; estimated is a tag, timestamp is UTC ms', () => {
+test('re-upload gives identical lines; estimated is a 0/1 field, timestamp is UTC ms', () => {
   const csv = [IH, irow(1, 'Delivered', 'KWH_DEL', '2025-01-01 00:00:00', 'Calculated', 3.246), irow(3, 'Received', 'KWH_REC', '2025-01-01 00:00:00', 'Actual', 0.5)].join('\n');
   const a = intervalLines(sortedIntervals(parse([csv])));
   const b = intervalLines(sortedIntervals(parse([csv + '\n'], 5)));
   assert.deepEqual(a, b);
-  assert.deepEqual(a, [`nve_interval,estimated=true import_kwh=3.246,export_kwh=0.5 ${iso('2025-01-01T08:00:00Z')}`]);
+  assert.deepEqual(a, [`nve_interval import_kwh=3.246,export_kwh=0.5,estimated=1 ${iso('2025-01-01T08:00:00Z')}`]);
 });
 
 test('daily peaks: whole day, 08-24, 00-08, EV subtraction at the night peak', () => {
@@ -140,4 +140,12 @@ test('evKwDuring weights partial overlap; demand kW wins over kWh-derived kW', (
   const d = [DH, drow('2025-01-10 02:00:00', 'Actual', 7)].join('\n');
   const [p] = dailyPeaks(sortedIntervals(parse([i, d])), 15, []);
   assert.equal(p.peakKw, 7);
+});
+
+test('house night load never goes negative when the EV figure overshoots the meter', () => {
+  const i = [IH, irow(1, 'Delivered', 'KWH_DEL', '2025-01-10 02:00:00', 'Actual', 2)].join('\n');  // 8 kW
+  const spans = [{ startMs: iso('2025-01-10T09:00:00Z'), endMs: iso('2025-01-10T11:00:00Z'), kw: 11 }];
+  const [p] = dailyPeaks(sortedIntervals(parse([i])), 15, spans);
+  assert.equal(p.evKwAtNightPeak, 11);
+  assert.equal(p.houseNightKw, 0);
 });

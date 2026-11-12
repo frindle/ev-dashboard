@@ -151,7 +151,10 @@ export function intervalLines(list: NveInterval[]): string[] {
     if (r.importKwh !== null) f.push(`import_kwh=${num(r.importKwh)}`);
     if (r.exportKwh !== null) f.push(`export_kwh=${num(r.exportKwh)}`);
     if (r.importKw !== null) f.push(`import_kw=${num(r.importKw)}`);
-    if (f.length) out.push(`${INTERVAL_MEASUREMENT},estimated=${r.estimated} ${f.join(',')} ${r.startMs}`);
+    // estimated is a 0/1 field, not a tag: a re-upload that turns a Calculated
+    // row into an Actual one then overwrites the same point instead of leaving
+    // a second series that would double count.
+    if (f.length) out.push(`${INTERVAL_MEASUREMENT} ${[...f, `estimated=${r.estimated ? 1 : 0}`].join(',')} ${r.startMs}`);
   }
   return out;
 }
@@ -215,7 +218,7 @@ export function dailyPeaks(list: NveInterval[], min: number, spans: SessionSpan[
       peakKw: d.all!.kw, peakTime: hhmm(d.all!.ms),
       dayKw: d.day?.kw ?? null, dayTime: d.day ? hhmm(d.day.ms) : null,
       nightKw: d.night?.kw ?? null, nightTime: d.night ? hhmm(d.night.ms) : null,
-      evKwAtNightPeak: ev, houseNightKw: d.night && ev !== null ? d.night.kw - ev : null,
+      evKwAtNightPeak: ev, houseNightKw: d.night && ev !== null ? Math.max(0, d.night.kw - ev) : null, // EV figure can overshoot the meter
     });
   }
   return out;
