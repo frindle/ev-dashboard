@@ -14,7 +14,7 @@ import {
   type VehicleId,
 } from '@/lib/rates';
 import { GAS_PRICE_LABEL, fetchGasPriceUsdPerGallon } from '@/lib/gasPrice';
-import { arrivalFloorOf, needEstimate, sinceHistoryStart, tonightPlan } from '@/lib/chargePlan';
+import { teslaPlanRun } from '@/lib/teslaPlan';
 import { rivianNightPlan } from '@/lib/rivianNightPlan';
 import { packKwhFor } from '@/lib/packKwh';
 
@@ -71,11 +71,7 @@ export interface EnergyVehicleSummary {
   trip: null;
 }
 
-// Charger-current bounds for tonightAmps. 5A is the Tesla's lowest setting;
-// 6A is the lowest J1772 current. 48A is the Wall Connector's maximum.
-const MIN_AMPS: Record<VehicleId, number> = { rivian: 6, tesla: 5 };
-const MAX_AMPS = 48;
-
+// Charger-current bounds for the Tesla's tonightAmps live in lib/teslaPlan.ts.
 export interface EnergySessionSummary {
   vehicleName: string;
   endedAt: string;
@@ -231,18 +227,15 @@ export async function GET() {
   const rivianRun = await rivianNightPlan(nowMs);
   const rv = rivianRun.built?.result ?? null;
   const vehicles: EnergyVehicleSummary[] = (['rivian', 'tesla'] as const).map(id => {
-    const est = id === 'rivian'
-      ? rivianRun.est
-      : needEstimate(sinceHistoryStart(rows.filter(r => idFor(r) === id), cfg.vehicles.tesla.historySince), null, nowMs);
-    const plan = id === 'rivian' || est === null ? null : tonightPlan({
-      dailyKwh: est.plannedKwh,
-      socPct: stateFor[id]?.chargePercent,
-      limitPct: stateFor[id]?.chargeLimit,
+    const tesla = id === 'rivian' ? null : teslaPlanRun({
+      rows: rows.filter(r => idFor(r) === id),
+      vehicle: cfg.vehicles.tesla,
+      state: stateFor[id],
       packKwh: packFor[id],
-      minAmps: MIN_AMPS[id],
-      maxAmps: MAX_AMPS,
-      ...arrivalFloorOf(cfg.vehicles[id]),
+      nowMs,
     });
+    const est = id === 'rivian' ? rivianRun.est : tesla!.est;
+    const plan = tesla?.plan ?? null;
     return {
       id,
       name: cfg.vehicles[id].name,
