@@ -169,6 +169,9 @@ export function decideAmps(p: {
   // No-need night (plugDecision.needed === false, no override): the write slots put the night
   // at minAmps, as the 8A charge when it fits under the forecast peak, else as the hold.
   noNeed?: { fits: boolean; minAmps: number };
+  // Inside the window on a hold: the car's real SoC says tonight IS needed (the 23:00 write was
+  // missed or the need changed), so the hold is lifted to these amps. Used only from a hold.
+  holdLiftAmps?: number | null;
 }): AmpsDecision {
   const { current, dailyAmps, overrideAmps } = p;
   if (!current) return { amps: null, reason: 'no charging schedule on the car' };
@@ -185,7 +188,7 @@ export function decideAmps(p: {
     // Inside the window charge -> hold is never written; hold -> charge only as a raise.
     let best: AmpsDecision = { amps: null, reason: isHold ? 'hold night, window running' : 'charge window running' };
     if (isHold && (p.inShape ?? true)) {
-      for (const [a, reason] of raises) {
+      for (const [a, reason] of [...raises, [p.holdLiftAmps, 'needed tonight, hold lifted'] as [number | null | undefined, string]]) {
         if (typeof a === 'number' && a > 0 && a > (best.amps ?? 0)) best = { amps: a, reason: `${reason} (from hold)` };
       }
     } else if (shaped) {
@@ -205,7 +208,9 @@ export function decideAmps(p: {
   }
   if (p.slot !== null) {
     const desired = Math.max(dailyAmps ?? 0, overrideAmps ?? 0);
-    if (!(desired > 0)) return { amps: null, reason: 'no plan yet' };
+    // No plan and the car is held: lift the hold to the charge window at the same amps, so a
+    // failed plan never leaves the car unable to charge.
+    if (!(desired > 0)) return isHold ? { amps: current.amperage, reason: `${p.slot} slot, no plan, hold lifted` } : { amps: null, reason: 'no plan yet' };
     const source = overrideAmps !== null && overrideAmps >= (dailyAmps ?? 0) ? 'override' : 'daily plan';
     if (desired !== current.amperage || !shaped) return { amps: desired, reason: `${p.slot} slot, ${source}` };
     return { amps: null, reason: 'up to date' };

@@ -215,7 +215,19 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
     // daily peak; otherwise the schedule is held. Needs writing on, and the room is read once a day.
     let holdNight = false;
     let noNeedFits_ = false;
-    if (status.controlEnabled && plug.needed === false && built) {
+    // Before 23:00 the car's real SoC is the morning one, before the day's driving: the night only
+    // counts as no-need when the plan's own SoC (the day's use taken off) also says so.
+    const planSoc = built?.socUsed;
+    const planPeak = built?.result.peakInput && typeof planSoc === 'number' && planSoc > 0
+      ? planNights({ ...built.result.peakInput, socPct: planSoc }) : null;
+    const planPlug = plugDecision({
+      socPct: planSoc ?? null,
+      reachPct: planPeak ? planPeak.requiredPct[0] : plan?.reachPct ?? null,
+      bufferPct: planPeak ? 0 : plan?.bufferPct ?? 0,
+      override: ov,
+      peakCharge: planPeak ? planPeak.amps[0] !== null : null,
+    });
+    if (status.controlEnabled && plug.needed === false && planPlug.needed === false && built) {
       const room = await serveRoomFor(store, run, built.serveDay, now, forecastTemps);
       const rejected = store.holdRejectedServe === built.serveDay;
       noNeedFits_ = rejected || noNeedFits(room.headroomKw, RIVIAN_MIN_AMPS);
@@ -286,6 +298,7 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
       overrideAmps: op && op.windows > 0 ? op.amps : null,
       replanAmps, fixRaiseAmps, inShape: listInShape(list),
       noNeed: status.noNeed ? { fits: noNeedFits_, minAmps: RIVIAN_MIN_AMPS } : undefined,
+      holdLiftAmps: plug.needed === true ? Math.max(plan?.amps ?? 0, RIVIAN_MIN_AMPS) : null,
     });
     const amps = status.decision.amps;
     const holdIt = !!status.decision.hold;

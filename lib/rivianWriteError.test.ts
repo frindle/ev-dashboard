@@ -27,3 +27,9 @@ test('writeFailureReason: GraphQL code, reason and message; scrubbed; capped at 
   assert.equal(writeFailureReason(new Error('HTTP 502')), 'HTTP 502');
   assert.equal(writeFailureReason('plain'), 'plain');
 });
+
+test('scrubCoords: quoted values and bare fine decimals go', () => {
+  const s = scrubCoords('{"latitude":"36.12345","longitude":"-115.54321"} at -115.98765, 36.4321; amps 8, 0.5');
+  assert.ok(!/36\.12|115\.54|115\.98|36\.43/.test(s), s);
+  assert.ok(s.includes('amps 8, 0.5'));
+});

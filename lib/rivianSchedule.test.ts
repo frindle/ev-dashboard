@@ -138,3 +138,15 @@ test('decideAmps: between slots an override still rewrites a hold', () => {
   assert.equal(decideAmps({ slot: null, nowMs: noon, current: hold(), dailyAmps: null, overrideAmps: 8 }).amps, 8);
   assert.equal(decideAmps({ slot: null, nowMs: noon, current: hold(), dailyAmps: null, overrideAmps: null }).amps, null);
 });
+
+test('decideAmps: a hold is lifted when tonight is needed in the window, or a slot has no plan', () => {
+  const night = at('2026-11-10T02:00:00-08:00');
+  const base = { slot: null, nowMs: night, dailyAmps: null, overrideAmps: null };
+  const lift = decideAmps({ ...base, current: hold(), holdLiftAmps: 12 });
+  assert.deepEqual([lift.amps, lift.hold], [12, undefined]);
+  assert.equal(decideAmps({ ...base, current: sch({ amperage: 8 }), holdLiftAmps: 12 }).amps, null);   // only from a hold
+  const day = at('2026-11-09T23:00:00-08:00');
+  const noPlan = decideAmps({ ...base, slot: 'update', nowMs: day, current: hold() });
+  assert.deepEqual([noPlan.amps, noPlan.hold], [8, undefined]);
+  assert.equal(decideAmps({ ...base, slot: 'update', nowMs: day, current: sch({ amperage: 8 }) }).amps, null);
+});

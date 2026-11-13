@@ -3,10 +3,12 @@
 // Rivian's error text can echo the request variables, and the schedule's variables carry the
 // home location, so every number next to a latitude/longitude key is scrubbed before the text
 // goes anywhere.
-const COORD_KEY = /\b(latitude|longitude|lat|lon|lng)([\\"']*\s*[:=]\s*)-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi;
+const COORD_KEY = /\b(latitude|longitude|lat|lon|lng)([\\"']*\s*[:=]\s*[\\"']*)-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi;
+// Belt and braces: any bare decimal with 3+ places (a coordinate without its key).
+const FINE_DECIMAL = /-?\b\d{1,3}\.\d{3,}\b/g;
 
 export function scrubCoords(text: string): string {
-  return text.replace(COORD_KEY, '$1$2[redacted]');
+  return text.replace(COORD_KEY, '$1$2[redacted]').replace(FINE_DECIMAL, '[redacted]');
 }
 
 export const REASON_MAX = 200;
