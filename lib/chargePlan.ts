@@ -487,6 +487,9 @@ export interface TonightInputs {
   workDays: Set<number> | null;  // null = no calendar: every day plans as an off day
   usePctWork: number;            // expected use per kind of day, in %
   usePctOff: number;
+  // Days with a typed need: the day's total driving in %. It only raises the work/off figure for
+  // that day (max), for tonight and for the next night's short-night buffer.
+  usePctByDay?: Record<number, number> | null;
   socPct: number | null | undefined;
   limitPct: number | null | undefined;
   margin?: number;
@@ -520,13 +523,14 @@ export function planTonight(p: TonightInputs): TonightResult {
   const nextIsWork = !!p.workDays?.has(p.day + 1);
   const window = nightWindow(p.day, p.shifts);
   const nextWindow = nightWindow(p.day + 1, p.shifts);
+  const useOn = (day: number, work: boolean) => Math.max(work ? p.usePctWork : p.usePctOff, p.usePctByDay?.[day] ?? 0);
   const readings: NightPlan[] = [];
   for (const w of window.readings) {
     for (const n of nextWindow.readings) {
       readings.push(nightPlan({
-        isWork, socPct: p.socPct, limitPct: p.limitPct, usePct: isWork ? p.usePctWork : p.usePctOff,
+        isWork, socPct: p.socPct, limitPct: p.limitPct, usePct: useOn(p.day, isWork),
         margin: p.margin, floorPct: p.floorPct, topUpLimitPct: p.topUpLimitPct, windowHours: w.hours,
-        next: { hours: n.hours, usePct: nextIsWork ? p.usePctWork : p.usePctOff, isWork: nextIsWork },
+        next: { hours: n.hours, usePct: useOn(p.day + 1, nextIsWork), isWork: nextIsWork },
         kwhPerPct: p.kwhPerPct, minAmps: p.minAmps, maxAmps: p.maxAmps,
       }));
     }
@@ -543,7 +547,7 @@ export function planTonight(p: TonightInputs): TonightResult {
     const nights: PeakHorizonNight[] = hours.map((h, k) => ({
       ...(p.peak![k] ?? { aimKw: null, houseKw: null, headroomKw: [] }),
       hours: h,
-      usePct: p.workDays?.has(p.day + k) ? p.usePctWork : p.usePctOff,
+      usePct: useOn(p.day + k, !!p.workDays?.has(p.day + k)),
     }));
     const margin = typeof p.margin === 'number' && p.margin >= 1 ? p.margin : 1;
     peakInput = { limitPct: limit, floorPct: floor, margin, kwhPerPct: p.kwhPerPct, nights, minAmps: p.minAmps, maxAmps: p.maxAmps };

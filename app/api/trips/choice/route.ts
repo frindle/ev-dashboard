@@ -3,12 +3,12 @@
 //   { kind: 'toggle',  uid, day, value: 'home'|'straight'|'' }
 //   { kind: 'place',   uid | 'work', lat, lon, label? }   (a pick saved in keys/geo-overrides.json,
 //                                                         and written to the event when PERSONAL_CAL_WRITEBACK=1)
-//   { kind: 'need',    day, value, unit: 'pct'|'mi' }    (the day's driving, typed; value '' clears it)
+//   { kind: 'need',    day, value, unit: 'pct'|'mi' }    (the day's driving, typed, up to 14 days out; only raises the plan; value '' clears it)
 import { NextRequest } from 'next/server';
 import { writeBackPlace } from '@/lib/caldavWriteback';
 import { localDayNumber } from '@/lib/chargePlan';
 import { WORK_KEY } from '@/lib/geocode';
-import { TRIP_DAYS_AHEAD } from '@/lib/personalCalendar';
+import { CHARGE_CAL_DAYS } from '@/lib/chargeCalendar';
 import { MANUAL_MAX, setGeoOverride, mutateTripChoices, validNeed } from '@/lib/tripStore';
 import { runRivianChargeControl } from '@/lib/rivianChargeControl';
 
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
     if (uid !== 'work') result = await writeBackPlace(uid, { lat, lon, label });
   } else if (b?.kind === 'need' && Number.isInteger(day)) {
     const today = localDayNumber(Date.now());
-    if (day < today || day > today + TRIP_DAYS_AHEAD) return Response.json({ error: 'day out of range' }, { status: 400 });
+    if (day < today || day >= today + CHARGE_CAL_DAYS) return Response.json({ error: 'day out of range' }, { status: 400 });
     const raw = String(b.value ?? '').trim();
     const unit = b.unit === 'mi' ? 'mi' : 'pct';
     const n = raw === '' ? null : validNeed({ value: Math.min(Number(raw), MANUAL_MAX[unit]), unit });

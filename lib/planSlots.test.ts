@@ -239,3 +239,22 @@ test('unplugged-after-shift reminder only when the car needs the charge', () => 
   assert.ok(keys(ctx({ ...c, plugNeeded: true })).includes('unplugged-after-shift'));
   assert.ok(!keys(ctx({ ...c, plugNeeded: false })).includes('unplugged-after-shift'));
 });
+
+test('buildRivianPlan: a typed need only raises the day (max with the model), tonight and the next day\'s buffer', () => {
+  const now = at('2026-11-12T23:00:00-08:00');
+  const tomorrow = localDayNumber(now) + 1;
+  const common = {
+    nowMs: now, est: null, shifts: [], workDays: new Set([tomorrow]), state: { chargePercent: 30, chargeLimit: 70, isPluggedIn: true },
+    kwhPerPct: 1.44, floorPct: 25, margin: 1.1, forecastHighF: null, minAmps: 6, maxAmps: 48, useOverride: { work: 20, off: 8 },
+  };
+  const plain = buildRivianPlan(common)!;
+  const below = buildRivianPlan({ ...common, typedUse: { [tomorrow]: 10 } })!;   // under the 20% model: ignored
+  assert.equal(below.result.plan.totalPct, plain.result.plan.totalPct);
+  assert.equal(below.result.plan.amps, plain.result.plan.amps);
+  const above = buildRivianPlan({ ...common, typedUse: { [tomorrow]: 30 } })!;    // total driving 30%, not 20% + 30%
+  assert.ok(Math.abs(above.result.plan.reachPct! - (25 + 30 * 1.1)) < 1e-9);
+  assert.ok(above.result.plan.totalPct > plain.result.plan.totalPct);
+  // the day after: its typed use raises the short-night buffer base, a lower one changes nothing
+  const next = buildRivianPlan({ ...common, typedUse: { [tomorrow + 1]: 5 } })!;
+  assert.equal(next.result.plan.totalPct, plain.result.plan.totalPct);
+});

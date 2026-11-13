@@ -257,6 +257,16 @@ export function pctForMiles(miles: number, highF: number | null): number {
   return miles / milesPerPct(highF) + PARKED_PCT;
 }
 
+// A typed need as the day's expected use in % of the battery, no margin (the night plan adds it).
+export function needUsePct(n: { value: number; unit: 'pct' | 'mi' }, highF: number | null): number {
+  return n.unit === 'mi' ? pctForMiles(n.value, highF) : n.value;
+}
+
+// The miles a % of battery stands for (parked drain taken off), for showing a model day in miles.
+export function milesForPct(pct: number, highF: number | null): number {
+  return Math.max(0, Math.round((pct - PARKED_PCT) * milesPerPct(highF)));
+}
+
 // Days covered by a multi-day trip after its first (nothing is planned while away).
 export function awayDays(events: { day: number; startMs: number; endMs: number; multiDay: boolean }[], dayOf: (ms: number) => number): Set<number> {
   const s = new Set<number>();

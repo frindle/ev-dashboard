@@ -8,7 +8,7 @@ import { join } from 'path';
 import { readConfig } from '@/lib/config';
 import { readChargeHistory } from '@/lib/chargeHistory';
 import { vehicleIdResolver } from '@/lib/chargeSessionInflux';
-import { arrivalFloorOf, needEstimate, nextUseDay, sinceHistoryStart, type NeedEstimate, type Shift } from '@/lib/chargePlan';
+import { arrivalFloorOf, localDayNumber, needEstimate, nextUseDay, sinceHistoryStart, type NeedEstimate, type Shift } from '@/lib/chargePlan';
 import { readDailyUse, readDrives } from '@/lib/driveLogStore';
 import { liveNeed, type LiveNeed } from '@/lib/needModels';
 import { localDate } from '@/lib/rivianDailyUse';
@@ -17,6 +17,8 @@ import { getShiftCalendar } from '@/lib/shiftCalendar';
 import { applyIgnored } from '@/lib/shiftChoices';
 import { readIgnored } from '@/lib/shiftChoicesStore';
 import { buildRivianPlan, driveTimeTemps, forecastHighFor, forecastTempsFrom, highOnDay, type BuiltPlan, type ForecastTemp, type PlanState } from '@/lib/rivianPlan';
+import { needUsePct } from '@/lib/tripPlan';
+import { readTripChoices } from '@/lib/tripStore';
 import { loadPeakDays, peakNightsFor } from '@/lib/peakData';
 import { pacificFields } from '@/lib/pacificTime';
 import type { PeakNightIn } from '@/lib/peakPlan';
@@ -61,6 +63,33 @@ export async function fetchForecast(day: number): Promise<{ highF: number | null
   }
 }
 
+// The 3-hourly forecast kept for 30 min (a failed call too), so the /charging page, the calendar
+// sync and the plan run share one OpenWeatherMap call. Covers about 5 days.
+let tempsCache: { atMs: number; temps: ForecastTemp[] } | null = null;
+export async function cachedForecastTemps(nowMs: number): Promise<ForecastTemp[]> {
+  if (tempsCache && nowMs - tempsCache.atMs < 30 * 60_000) return tempsCache.temps;
+  const f = await fetchForecast(localDayNumber(nowMs));
+  tempsCache = { atMs: nowMs, temps: f?.temps ?? [] };
+  return tempsCache.temps;
+}
+
+// The typed needs (today on) as expected use in %. Miles turn into % with that day's high: the
+// serve day's own forecast, else the 3-hourly temps (the plan's, then the cached call).
+async function typedUseOf(nowMs: number, serveDay: number, forecastHighF: number | null, temps: ForecastTemp[]): Promise<Record<number, number>> {
+  const today = localDayNumber(nowMs);
+  const needs = Object.entries((await readTripChoices()).needs).filter(([k]) => Number(k) >= today);
+  const out: Record<number, number> = {};
+  if (!needs.length) return out;
+  let more: ForecastTemp[] | null = null;
+  for (const [k, n] of needs) {
+    const day = Number(k);
+    let high = day === serveDay ? forecastHighF : highOnDay(temps, day);
+    if (high === null && n.unit === 'mi') high = highOnDay(more ??= await cachedForecastTemps(nowMs), day);
+    out[day] = needUsePct(n, high);
+  }
+  return out;
+}
+
 const dayString = (day: number): string => new Date(day * 86_400_000).toISOString().slice(0, 10);
 
 // EV plan #7: the expected use from the daily-use log (the backtest winner),
@@ -95,6 +124,7 @@ export interface RivianPlanRun {
   forecastHighF: number | null;
   need7: LiveNeed | null;   // the daily-use need (EV plan #7); null = charge history planned it
   peakNights: PeakNightIn[] | null;   // Rev 18: room under the day peak, serve day + 2; null = off
+  typedUse: Record<number, number>;   // typed needs as expected use in % (no margin), by day
 }
 
 // Rev 18: room under the day peak for the serve day and the two after it, from the NV usage in
@@ -122,8 +152,10 @@ async function peakNightsNow(
 // daily-use need when it planned the night, else the charge history.
 export function dailyNeedKwhOf(run: RivianPlanRun): number | null {
   const b = run.built;
-  if (b && run.need7) return (run.workDays?.has(b.serveDay) ? b.usePctWork : b.usePctOff) * run.kwhPerPct;
-  return run.est?.plannedKwh ?? null;
+  const typed = b ? run.typedUse[b.serveDay] ?? 0 : 0;
+  if (b && run.need7) return Math.max(run.workDays?.has(b.serveDay) ? b.usePctWork : b.usePctOff, typed) * run.kwhPerPct;
+  const planned = run.est?.plannedKwh ?? null;
+  return planned === null ? (typed > 0 ? typed * run.kwhPerPct : null) : Math.max(planned, typed * run.kwhPerPct);
 }
 
 // opts.refreshCalendar re-reads the ICS now (the 23:00 slot, an open conflict).
@@ -151,11 +183,12 @@ export async function rivianNightPlan(
   const forecastHighF = opts.forecastHighF ?? null;
   const need7 = await needFromDailyUse(nowMs, shifts, workDays, opts.forecastTemps ?? []);
   const peakNights = await peakNightsNow(nowMs, workDays, forecastHighF, opts.forecastTemps ?? [], houseSince);
+  const typedUse = await typedUseOf(nowMs, nextUseDay(nowMs), forecastHighF, opts.forecastTemps ?? []);
   const built = buildRivianPlan({
     nowMs, est, shifts, workDays, state, kwhPerPct, floorPct: floor.arrivalFloorPct, margin: floor.arrivalDriveMargin,
     forecastHighF, minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS,
     useOverride: need7 ? { work: need7.work, off: need7.off } : null,
-    peakNights,
+    peakNights, typedUse,
   });
-  return { built, est, state, shifts, workDays, timeOffDays: cal?.timeOffDays ?? new Set(), calendar: cal ? { workDays: cal.workDays, shifts: cal.shifts } : null, kwhPerPct, forecastHighF, need7, peakNights };
+  return { built, est, state, shifts, workDays, timeOffDays: cal?.timeOffDays ?? new Set(), calendar: cal ? { workDays: cal.workDays, shifts: cal.shifts } : null, kwhPerPct, forecastHighF, need7, peakNights, typedUse };
 }

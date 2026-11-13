@@ -30,6 +30,9 @@ export interface BuildInput {
   useOverride?: { work: number | null; off: number | null } | null;
   // Rev 18: room under the day peak for the serve day and the two after it (lib/peakForecast.ts).
   peakNights?: PeakNightIn[] | null;
+  // Days with a typed need (/charging, /trips, the calendar), as the day's total driving in % of
+  // the battery with no margin (lib/tripPlan.ts needUsePct). It only raises that day's expected use.
+  typedUse?: Record<number, number> | null;
 }
 
 export interface BuiltPlan {
@@ -71,14 +74,15 @@ export function buildRivianPlan(p: BuildInput): BuiltPlan | null {
   };
   const serveDay = nextUseDay(p.nowMs);
   const todayIsWork = !!p.workDays?.has(localDayNumber(p.nowMs));
-  const todayUse = todayIsWork ? usePctWork : usePctOff;
+  const typed = p.typedUse ?? null;
+  const todayUse = Math.max(todayIsWork ? usePctWork : usePctOff, typed?.[localDayNumber(p.nowMs)] ?? 0);
   const rawSoc = typeof p.state?.chargePercent === 'number' && p.state.chargePercent > 0 ? p.state.chargePercent : null;
   const socUsed = socForPlan(p.nowMs, rawSoc, p.state?.isPluggedIn ?? null, todayUse, p.margin);
   const result = planTonight({
     day: serveDay, shifts: p.shifts, workDays: p.workDays, usePctWork, usePctOff,
     socPct: socUsed, limitPct: p.state?.chargeLimit, margin: p.margin, floorPct: p.floorPct,
     topUpLimitPct: topUpLimitFor(p.forecastHighF), kwhPerPct: p.kwhPerPct, minAmps: p.minAmps, maxAmps: p.maxAmps,
-    peak: p.peakNights ?? null,
+    peak: p.peakNights ?? null, usePctByDay: typed,
   });
   return { serveDay, socUsed, usePctWork, usePctOff, needSource, result };
 }

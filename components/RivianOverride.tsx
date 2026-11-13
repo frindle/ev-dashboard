@@ -121,6 +121,11 @@ export function RivianOverride() {
           </>
         )}
       </span>
+      <span style={{ flexBasis: '100%', fontFamily: MONO, fontSize: 11 }}>
+        <a href="/charging" style={{ color: '#34e0c4' }}>Charge calendar, next 14 days</a>
+        <span style={{ color: MUTED }}> · </span>
+        <a href="/trips" style={{ color: '#34e0c4' }}>Trips</a>
+      </span>
       {(err || s?.error) && <span style={{ flexBasis: '100%', fontFamily: MONO, fontSize: 11, color: WARN }}>{err ?? s?.error}</span>}
     </div>
   );
