@@ -237,6 +237,9 @@ function planFields(s: RivianChargeStatus) {
     next_day_work: s.need?.nextDayWork ?? undefined, gap_kwh: s.daily?.gapKwh, floor_kwh: s.daily?.floorKwh,
     tonight_kwh: s.daily?.tonightKwh, tonight_amps: s.daily?.tonightAmps,
     window_hours: n?.windowHours, next_window_hours: n?.nextWindowHours ?? undefined, buffer_pct: n?.bufferPct,
+    // #9b, only while the cap is applied (peakCap.enabled and on/after 2027-01-01)
+    peak_forecast_kw: n?.peakCap?.peakForecastKw ?? undefined, house_night_kw: n?.peakCap?.houseNightKw ?? undefined,
+    cap_amps: n?.peakCap?.capAmps ?? undefined, over_kw: n?.peakCap ? n.peakCap.overKw : undefined,
     kwh_per_pct: s.kwhPerPct ?? undefined, plugged_in: s.pluggedIn ?? undefined,
     slot: s.slot === 'forecast' ? 1 : s.slot === 'update' ? 2 : undefined,
     override_target_pct: s.override?.targetPct, override_amps: s.overridePlan?.amps,

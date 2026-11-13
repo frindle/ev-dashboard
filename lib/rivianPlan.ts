@@ -3,7 +3,7 @@
 // gathers the inputs is lib/rivianNightPlan.ts.
 import {
   localDayNumber, nextUseDay, planTonight, plannedFor, topUpLimitFor,
-  type NeedEstimate, type Shift, type TonightResult,
+  type NeedEstimate, type PeakCapSetup, type Shift, type TonightResult,
 } from './chargePlan.ts';
 
 export interface PlanState {
@@ -27,6 +27,8 @@ export interface BuildInput {
   // EV plan #7: expected use in % from the daily-use log (lib/needModels.ts
   // liveNeed). A null kind falls back to the charge-history estimate.
   useOverride?: { work: number | null; off: number | null } | null;
+  // EV plan #9b: peak cap inputs (lib/peakCap.ts); absent/disabled = today's plan.
+  peakCap?: PeakCapSetup | null;
 }
 
 export interface BuiltPlan {
@@ -75,6 +77,7 @@ export function buildRivianPlan(p: BuildInput): BuiltPlan | null {
     day: serveDay, shifts: p.shifts, workDays: p.workDays, usePctWork, usePctOff,
     socPct: socUsed, limitPct: p.state?.chargeLimit, margin: p.margin, floorPct: p.floorPct,
     topUpLimitPct: topUpLimitFor(p.forecastHighF), kwhPerPct: p.kwhPerPct, minAmps: p.minAmps, maxAmps: p.maxAmps,
+    peakCap: p.peakCap ?? null,
   });
   return { serveDay, socUsed, usePctWork, usePctOff, needSource, result };
 }

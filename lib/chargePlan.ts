@@ -239,7 +239,7 @@ export function tonightPlan(p: TonightInput): TonightPlan {
 //  - Never above the limit; a reach target above it sets raiseLimitTo.
 //  - Short-night buffer: when the next night has < 8 planned hours, tonight
 //    adds next need x hours lost / 8, if the limit has room.
-// A peak cap (EV charge plan #9b) belongs in ampsForNeed, the one place the
+// The peak cap (EV charge plan #9b) lives in ampsForNeed, the one place the
 // needed amps are computed.
 // ---------------------------------------------------------------------------
 
@@ -313,9 +313,108 @@ export function nightWindow(day: number, shifts: Shift[]): NightWindow {
   return { ...safe, conflict: today.length > 1 || prev.length > 1, readings };
 }
 
-// The one place the needed amps come from (see the note above).
-export function ampsForNeed(kwh: number, hours: number, minAmps: number, maxAmps: number): number {
-  return ampsFor(kwh, minAmps, maxAmps, hours);
+// ---------------------------------------------------------------------------
+// Peak cap (EV charge plan #9b, Rev 13). NV Energy bills each day's highest
+// 15-minute grid import from 2027-01-01. The Rivian's night amps are capped so
+// the car does not set that peak:
+//   cap kW   = 0.8 x day-peak forecast - night house load - the Tesla's planned kW that night
+//   cap amps = cap kW / 0.24 kW per A, rounded down to 2A steps
+//  - The need fits under the cap: charge at the cap amps (the highest that fit),
+//    up to the charge limit, so the car charges on fewer nights.
+//  - One of the next 2 nights would go over its cap: tonight adds charge up to
+//    its own cap (like the short-night buffer), even with little need of its own.
+//  - It fits on no night: go over on ONE night only, at the lowest amps that
+//    reach the target over the night's hours (the amps the plan uses today),
+//    and report how far over (overKw).
+// Off by default (config peakCap.enabled) and off before PEAK_CAP_START_DAY.
+// A night without a forecast or house load (too little uploaded history) is
+// not capped; its `why` says so. Inputs come from lib/peakCap.ts.
+// ---------------------------------------------------------------------------
+export const PEAK_CAP_START_DAY = Math.round(Date.UTC(2027, 0, 1) / DAY_MS);
+export const PEAK_CAP_MARGIN = 0.8;
+export const KW_PER_AMP = CHARGE_VOLTS / 1000;
+
+export interface PeakCapNight {
+  peakForecastKw: number | null;   // day-peak forecast (08:00-24:00), the median; null = not enough history
+  houseNightKw: number | null;     // night house load at its 90th percentile; null = not enough history
+  teslaKw?: number;                // the Tesla's planned kW that night (shared circuit)
+  why?: string;                    // why a value is null
+}
+
+export interface PeakCapSetup {
+  enabled: boolean;                          // config peakCap.enabled
+  byDay: ReadonlyMap<number, PeakCapNight>;  // by serve day: tonight, +1, +2
+}
+
+export interface PeakCapAhead extends PeakCapNight { needKwh: number; hours: number }
+export interface PeakCapInput { tonight: PeakCapNight; ahead: PeakCapAhead[] }
+
+export interface PeakCapReport {
+  peakForecastKw: number | null;
+  houseNightKw: number | null;
+  capKw: number | null;
+  capAmps: number | null;     // null = no cap that night (no data), 0 = the cap is below the car's lowest amps
+  overKw: number;             // kW above the cap when the night goes over; 0 otherwise
+  fits: boolean;
+  why: string | null;
+}
+
+export function peakCapOn(enabled: boolean | undefined, serveDay: number): boolean {
+  return enabled === true && serveDay >= PEAK_CAP_START_DAY;
+}
+
+export function capKwOf(n: PeakCapNight | undefined | null): number | null {
+  if (!n || n.peakForecastKw === null || n.houseNightKw === null) return null;
+  if (!Number.isFinite(n.peakForecastKw) || !Number.isFinite(n.houseNightKw)) return null;
+  return Math.max(0, PEAK_CAP_MARGIN * n.peakForecastKw - n.houseNightKw - Math.max(0, n.teslaKw ?? 0));
+}
+
+/** kW -> amps, rounded down to 2A steps, at most maxAmps. */
+export function capAmpsOf(capKw: number, maxAmps = 48): number {
+  return Math.min(maxAmps, Math.max(0, Math.floor(capKw / KW_PER_AMP / 2 + 1e-9) * 2));
+}
+
+export interface PeakCapDecision { amps: number; extraKwh: number; report: PeakCapReport }
+
+function overCap(kwh: number, hours: number, minAmps: number, maxAmps: number, n: PeakCapNight): boolean {
+  const ck = capKwOf(n);
+  if (ck === null || !(kwh > 0)) return false;
+  const ca = capAmpsOf(ck, maxAmps);
+  return !(ca >= minAmps && ampsFor(kwh, minAmps, maxAmps, hours) <= ca);
+}
+
+export function peakCapDecision(p: {
+  kwh: number; hours: number; minAmps: number; maxAmps: number; cap: PeakCapInput; roomKwh: number;
+}): PeakCapDecision {
+  const base = ampsFor(p.kwh, p.minAmps, p.maxAmps, p.hours);
+  const t = p.cap.tonight;
+  const capKw = capKwOf(t);
+  const report: PeakCapReport = {
+    peakForecastKw: t.peakForecastKw, houseNightKw: t.houseNightKw, capKw, capAmps: null, overKw: 0, fits: true, why: t.why ?? null,
+  };
+  if (capKw === null) return { amps: base, extraKwh: 0, report: { ...report, why: t.why ?? 'not enough uploaded history for a cap' } };
+  const capAmps = capAmpsOf(capKw, p.maxAmps);
+  report.capAmps = capAmps;
+  const fits = capAmps >= p.minAmps && base <= capAmps;
+  const lookaheadOver = p.cap.ahead.some((n) => overCap(n.needKwh, n.hours, p.minAmps, p.maxAmps, n));
+  if (fits && (p.kwh > 0 || lookaheadOver)) {
+    // Highest amps that fit; the charge grows to what they deliver, never past the limit.
+    const deliverKwh = capAmps * KW_PER_AMP * p.hours;
+    const extraKwh = Math.max(0, Math.min(deliverKwh, p.kwh + Math.max(0, p.roomKwh)) - p.kwh);
+    return { amps: capAmps, extraKwh, report };
+  }
+  if (!fits && p.kwh > 0) {
+    report.fits = false;
+    report.overKw = Math.max(0, base * KW_PER_AMP - capKw);
+  }
+  return { amps: base, extraKwh: 0, report };
+}
+
+// The one place the needed amps come from (see the note above). Without a cap
+// this is ampsFor, as before.
+export function ampsForNeed(kwh: number, hours: number, minAmps: number, maxAmps: number, cap?: PeakCapInput | null, roomKwh = 0): number {
+  if (!cap) return ampsFor(kwh, minAmps, maxAmps, hours);
+  return peakCapDecision({ kwh, hours, minAmps, maxAmps, cap, roomKwh }).amps;
 }
 
 export interface NightNext {
@@ -337,6 +436,7 @@ export interface NightPlanInput {
   kwhPerPct: number;
   minAmps: number;
   maxAmps: number;
+  peakCap?: PeakCapInput | null;         // only set when the cap is on for this night (see planTonight)
 }
 
 export interface NightPlan {
@@ -353,6 +453,7 @@ export interface NightPlan {
   raiseLimitTo: number | null;
   shortfallPct: number;       // what can't be put in at maxAmps (tonight + the short night)
   shortfall: boolean;
+  peakCap?: PeakCapReport;    // present only when the peak cap was applied to this plan
 }
 
 const known = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
@@ -413,8 +514,17 @@ export function nightPlan(p: NightPlanInput): NightPlan {
     nextShort = Math.max(0, nextNeed - maxPct(Math.max(0, p.next.hours)) - bufferPct);
   }
 
-  const totalPct = own.needPct + bufferPct;
-  const kwh = totalPct * p.kwhPerPct;
+  let totalPct = own.needPct + bufferPct;
+  let kwh = totalPct * p.kwhPerPct;
+  let amps: number | null = hours > 0 ? ampsForNeed(kwh, hours, p.minAmps, p.maxAmps) : null;
+  let capReport: PeakCapReport | undefined;
+  if (p.peakCap && hours > 0) {
+    const roomKwh = soc !== null && limit !== null ? Math.max(0, limit - (soc + totalPct)) * p.kwhPerPct : 0;
+    const d = peakCapDecision({ kwh, hours, minAmps: p.minAmps, maxAmps: p.maxAmps, cap: p.peakCap, roomKwh });
+    amps = d.amps;
+    capReport = d.report;
+    if (d.extraKwh > 0) { kwh += d.extraKwh; totalPct = kwh / p.kwhPerPct; }
+  }
   const shortfallPct = Math.max(0, own.needPct - tonightMaxPct) + nextShort;
   return {
     isWork: p.isWork,
@@ -426,10 +536,11 @@ export function nightPlan(p: NightPlanInput): NightPlan {
     targetPct: soc === null ? null : soc + totalPct,
     gapPct: own.gapPct,
     kwh,
-    amps: hours > 0 ? ampsForNeed(kwh, hours, p.minAmps, p.maxAmps) : null,
+    amps,
     raiseLimitTo,
     shortfallPct,
     shortfall: shortfallPct > 1e-9,
+    ...(capReport ? { peakCap: capReport } : {}),
   };
 }
 
@@ -457,6 +568,7 @@ export interface TonightInputs {
   kwhPerPct: number;
   minAmps: number;
   maxAmps: number;
+  peakCap?: PeakCapSetup | null;   // #9b; null/absent/disabled/before 2027-01-01 = today's plan
 }
 
 export interface TonightResult {
@@ -477,9 +589,22 @@ export function planTonight(p: TonightInputs): TonightResult {
   const window = nightWindow(p.day, p.shifts);
   const nextWindow = nightWindow(p.day + 1, p.shifts);
   const readings: NightPlan[] = [];
+  const setup = p.peakCap && peakCapOn(p.peakCap.enabled, p.day) ? p.peakCap : null;
+  const useOf = (d: number) => (p.workDays?.has(d) ? p.usePctWork : p.usePctOff);
+  const capFor = (): PeakCapInput | null => {
+    if (!setup) return null;
+    const none: PeakCapNight = { peakForecastKw: null, houseNightKw: null, why: 'no forecast for this night' };
+    const ahead: PeakCapAhead[] = [1, 2].map((k) => ({
+      ...(setup.byDay.get(p.day + k) ?? none),
+      needKwh: useOf(p.day + k) * (p.margin ?? 1) * p.kwhPerPct,
+      hours: nightWindow(p.day + k, p.shifts).hours,
+    }));
+    return { tonight: setup.byDay.get(p.day) ?? none, ahead };
+  };
   for (const w of window.readings) {
     for (const n of nextWindow.readings) {
       readings.push(nightPlan({
+        peakCap: capFor(),
         isWork, socPct: p.socPct, limitPct: p.limitPct, usePct: isWork ? p.usePctWork : p.usePctOff,
         margin: p.margin, floorPct: p.floorPct, topUpLimitPct: p.topUpLimitPct, windowHours: w.hours,
         next: { hours: n.hours, usePct: nextIsWork ? p.usePctWork : p.usePctOff, isWork: nextIsWork },

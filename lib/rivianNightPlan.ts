@@ -8,8 +8,9 @@ import { join } from 'path';
 import { readConfig } from '@/lib/config';
 import { readChargeHistory } from '@/lib/chargeHistory';
 import { vehicleIdResolver } from '@/lib/chargeSessionInflux';
-import { arrivalFloorOf, needEstimate, nextUseDay, sinceHistoryStart, type NeedEstimate, type Shift } from '@/lib/chargePlan';
+import { arrivalFloorOf, needEstimate, nextUseDay, peakCapOn, sinceHistoryStart, type NeedEstimate, type Shift } from '@/lib/chargePlan';
 import { readDailyUse, readDrives } from '@/lib/driveLogStore';
+import { buildPeakCapSetup, loadPeakDays } from '@/lib/peakCapData';
 import { liveNeed, type LiveNeed } from '@/lib/needModels';
 import { localDate } from '@/lib/rivianDailyUse';
 import { KWH_PER_PCT_SEED, measuredKwhPerPct } from '@/lib/kwhPerPct';
@@ -122,10 +123,15 @@ export async function rivianNightPlan(
   const floor = arrivalFloorOf(v);
   const forecastHighF = opts.forecastHighF ?? null;
   const need7 = await needFromDailyUse(nowMs, shifts, workDays, opts.forecastTemps ?? []);
+  // EV plan #9b: only reads the uploaded NV history when the cap is on for the night being planned.
+  const serveDay = nextUseDay(nowMs);
+  const capOn = peakCapOn(cfg.peakCap?.enabled, serveDay);
+  const peakCap = capOn ? buildPeakCapSetup(true, serveDay, await loadPeakDays(workDays, nowMs), workDays, forecastHighF) : null;
   const built = buildRivianPlan({
     nowMs, est, shifts, workDays, state, kwhPerPct, floorPct: floor.arrivalFloorPct, margin: floor.arrivalDriveMargin,
     forecastHighF, minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS,
     useOverride: need7 ? { work: need7.work, off: need7.off } : null,
+    peakCap,
   });
   return { built, est, state, shifts, workDays, timeOffDays: cal?.timeOffDays ?? new Set(), calendar: cal ? { workDays: cal.workDays, shifts: cal.shifts } : null, kwhPerPct, forecastHighF, need7 };
 }

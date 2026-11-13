@@ -128,6 +128,9 @@ export interface AppConfig {
   // deliberately: a visible indicator would announce that the owner is away,
   // defeating the purpose. Persists in config.json.
   vacationMode: boolean;
+  // EV charge plan #9b: cap the Rivian's night amps so the car never sets the day's NV Energy demand peak.
+  // Off by default; does nothing before 2027-01-01 even when on (lib/chargePlan.ts PEAK_CAP_START_DAY).
+  peakCap: { enabled: boolean };
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -218,6 +221,7 @@ const DEFAULT_CONFIG: AppConfig = {
     channel: 0,
   },
   vacationMode: false,
+  peakCap: { enabled: false },
 };
 
 function configPath(): string {
