@@ -12,8 +12,10 @@
 //                 mean of noisy 1%-resolution ratios), made robust with 4 Huber
 //                 IRLS passes. Temperature is clamped to the fitted range (flat,
 //                 never extrapolated) and the result to [1.2, 5] mi/%.
-//   planNeed      work days use (b) (or max(a,b), see NeedRule), off days (a),
-//                 null when daily use covers < 5 of the last 7 days.
+//   offDayNeed    days off: mean of the last 90 days' days off, Tukey outliers
+//                 dropped (Penn 2026-11-12); the calendar trip layer raises it.
+//   planNeed      work days use (b) (or max(a,b), see NeedRule), off days
+//                 offDayNeed, null when daily use covers < 5 of the last 7 days.
 //   simulate      two modes: 'reach' leaves every morning at only the minimum
 //                 (floor + use x margin), which scores how often the estimate
 //                 itself is beaten; 'live' runs the real nightPlan (put-back /
@@ -136,6 +138,39 @@ export function ewmaNeed(data: NeedData, asOf: string, isWork: boolean): EwmaNee
   }
   if (kN >= MIN_DAYS_PER_KIND && kW > 0) return { pct: kSum / kW, source: 'kind' };
   return aW > 0 ? { pct: aSum / aW, source: 'all' } : null;
+}
+
+// ---- days off ------------------------------------------------------------
+
+export const OFF_WINDOW_DAYS = 90;   // days off in this many days before asOf count
+export const OFF_FENCE_IQR = 1.5;    // Tukey fences: outside Q1 - k*IQR .. Q3 + k*IQR is an outlier
+
+export interface OffNeed { pct: number; source: 'off-avg' | 'kind' | 'all'; days: number; dropped: number }
+
+// Days off (Penn, 2026-11-12): "use averages of past days off, minus outliers,
+// or our calendar, whichever is more", with the same buffers as a work day.
+// This is the average half: the plain mean of the known days off in the last
+// OFF_WINDOW_DAYS, outliers (road trips, days the car sat) dropped by Tukey
+// fences. The calendar half is the trip layer (tripPlan.adjustForTrip: need =
+// max(this, routed events x 1.1)); the buffers (25% floor, x1.1) are nightPlan's.
+// Fewer than MIN_DAYS_PER_KIND days off kept: ewmaNeed's off/all-days mean.
+export function offDayNeed(data: NeedData, asOf: string): OffNeed | null {
+  const from = dateOf(dayNum(asOf) - OFF_WINDOW_DAYS);
+  const vals: number[] = [];
+  for (const r of data.rows) {
+    if (r.date >= asOf) break;
+    if (r.date < from || data.workDays.has(r.date) || !knownUse(r)) continue;
+    vals.push(r.used_pct);
+  }
+  const sorted = [...vals].sort((a, b) => a - b);
+  const q1 = quantile(sorted, 0.25), q3 = quantile(sorted, 0.75);
+  const kept = q1 === null || q3 === null ? sorted
+    : sorted.filter((v) => v >= q1 - OFF_FENCE_IQR * (q3 - q1) && v <= q3 + OFF_FENCE_IQR * (q3 - q1));
+  if (kept.length >= MIN_DAYS_PER_KIND) {
+    return { pct: kept.reduce((s, v) => s + v, 0) / kept.length, source: 'off-avg', days: kept.length, dropped: sorted.length - kept.length };
+  }
+  const a = ewmaNeed(data, asOf, false);
+  return a ? { pct: a.pct, source: a.source, days: 0, dropped: 0 } : null;
 }
 
 // ---- (b) ----------------------------------------------------------------
@@ -315,7 +350,7 @@ export function coverageOk(data: NeedData, asOf: string): boolean {
   return n >= MIN_COVERAGE_DAYS;
 }
 
-export interface PlannedNeed { pct: number; rule: 'a' | 'b' | 'max' | 'a-fallback' }
+export interface PlannedNeed { pct: number; rule: 'a' | 'b' | 'max' | 'a-fallback' | 'off-avg' }
 
 // null = the caller falls back to the charge-history needEstimate.
 export function planNeed(
@@ -323,8 +358,8 @@ export function planNeed(
 ): PlannedNeed | null {
   if (!coverageOk(data, asOf)) return null;
   const isWork = data.workDays.has(asOf);
+  if (!isWork) { const o = offDayNeed(data, asOf); return o ? { pct: o.pct, rule: 'off-avg' } : null; }
   const a = ewmaNeed(data, asOf, isWork);
-  if (!isWork) return a ? { pct: a.pct, rule: 'a' } : null;
   const b = tempNeed(data, asOf, curve, overrides);
   if (!b) return a ? { pct: a.pct, rule: 'a-fallback' } : null;
   if (rule.workDay === 'max' && a) return { pct: Math.max(a.pct, b.pct), rule: 'max' };
@@ -364,7 +399,7 @@ export function liveNeed(
     if (n && (!b || n.pct > b.pct)) b = n;
   }
   const aw = ewmaNeed(data, asOf, true);
-  const ao = ewmaNeed(data, asOf, false);
+  const ao = offDayNeed(data, asOf);
   let work: number | null = b ? b.pct : aw?.pct ?? null;
   let workSource = b ? b.source : 'a-fallback';
   if (b && rule.workDay === 'max' && aw && aw.pct > b.pct) { work = aw.pct; workSource = 'max'; }
@@ -490,7 +525,7 @@ export function modelA(data: NeedData): NeedFn {
 // Pass 1 uses no overrides; pass 2 gets the override map from pass-1 results.
 export function modelB(data: NeedData, overrides?: BandOverrides): NeedFn {
   return (date, isWork, curve) => {
-    if (!isWork) { const a = ewmaNeed(data, date, false); return a ? { pct: a.pct, source: 'off-a' } : null; }
+    if (!isWork) { const o = offDayNeed(data, date); return o ? { pct: o.pct, source: o.source } : null; }
     const b = tempNeed(data, date, curve, overrides);
     if (b) return { pct: b.pct, band: b.band, source: b.source };
     const a = ewmaNeed(data, date, true);

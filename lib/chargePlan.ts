@@ -242,6 +242,10 @@ export function tonightPlan(p: TonightInput): TonightPlan {
 //    the target still gets the minimum amps, and endPct is where the morning
 //    really lands. The heat top-up cap doesn't apply here. This replaced the
 //    put-back on work nights and the catch-up on off nights (2026-11-07).
+//    Days off get the same floor and margin; their use is the average of
+//    past days off minus outliers or the calendar, whichever is more
+//    (needModels.offDayNeed + tripPlan.adjustForTrip; Penn: "or our
+//    calendar, whichever is more ... plus the same buffers as a work day").
 //  - Without a floor: work nights put back the day x margin (capped by the
 //    heat top-up), off nights the day plus half of the rest of the gap.
 //  - Never above the limit; a reach target above it sets raiseLimitTo.
@@ -373,7 +377,7 @@ function needFor(p: {
   const day = Math.max(0, p.usePct);
   const reach = p.floorPct === null ? null : p.floorPct + day * p.margin;
   if (p.soc === null || p.limit === null) {
-    return { needPct: p.isWork ? day * p.margin : day, reachTargetPct: reach, gapPct: null };
+    return { needPct: p.isWork || reach !== null ? day * p.margin : day, reachTargetPct: reach, gapPct: null };
   }
   const gap = Math.max(0, p.limit - p.soc);
   let target: number;

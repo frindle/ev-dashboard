@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildNeedData, coverageOk, curveValue, ewmaNeed, fitTempCurve, liveNeed, miPerPctAt, modelA, modelB, overridesFromPass1, planNeed, refitDateFor,
+  buildNeedData, coverageOk, curveValue, ewmaNeed, fitTempCurve, liveNeed, miPerPctAt, modelA, modelB, offDayNeed, overridesFromPass1, planNeed, refitDateFor,
   ruleFromShorts, simulate, tempNeed, walkDates, windowHoursFor, type DailyUse, type DriveIn,
 } from './needModels.ts';
 import { ampsFor, nightPlan } from './chargePlan.ts';
@@ -85,7 +85,7 @@ test('sparse band uses 1.95, override map applies, curve elsewhere', () => {
   assert.ok(miPerPctAt(c2, 72).value > ov.value);
 });
 
-test('planNeed: null under 5-of-7 coverage; work day b, max rule, off day a', () => {
+test('planNeed: null under 5-of-7 coverage; work day b, max rule, off day off-avg', () => {
   const rows: DailyUse[] = [], work: string[] = [], drives: DriveIn[] = [];
   for (let i = 0; i < 40; i++) {
     const isWork = i % 7 < 5;
@@ -102,7 +102,7 @@ test('planNeed: null under 5-of-7 coverage; work day b, max rule, off day a', ()
   const mx = planNeed(data, date(35), curve, undefined, { workDay: 'max' })!;
   assert.ok(mx.pct >= wd.pct && mx.rule === 'max');
   const off = planNeed(data, date(40), curve, undefined)!;     // 40%7=5, off
-  assert.equal(off.rule, 'a');
+  assert.equal(off.rule, 'off-avg');
   // knock out 3 of the 7 days before day 38 -> 4 covered -> null
   const gappy = buildNeedData(rows.map((r, i) => (i >= 31 && i <= 33 ? { ...r, unknown: true, used_pct: null } : r)), drives, work);
   assert.equal(planNeed(gappy, date(38), curve, undefined), null);
@@ -231,4 +231,44 @@ test('liveNeed: null under 5-of-7 coverage; worst drive-time temperature wins; o
   assert.ok(none && none.work !== null);
   const gappy = rows.map((r, i) => (i >= 51 && i <= 53 ? { ...r, unknown: true, used_pct: null } : r));
   assert.equal(liveNeed(gappy, drives, work, date(56), [65]), null);
+});
+
+test('offDayNeed: mean of recent days off without outliers, work days and old days ignored', () => {
+  const rows: DailyUse[] = [], work: string[] = [];
+  for (let i = 0; i < 140; i++) {
+    const isWork = i % 7 < 4;
+    if (isWork) work.push(date(i));
+    // days off: 8,10,12 repeating; one 60% road trip and one 0% day sit outside the fences;
+    // days off older than 90 days used 40 and must not count
+    const off = i === 123 ? 60 : i === 125 ? 0 : 8 + 2 * (i % 3);
+    rows.push(row(i, isWork ? 30 : i < 140 - 90 ? 40 : off));
+  }
+  const data = buildNeedData(rows, [], work);
+  const o = offDayNeed(data, date(140))!;
+  assert.equal(o.source, 'off-avg');
+  assert.equal(o.dropped, 2);
+  assert.ok(Math.abs(o.pct - 10) < 0.5, String(o.pct));
+  // planNeed uses it for a day off
+  const offDay = 144;                                          // 144 % 7 = 4: a day off
+  const rows2 = [...rows, ...[140, 141, 142, 143].map((i) => row(i, 30))];
+  const data2 = buildNeedData(rows2, [], [...work, date(140), date(141), date(142), date(143)]);
+  const p2 = planNeed(data2, date(offDay), null, undefined)!;
+  assert.equal(p2.rule, 'off-avg');
+  assert.ok(Math.abs(p2.pct - offDayNeed(data2, date(offDay))!.pct) < 1e-9);
+  // too few days off: the EWMA fallback
+  const few = buildNeedData(rows.slice(0, 10), [], work);    // 3 days off
+  assert.notEqual(offDayNeed(few, date(10))?.source, 'off-avg');
+});
+
+test('nightPlan: a day off with a floor uses the work-day buffers (reach = 25 + use x 1.1)', () => {
+  const p = nightPlan({
+    isWork: false, socPct: 30, limitPct: 70, usePct: 20, margin: 1.1, floorPct: 25, windowHours: 8,
+    kwhPerPct: 1.44, minAmps: 6, maxAmps: 48,
+  });
+  assert.ok(Math.abs(p.needPct - (25 + 22 - 30)) < 1e-9);
+  const q = nightPlan({
+    isWork: false, socPct: null, limitPct: 70, usePct: 20, margin: 1.1, floorPct: 25, windowHours: 8,
+    kwhPerPct: 1.44, minAmps: 6, maxAmps: 48,
+  });
+  assert.ok(Math.abs(q.needPct - 22) < 1e-9);
 });
