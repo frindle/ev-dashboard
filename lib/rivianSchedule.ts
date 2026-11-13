@@ -6,11 +6,21 @@
 // its amperage moves. During the window the daily plan is frozen (SoC rises
 // as it charges, which would talk the plan down mid-session); only an
 // override may raise the amps then.
+//
+// The dashboard writes ONE schedule covering all seven days (Penn
+// 2026-11-12: "control all charging, not just some of the days"). Rivian
+// rejects a schedule list whose entries share a weekday, disabled ones
+// included (BAD_REQUEST_ERROR / INVALID_INPUT, seen live 2026-11-13 with the
+// app's every-day + weekday + weekend trio; same fix as
+// bretterer/home-assistant-rivian#308), so the list sent is always a single
+// entry.
 import type { RivianChargingSchedule } from './rivian.ts';
 import type { ChargeWindow } from './chargeOverride.ts';
 import { ampsForNeed, localDayNumber } from './chargePlan.ts';
 
 export const EV_WINDOW: ChargeWindow = { startMin: 0, durationMin: 8 * 60 };
+
+export const ALL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
 // The schedule the dashboard manages: the enabled one covering the most
 // weekdays, else the first. -1 when there are none.
@@ -25,20 +35,29 @@ export function managedIndex(list: RivianChargingSchedule[]): number {
 }
 
 export function inWindowShape(s: RivianChargingSchedule): boolean {
-  return s.enabled && s.startTime === EV_WINDOW.startMin && s.duration === EV_WINDOW.durationMin;
+  return s.enabled && s.startTime === EV_WINDOW.startMin && s.duration === EV_WINDOW.durationMin
+    && ALL_DAYS.every((d) => s.weekDays.includes(d));
 }
 
-// The list to write so the managed schedule runs EV_WINDOW at `amps`. null
-// when it already does, or there is no schedule to base it on (its location
-// and weekdays come from the car).
+// The car is fully under dashboard control: the managed schedule is the
+// all-days EV_WINDOW one and no other schedule is enabled.
+export function listInShape(list: RivianChargingSchedule[]): boolean {
+  const i = managedIndex(list);
+  return i >= 0 && inWindowShape(list[i]) && list.every((s, j) => j === i || !s.enabled);
+}
+
+// The one-entry list to write so the car runs EV_WINDOW at `amps` every day.
+// null when it already does, or there is no schedule to take the home
+// location from.
 export function scheduleWithAmps(list: RivianChargingSchedule[], amps: number): RivianChargingSchedule[] | null {
   const i = managedIndex(list);
   if (i < 0) return null;
   const cur = list[i];
-  if (inWindowShape(cur) && cur.amperage === amps) return null;
-  return list.map((s, j) => (j === i
-    ? { ...s, startTime: EV_WINDOW.startMin, duration: EV_WINDOW.durationMin, amperage: amps, enabled: true }
-    : s));
+  if (listInShape(list) && cur.amperage === amps) return null;
+  return [{
+    weekDays: [...ALL_DAYS], startTime: EV_WINDOW.startMin, duration: EV_WINDOW.durationMin,
+    location: cur.location, amperage: amps, enabled: true,
+  }];
 }
 
 export interface AmpsDecision {
@@ -121,9 +140,11 @@ export function decideAmps(p: {
   slot: Slot | null;
   replanAmps?: number | null;      // late-start replan: may raise inside the window
   fixRaiseAmps?: number | null;    // a shift conflict fixed after 23:00: raise, never lower
+  inShape?: boolean;               // the whole list is in shape (listInShape); default: current alone
 }): AmpsDecision {
   const { current, dailyAmps, overrideAmps } = p;
   if (!current) return { amps: null, reason: 'no charging schedule on the car' };
+  const shaped = p.inShape ?? inWindowShape(current);
   const raises: Array<[number | null | undefined, string]> = [
     [overrideAmps, 'override, raised mid-window'],
     [p.replanAmps, 'late-start replan'],
@@ -131,7 +152,7 @@ export function decideAmps(p: {
   ];
   if (inEvWindow(p.nowMs)) {
     let best: AmpsDecision = { amps: null, reason: 'charge window running' };
-    if (inWindowShape(current)) {
+    if (shaped) {
       for (const [a, reason] of raises) {
         if (typeof a === 'number' && a > current.amperage && a > (best.amps ?? 0)) best = { amps: a, reason };
       }
@@ -142,14 +163,14 @@ export function decideAmps(p: {
     const desired = Math.max(dailyAmps ?? 0, overrideAmps ?? 0);
     if (!(desired > 0)) return { amps: null, reason: 'no plan yet' };
     const source = overrideAmps !== null && overrideAmps >= (dailyAmps ?? 0) ? 'override' : 'daily plan';
-    if (desired !== current.amperage || !inWindowShape(current)) return { amps: desired, reason: `${p.slot} slot, ${source}` };
+    if (desired !== current.amperage || !shaped) return { amps: desired, reason: `${p.slot} slot, ${source}` };
     return { amps: null, reason: 'up to date' };
   }
   // Between slots an override still writes right away and a fixed conflict
   // may raise tonight's amps; the daily plan waits for its slot.
   const offs = [overrideAmps, p.fixRaiseAmps].filter((a): a is number => typeof a === 'number' && a > 0);
   const want = offs.length ? Math.max(...offs) : 0;
-  if (want > 0 && (want > current.amperage || !inWindowShape(current))) {
+  if (want > 0 && (want > current.amperage || !shaped)) {
     return { amps: want, reason: overrideAmps !== null && want === overrideAmps ? 'override' : 'shift conflict fixed, raised' };
   }
   return { amps: null, reason: 'waiting for the next write slot' };

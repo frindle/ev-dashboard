@@ -21,7 +21,7 @@ import { recordPlan, recordShiftDays } from '@/lib/planInflux';
 import { overridePlan, type OverridePlan } from '@/lib/chargeOverride';
 import { readOverride, writeOverride, type StoredOverride } from '@/lib/rivianOverrideStore';
 import {
-  decideAmps, EV_WINDOW, lateStartStep, managedIndex, scheduleWithAmps, writeSlot,
+  decideAmps, EV_WINDOW, lateStartStep, listInShape, managedIndex, scheduleWithAmps, writeSlot,
   type AmpsDecision, type Slot,
 } from '@/lib/rivianSchedule';
 import { fetchRivianChargingSchedules, setRivianChargingSchedules } from '@/lib/rivian';
@@ -222,7 +222,7 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
       nowMs: now, current: cur, slot,
       dailyAmps: plan?.amps ?? null,
       overrideAmps: op && op.windows > 0 ? op.amps : null,
-      replanAmps, fixRaiseAmps,
+      replanAmps, fixRaiseAmps, inShape: listInShape(list),
     });
     const amps = status.decision.amps;
     const next = amps === null ? null : scheduleWithAmps(list, amps);
@@ -233,7 +233,7 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
         status.car = { amperage: amps, startTime: EV_WINDOW.startMin, duration: EV_WINDOW.durationMin, enabled: true };
         slotSettled = true;
         if (status.decision.reason === 'late-start replan' && built) store.replanned = built.serveDay;
-        console.log(`[rivian-charge] schedule set to ${amps}A 00:00-08:00 (${status.decision.reason})`);
+        console.log(`[rivian-charge] schedule set to ${amps}A 00:00-08:00 every day (${status.decision.reason})`);
       } else {
         status.error = 'setChargingSchedules did not report success';
       }

@@ -1,7 +1,7 @@
 // Run: TZ=America/Los_Angeles node --experimental-strip-types --test lib/rivianSchedule.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideAmps, inEvWindow, managedIndex, scheduleWithAmps } from './rivianSchedule.ts';
+import { decideAmps, inEvWindow, listInShape, managedIndex, scheduleWithAmps } from './rivianSchedule.ts';
 
 const LOC = { latitude: 1, longitude: 2 };
 const ALL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -15,13 +15,39 @@ test('managedIndex: enabled first, then most weekdays', () => {
   assert.equal(managedIndex([sch({ enabled: false }), sch({ enabled: false, weekDays: ['Monday'] })]), 0);
 });
 
-test('scheduleWithAmps: forces 00:00-08:00 + amps on the managed one, keeps the rest; null when unchanged', () => {
+test('scheduleWithAmps: one all-days 00:00-08:00 entry at amps; null when the car already runs it', () => {
   const other = sch({ enabled: false, weekDays: ['Monday'], startTime: 60 });
   const out = scheduleWithAmps([other, sch({ startTime: 23 * 60, amperage: 10 })], 16)!;
-  assert.deepEqual(out, [other, sch({ amperage: 16 })]);
+  assert.deepEqual(out, [sch({ amperage: 16 })]);
   assert.equal(scheduleWithAmps([sch({ amperage: 16 })], 16), null);
+  assert.equal(scheduleWithAmps([other, sch({ amperage: 16 })], 16), null); // disabled leftovers are fine
   assert.equal(scheduleWithAmps([], 16), null);
   assert.deepEqual(scheduleWithAmps([sch({ enabled: false })], 12), [sch()]);
+});
+
+test("scheduleWithAmps: the app's every-day + weekday + weekend trio becomes one entry (Rivian rejects overlapping weekDays)", () => {
+  const WD = ALL.slice(0, 5), WE = ALL.slice(5);
+  const car = [
+    sch({ amperage: 48, enabled: false }),
+    sch({ weekDays: WD, startTime: 1, duration: 479 }),
+    sch({ weekDays: WE, startTime: 1, duration: 479 }),
+  ];
+  assert.equal(listInShape(car), false);
+  const out = scheduleWithAmps(car, 8)!;
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0], sch({ amperage: 8 }));
+  // A weekday-only schedule at the right window is not enough: the weekend is uncontrolled.
+  assert.equal(listInShape([sch({ weekDays: WD })]), false);
+  // Another enabled schedule alongside keeps the list out of shape.
+  assert.equal(listInShape([sch(), sch({ weekDays: WE, startTime: 600, duration: 60 })]), false);
+  assert.equal(listInShape([sch()]), true);
+});
+
+test('decideAmps: an out-of-shape list is rewritten in the slot even at the same amps', () => {
+  const noon = at('2026-11-13T12:00:00-08:00');
+  const d = decideAmps({ nowMs: noon, current: sch({ amperage: 12 }), dailyAmps: 12, overrideAmps: null, slot: 'forecast', inShape: false });
+  assert.equal(d.amps, 12);
+  assert.equal(decideAmps({ nowMs: noon, current: sch({ amperage: 12 }), dailyAmps: 12, overrideAmps: null, slot: 'forecast', inShape: true }).amps, null);
 });
 
 test('inEvWindow: midnight to 08:00 local', () => {
