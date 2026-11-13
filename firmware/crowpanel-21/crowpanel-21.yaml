@@ -1,0 +1,430 @@
+# Read-only status panel for the Elecrow CrowPanel Rotary 2.1" (ESP32-S3R8). See README.md.
+# Hardware blocks (psram, i2c, pcf8574, st7701s init, cst816, encoder) are from Elecrow's ESPHome lesson 05.
+esphome:
+  name: crowpanel-21
+  friendly_name: Status Panel
+  includes:
+    - panel_helpers.h
+  platformio_options:
+    build_flags: "-DBOARD_HAS_PSRAM"
+    board_build.esp-idf.memory_type: qio_opi
+    board_build.flash_mode: dio
+  on_boot:
+    priority: 800
+    then:
+      - output.turn_on: touch_int_release
+      - output.turn_on: lcd_power
+      - output.turn_on: display_reset
+      - delay: 100ms
+      - output.turn_off: display_reset
+      - delay: 600ms
+      - light.turn_on:
+          id: display_backlight
+          brightness: 60%
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO
+
+# No Home Assistant needed; the API stays off. OTA only.
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "crowpanel-21 setup"
+    password: !secret ap_password
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: America/Los_Angeles
+
+http_request:
+  id: http
+  timeout: 10s
+  verify_ssl: false          # the panel route is plain http on the LAN
+  buffer_size_rx: 4096
+  buffer_size_tx: 512
+
+i2c:
+  sda: GPIO38
+  scl: GPIO39
+  id: bus_a
+  scan: false
+
+pcf8574:
+  - id: pcf
+    address: 0x21
+
+output:
+  - platform: ledc
+    pin: 6
+    id: bl_pwm
+    frequency: 19531Hz
+  - platform: gpio
+    id: touch_int_release
+    pin: {pcf8574: pcf, number: 2, mode: {output: true}, inverted: false}
+  - platform: gpio
+    id: lcd_power
+    pin: {pcf8574: pcf, number: 3, mode: {output: true}, inverted: false}
+  - platform: gpio
+    id: display_reset
+    pin: {pcf8574: pcf, number: 4, mode: {output: true}, inverted: true}
+
+light:
+  - platform: monochromatic
+    name: "LCD Backlight"
+    output: bl_pwm
+    id: display_backlight
+    default_transition_length: 0s
+    restore_mode: ALWAYS_ON
+
+globals:
+  - {id: idx, type: int, restore_value: false, initial_value: "0"}          # current page 0..5
+  - {id: show_detail, type: bool, restore_value: false, initial_value: "false"}
+  - {id: last_ok_ms, type: uint32_t, restore_value: false, initial_value: "0"}
+  - {id: enc_ready, type: bool, restore_value: false, initial_value: "false"}
+  - {id: last_enc, type: int, restore_value: false, initial_value: "0"}
+
+binary_sensor:
+  # Encoder press: PCF8574 P5, input with pull-up, active low.
+  - platform: gpio
+    id: knob_press
+    internal: true
+    pin: {pcf8574: pcf, number: 5, mode: {input: true}, inverted: true}
+    filters:
+      - delayed_on: 30ms
+    on_press:
+      - lambda: |-
+          id(show_detail) = !id(show_detail);
+          lv_obj_t* d[5] = {id(p_b0_d), id(p_b1_d), id(p_nw_d), id(p_sd_d), id(p_ev_d)};
+          for (int i = 0; i < 5; i++) lv_obj_add_flag(d[i], LV_OBJ_FLAG_HIDDEN);
+          if (id(show_detail) && id(idx) < 5) lv_obj_clear_flag(d[id(idx)], LV_OBJ_FLAG_HIDDEN);
+
+sensor:
+  - platform: rotary_encoder
+    id: knob
+    internal: true
+    pin_a: {number: 42, mode: {input: true, pullup: true}}
+    pin_b: {number: 4, mode: {input: true, pullup: true}}
+    resolution: 1
+    filters:
+      - debounce: 20ms
+    on_value:
+      then:
+        - lambda: |-
+            int cur = (int) x;
+            if (!id(enc_ready)) { id(last_enc) = cur; id(enc_ready) = true; return; }
+            int delta = cur - id(last_enc);
+            if (delta == 0) return;
+            id(last_enc) = cur;
+            id(show_detail) = false;
+            lv_obj_t* d[5] = {id(p_b0_d), id(p_b1_d), id(p_nw_d), id(p_sd_d), id(p_ev_d)};
+            for (int i = 0; i < 5; i++) lv_obj_add_flag(d[i], LV_OBJ_FLAG_HIDDEN);
+            // clockwise = next page; swap if your knob feels backwards
+            if (delta > 0) { id(idx) = (id(idx) + 1) % 6; id(lvgl_next).execute(); }
+            else { id(idx) = (id(idx) + 5) % 6; id(lvgl_prev).execute(); }
+
+script:
+  - id: lvgl_next
+    then:
+      - lvgl.page.next:
+          animation: NONE
+          time: 0ms
+  - id: lvgl_prev
+    then:
+      - lvgl.page.previous:
+          animation: NONE
+          time: 0ms
+
+spi:
+  clk_pin: 2
+  mosi_pin: 1
+
+display:
+  - platform: st7701s
+    id: my_display
+    auto_clear_enabled: false
+    update_interval: never
+    spi_mode: MODE3
+    color_order: RGB
+    invert_colors: false
+    dimensions: {width: 480, height: 480}
+    cs_pin: 16
+    de_pin: 40
+    hsync_pin: 15
+    vsync_pin: 7
+    pclk_pin: 41
+    data_pins:
+      red: [46, 3, 8, 18, 17]
+      green: [14, 13, 12, 11, 10, 9]
+      blue: [5, 45, 48, 47, 21]
+    hsync_front_porch: 20
+    hsync_pulse_width: 10
+    hsync_back_porch: 10
+    vsync_front_porch: 8
+    vsync_pulse_width: 10
+    vsync_back_porch: 10
+    pclk_frequency: 18MHz
+    pclk_inverted: true
+    init_sequence:
+      - [0x01]
+      - delay 120ms
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x10]
+      - [0xC0, 0x3B, 0x00]
+      - [0xC1, 0x0B, 0x02]
+      - [0xC2, 0x00, 0x02]
+      - [0xCC, 0x10]
+      - [0xCD, 0x08]
+      - [0xB0, 0x02, 0x13, 0x1B, 0x0D, 0x10, 0x05, 0x08, 0x07, 0x07, 0x24, 0x04, 0x11, 0x0E, 0x2C, 0x33, 0x1D]
+      - [0xB1, 0x05, 0x13, 0x1B, 0x0D, 0x11, 0x05, 0x08, 0x07, 0x07, 0x24, 0x04, 0x11, 0x0E, 0x2C, 0x33, 0x1D]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x11]
+      - [0xB0, 0x5d]
+      - [0xB1, 0x43]
+      - [0xB2, 0x81]
+      - [0xB3, 0x80]
+      - [0xB5, 0x43]
+      - [0xB7, 0x85]
+      - [0xB8, 0x20]
+      - [0xC1, 0x78]
+      - [0xC2, 0x78]
+      - [0xD0, 0x88]
+      - [0xE0, 0x00, 0x00, 0x02]
+      - [0xE1, 0x03, 0xA0, 0x00, 0x00, 0x04, 0xA0, 0x00, 0x00, 0x00, 0x20, 0x20]
+      - [0xE2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xE3, 0x00, 0x00, 0x11, 0x00]
+      - [0xE4, 0x22, 0x00]
+      - [0xE5, 0x05, 0xEC, 0xA0, 0xA0, 0x07, 0xEE, 0xA0, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xE6, 0x00, 0x00, 0x11, 0x00]
+      - [0xE7, 0x22, 0x00]
+      - [0xE8, 0x06, 0xED, 0xA0, 0xA0, 0x08, 0xEF, 0xA0, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xEB, 0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x00]
+      - [0xEd, 0xFF, 0xFF, 0xFF, 0xBA, 0x0A, 0xBF, 0x45, 0xFF, 0xFF, 0x54, 0xFB, 0xA0, 0xAB, 0xFF, 0xFF, 0xFF]
+      - [0xEF, 0x10, 0x0D, 0x04, 0x08, 0x3F, 0x1F]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x13]
+      - [0xEF, 0x08]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x00]
+      - [0x36, 0x08]
+      - [0x3A, 0x60]
+      - [0x11]
+      - delay 100ms
+      - [0x29]
+      - delay 50ms
+
+touchscreen:
+  - platform: cst816
+    id: touch_panel
+    display: my_display
+    reset_pin: {pcf8574: pcf, number: 0, mode: {output: true}, inverted: false}
+    update_interval: 50ms
+
+interval:
+  - interval: 20s
+    then:
+      - http_request.get:
+          url: !secret panel_url
+          capture_response: true
+          max_response_buffer_size: 6144
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code != 200) return;
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    if (root["v"].as<int>() != 1) return false;
+                    id(last_ok_ms) = millis();
+                    const char* lvl = root["lvl"] | "g";
+                    lv_obj_set_style_border_color(id(ring), lv_color_hex(panel::lvl_color(lvl)), 0);
+                    char b[48];
+                    // ---- Darkbloom, one page per Mac
+                    JsonArray m = root["bl"]["m"].as<JsonArray>();
+                    lv_obj_t* tb[2] = {id(p_b0_t), id(p_b1_t)};
+                    lv_obj_t* bb[2] = {id(p_b0_b), id(p_b1_b)};
+                    lv_obj_t* s1[2] = {id(p_b0_s1), id(p_b1_s1)};
+                    lv_obj_t* s2[2] = {id(p_b0_s2), id(p_b1_s2)};
+                    lv_obj_t* s3[2] = {id(p_b0_s3), id(p_b1_s3)};
+                    lv_obj_t* dd[2] = {id(p_b0_d), id(p_b1_d)};
+                    for (int i = 0; i < 2; i++) {
+                      if (i >= (int) m.size()) {
+                        lv_label_set_text(tb[i], "NO MAC"); lv_label_set_text(bb[i], "--");
+                        lv_label_set_text(s1[i], ""); lv_label_set_text(s2[i], ""); lv_label_set_text(s3[i], ""); lv_label_set_text(dd[i], "");
+                        continue;
+                      }
+                      JsonObject o = m[i];
+                      std::string nm = o["n"] | "mac";
+                      lv_label_set_text(tb[i], nm.substr(0, 14).c_str());
+                      lv_label_set_text(bb[i], o["td"].isNull() ? "--" : panel::money(o["td"].as<int>()).c_str());
+                      if ((o["sl"] | 0) == 1) snprintf(b, sizeof b, "SILENT");
+                      else if (o["w"].isNull()) snprintf(b, sizeof b, "%s", (const char*) (o["s"] | "?"));
+                      else snprintf(b, sizeof b, "%s  %d W", (const char*) (o["s"] | "?"), o["w"].as<int>());
+                      lv_label_set_text(s1[i], b);
+                      lv_label_set_text(s2[i], o["tm"].isNull() ? "" : (std::string("month ") + panel::money(o["tm"].as<int>())).c_str());
+                      snprintf(b, sizeof b, "sandbox jobs %d", o["jobs"] | 0);
+                      lv_label_set_text(s3[i], b);
+                      snprintf(b, sizeof b, "last power %d s ago", o["age"] | 0);
+                      lv_label_set_text(dd[i], b);
+                    }
+                    // ---- Network
+                    JsonArray l = root["nw"]["l"].as<JsonArray>();
+                    if ((root["nw"]["ok"] | 0) == 1 && l.size() > 0) {
+                      lv_label_set_text(id(p_nw_b), panel::mbps(l[0]["d"] | 0.0f).c_str());
+                      snprintf(b, sizeof b, "Mbps down  %s", (const char*) (l[0]["n"] | ""));
+                      lv_label_set_text(id(p_nw_s1), b);
+                      snprintf(b, sizeof b, "up %s", panel::mbps(l[0]["u"] | 0.0f).c_str());
+                      lv_label_set_text(id(p_nw_s2), b);
+                      if (l.size() > 1) snprintf(b, sizeof b, "%s %s / %s", (const char*) (l[1]["n"] | ""), panel::mbps(l[1]["d"] | 0.0f).c_str(), panel::mbps(l[1]["u"] | 0.0f).c_str());
+                      else b[0] = 0;
+                      lv_label_set_text(id(p_nw_s3), b);
+                      lv_label_set_text(id(p_nw_d), (const char*) (root["nw"]["src"] | "") );
+                    } else {
+                      lv_label_set_text(id(p_nw_b), "--"); lv_label_set_text(id(p_nw_s1), "network unavailable");
+                      lv_label_set_text(id(p_nw_s2), ""); lv_label_set_text(id(p_nw_s3), ""); lv_label_set_text(id(p_nw_d), "");
+                    }
+                    // ---- Storage
+                    JsonObject sd = root["sd"];
+                    if ((sd["ok"] | 0) == 1) {
+                      int ts = sd["tot"]["s"] | 0, tu = sd["tot"]["u"] | 0;
+                      snprintf(b, sizeof b, "%d%%", ts > 0 ? (tu * 100 / ts) : 0);
+                      lv_label_set_text(id(p_sd_b), b);
+                      snprintf(b, sizeof b, "%s of %s", panel::tb(tu).c_str(), panel::tb(ts).c_str());
+                      lv_label_set_text(id(p_sd_s1), b);
+                      snprintf(b, sizeof b, "%d of %d disks spinning", sd["spin"] | 0, sd["nd"] | 0);
+                      lv_label_set_text(id(p_sd_s2), b);
+                      if ((sd["par"] | 0) == 1) snprintf(b, sizeof b, "%s  parity check %d%%", (const char*) (sd["arr"] | "?"), sd["pp"] | 0);
+                      else snprintf(b, sizeof b, "array %s", (const char*) (sd["arr"] | "?"));
+                      lv_label_set_text(id(p_sd_s3), b);
+                      int hot = 0;
+                      for (JsonObject d : sd["d"].as<JsonArray>()) { int t = d["t"] | 0; if (t > hot) hot = t; }
+                      snprintf(b, sizeof b, "hottest disk %d C  alerts %d", hot, sd["na"] | 0);
+                      lv_label_set_text(id(p_sd_d), b);
+                    } else {
+                      lv_label_set_text(id(p_sd_b), "--"); lv_label_set_text(id(p_sd_s1), "storage unavailable");
+                      lv_label_set_text(id(p_sd_s2), ""); lv_label_set_text(id(p_sd_s3), ""); lv_label_set_text(id(p_sd_d), "");
+                    }
+                    // ---- EV tonight
+                    JsonObject ev = root["ev"];
+                    if ((ev["ok"] | 0) == 1) {
+                      if (ev["soc"].isNull()) snprintf(b, sizeof b, "--"); else snprintf(b, sizeof b, "%d%%", ev["soc"].as<int>());
+                      lv_label_set_text(id(p_ev_b), b);
+                      lv_label_set_text(id(p_ev_s1), (ev["plug"] | 0) == 1 ? "plugged in" : "not plugged in");
+                      snprintf(b, sizeof b, "%d A   %.1f kWh", ev["amps"] | 0, ev["kwh"] | 0.0f);
+                      lv_label_set_text(id(p_ev_s2), b);
+                      snprintf(b, sizeof b, "to %d%% in %.1f h", ev["tgt"] | 0, ev["h"] | 0.0f);
+                      lv_label_set_text(id(p_ev_s3), b);
+                      lv_label_set_text(id(p_ev_d), (ev["sf"] | 0) == 1 ? "short of target tonight" : ((ev["wk"] | 0) == 1 ? "work day plan" : "weekend plan"));
+                    } else {
+                      lv_label_set_text(id(p_ev_b), "--"); lv_label_set_text(id(p_ev_s1), "EV plan unavailable");
+                      lv_label_set_text(id(p_ev_s2), ""); lv_label_set_text(id(p_ev_s3), ""); lv_label_set_text(id(p_ev_d), "");
+                    }
+                    // ---- Clock page status line
+                    JsonArray why = root["why"].as<JsonArray>();
+                    std::string w;
+                    for (const char* s : why) { if (!w.empty()) w += "  "; w += s; }
+                    lv_label_set_text(id(clk_s), w.empty() ? "all ok" : w.c_str());
+                    return true;
+                  });
+          on_error:
+            then:
+              - lambda: |-
+                  lv_obj_set_style_border_color(id(ring), lv_color_hex(0x606060), 0);
+                  lv_label_set_text(id(clk_s), "no link to dashboard");
+
+  - interval: 1s
+    then:
+      - lambda: |-
+          auto t = id(sntp_time).now();
+          if (!t.is_valid()) return;
+          lv_label_set_text(id(clk_t), t.strftime("%H:%M").c_str());
+          lv_label_set_text(id(clk_d), t.strftime("%a %d %b").c_str());
+          // Panel data older than a minute and a half: grey ring (the route is polled every 20 s).
+          if (id(last_ok_ms) != 0 && millis() - id(last_ok_ms) > 90000)
+            lv_obj_set_style_border_color(id(ring), lv_color_hex(0x606060), 0);
+
+lvgl:
+  displays: [my_display]
+  touchscreens:
+    - touchscreen_id: touch_panel
+  buffer_size: 50%
+  top_layer:
+    widgets:
+      # Alert ring around the edge: green / amber / red from "lvl", grey when the link is down.
+      - obj:
+          id: ring
+          align: CENTER
+          width: 480
+          height: 480
+          radius: 240
+          bg_opa: TRANSP
+          border_width: 14
+          border_color: 0x606060
+          clickable: false
+          scrollable: false
+  pages:
+    - id: p_b0
+      bg_color: 0x000000
+      widgets:
+        - label: {id: p_b0_t, align: CENTER, y: -150, text: "MAC 1", text_font: montserrat_20, text_color: 0x8A8F98}
+        - label: {id: p_b0_b, align: CENTER, y: -60, text: "--", text_font: montserrat_48, text_color: 0xFFFFFF}
+        - label: {id: p_b0_s1, align: CENTER, y: 20, text: "", text_font: montserrat_28, text_color: 0xDDDDDD}
+        - label: {id: p_b0_s2, align: CENTER, y: 62, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_b0_s3, align: CENTER, y: 96, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_b0_d, align: CENTER, y: 150, text: "", text_font: montserrat_16, text_color: 0x6FA8FF, hidden: true}
+    - id: p_b1
+      bg_color: 0x000000
+      widgets:
+        - label: {id: p_b1_t, align: CENTER, y: -150, text: "MAC 2", text_font: montserrat_20, text_color: 0x8A8F98}
+        - label: {id: p_b1_b, align: CENTER, y: -60, text: "--", text_font: montserrat_48, text_color: 0xFFFFFF}
+        - label: {id: p_b1_s1, align: CENTER, y: 20, text: "", text_font: montserrat_28, text_color: 0xDDDDDD}
+        - label: {id: p_b1_s2, align: CENTER, y: 62, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_b1_s3, align: CENTER, y: 96, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_b1_d, align: CENTER, y: 150, text: "", text_font: montserrat_16, text_color: 0x6FA8FF, hidden: true}
+    - id: p_nw
+      bg_color: 0x000000
+      widgets:
+        - label: {id: p_nw_t, align: CENTER, y: -150, text: "NETWORK", text_font: montserrat_20, text_color: 0x8A8F98}
+        - label: {id: p_nw_b, align: CENTER, y: -60, text: "--", text_font: montserrat_48, text_color: 0xFFFFFF}
+        - label: {id: p_nw_s1, align: CENTER, y: 20, text: "", text_font: montserrat_28, text_color: 0xDDDDDD}
+        - label: {id: p_nw_s2, align: CENTER, y: 62, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_nw_s3, align: CENTER, y: 96, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_nw_d, align: CENTER, y: 150, text: "", text_font: montserrat_16, text_color: 0x6FA8FF, hidden: true}
+    - id: p_sd
+      bg_color: 0x000000
+      widgets:
+        - label: {id: p_sd_t, align: CENTER, y: -150, text: "STORAGE", text_font: montserrat_20, text_color: 0x8A8F98}
+        - label: {id: p_sd_b, align: CENTER, y: -60, text: "--", text_font: montserrat_48, text_color: 0xFFFFFF}
+        - label: {id: p_sd_s1, align: CENTER, y: 20, text: "", text_font: montserrat_28, text_color: 0xDDDDDD}
+        - label: {id: p_sd_s2, align: CENTER, y: 62, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_sd_s3, align: CENTER, y: 96, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_sd_d, align: CENTER, y: 150, text: "", text_font: montserrat_16, text_color: 0x6FA8FF, hidden: true}
+    - id: p_ev
+      bg_color: 0x000000
+      widgets:
+        - label: {id: p_ev_t, align: CENTER, y: -150, text: "EV TONIGHT", text_font: montserrat_20, text_color: 0x8A8F98}
+        - label: {id: p_ev_b, align: CENTER, y: -60, text: "--", text_font: montserrat_48, text_color: 0xFFFFFF}
+        - label: {id: p_ev_s1, align: CENTER, y: 20, text: "", text_font: montserrat_28, text_color: 0xDDDDDD}
+        - label: {id: p_ev_s2, align: CENTER, y: 62, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_ev_s3, align: CENTER, y: 96, text: "", text_font: montserrat_20, text_color: 0xA0A6B0}
+        - label: {id: p_ev_d, align: CENTER, y: 150, text: "", text_font: montserrat_16, text_color: 0x6FA8FF, hidden: true}
+    - id: p_clock
+      bg_color: 0x000000
+      widgets:
+        - label: {id: clk_t, align: CENTER, y: -20, text: "--:--", text_font: montserrat_48, text_color: 0xFFFFFF}
+        - label: {id: clk_d, align: CENTER, y: 50, text: "", text_font: montserrat_28, text_color: 0xA0A6B0}
+        - label: {id: clk_s, align: CENTER, y: 100, text: "", text_font: montserrat_20, text_color: 0x6FA8FF}
