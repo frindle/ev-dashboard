@@ -11,9 +11,6 @@ import { vehicleIdResolver } from '@/lib/chargeSessionInflux';
 import { arrivalFloorOf, needEstimate, nextUseDay, peakCapOn, sinceHistoryStart, type NeedEstimate, type Shift } from '@/lib/chargePlan';
 import { readDailyUse, readDrives } from '@/lib/driveLogStore';
 import { buildPeakCapSetup, loadPeakDays } from '@/lib/peakCapData';
-import { teslaPlanRun, teslaPlannedKw, type TeslaPlanState } from '@/lib/teslaPlan';
-import { COMPARABLES } from '@/lib/rates';
-import { packKwhFor } from '@/lib/packKwh';
 import { liveNeed, type LiveNeed } from '@/lib/needModels';
 import { localDate } from '@/lib/rivianDailyUse';
 import { KWH_PER_PCT_SEED, measuredKwhPerPct } from '@/lib/kwhPerPct';
@@ -39,33 +36,6 @@ export async function readRivianCachedState(): Promise<RivianCachedState | null>
     return (JSON.parse(await readFile(path, 'utf-8')) as { state?: RivianCachedState }).state ?? null;
   } catch {
     return null;
-  }
-}
-
-async function readTeslaCachedState(): Promise<TeslaPlanState | null> {
-  const path = join(process.env.KEYS_DIR ?? join(process.cwd(), 'keys'), 'tesla-state.json');
-  if (!existsSync(path)) return null;
-  try {
-    return (JSON.parse(await readFile(path, 'utf-8')) as { state?: TeslaPlanState }).state ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// The Tesla's planned kW tonight for the peak cap (same plan /api/energy shows); 0 when it is not plugged in or has no plan.
-async function teslaKwTonight(nowMs: number): Promise<number> {
-  try {
-    const cfg = readConfig();
-    const idFor = vehicleIdResolver(cfg);
-    const rows = (await readChargeHistory()).filter((r) => idFor(r) !== 'rivian');   // /api/energy counts unmapped rows as the Tesla's
-    const state = await readTeslaCachedState();
-    const run = teslaPlanRun({
-      rows, vehicle: cfg.vehicles.tesla, state, nowMs,
-      packKwh: packKwhFor(null, cfg.vehicles.tesla.packKwh, COMPARABLES.tesla.packKwh),
-    });
-    return teslaPlannedKw(run, state);
-  } catch {
-    return 0;
   }
 }
 
@@ -156,9 +126,7 @@ export async function rivianNightPlan(
   // EV plan #9b: only reads the uploaded NV history when the cap is on for the night being planned.
   const serveDay = nextUseDay(nowMs);
   const capOn = peakCapOn(cfg.peakCap?.enabled, serveDay);
-  // The Tesla charges tonight on the same circuit: its planned kW comes off the cap for the serve day (later nights: 0, no plan yet).
-  const teslaKwByDay = capOn ? new Map([[serveDay, await teslaKwTonight(nowMs)]]) : undefined;
-  const peakCap = capOn ? buildPeakCapSetup(true, serveDay, await loadPeakDays(workDays, nowMs), workDays, forecastHighF, teslaKwByDay) : null;
+  const peakCap = capOn ? buildPeakCapSetup(true, serveDay, await loadPeakDays(workDays, nowMs), workDays, forecastHighF) : null;
   const built = buildRivianPlan({
     nowMs, est, shifts, workDays, state, kwhPerPct, floorPct: floor.arrivalFloorPct, margin: floor.arrivalDriveMargin,
     forecastHighF, minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS,

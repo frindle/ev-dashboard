@@ -9,7 +9,6 @@ import {
 import { dayPeakForecast, nightHouseForecast, peakCapNight, weightedQuantile, type PeakDay } from './peakCap.ts';
 import { backtestPeakCap, formatBacktest, type BacktestDay } from './peakCapBacktest.ts';
 import { parsePeakCsv, buildPeakCapSetup } from './peakCapData.ts';
-import { teslaPlanRun, teslaPlannedKw } from './teslaPlan.ts';
 import { parseDaysCsv } from '../scripts/peak-cap-backtest.ts';
 
 const day = (iso: string) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86_400_000);
@@ -236,24 +235,4 @@ test('nightPlan itself is unchanged without a cap input', () => {
   const p = nightPlan({ ...base, isWork: true, socPct: 50, usePct: 15.5 });
   assert.equal(p.amps, 14);
   assert.equal('peakCap' in p, false);
-});
-
-test('a Tesla plan on the same night lowers the Rivian amps (through buildPeakCapSetup)', () => {
-  const hist: PeakDay[] = [];
-  for (let i = 1; i <= 15; i++) hist.push({ date: `2027-02-${String(i).padStart(2, '0')}`, dayKw: 4, houseNightKw: 1, isWork: null, tempF: 60 });
-  const NOW = Date.parse('2027-02-10T20:00:00-08:00');
-  const trows = Array.from({ length: 10 }, (_, i) => ({ startedAt: new Date(NOW - (i + 1) * 86_400_000).toISOString(), energyKwh: 9 }));
-  const st = { chargePercent: 40, chargeLimit: 80, isPluggedIn: true };
-  const kw = teslaPlannedKw(teslaPlanRun({ rows: trows, vehicle: {}, state: st, packKwh: 75, nowMs: NOW }), st);
-  assert.ok(kw > 0);
-  const run = (tk: number) => planTonight({
-    ...common, usePctOff: 3, socPct: 62,
-    peakCap: buildPeakCapSetup(true, D, hist, null, 61, new Map([[D, tk]])),
-  }).plan;
-  const without = run(0), withTesla = run(kw);
-  assert.equal(without.peakCap!.capAmps, 8);                      // (0.8*4 - 1) = 2.2 kW -> 9.2 A -> 8
-  assert.ok(withTesla.amps! < without.amps! || withTesla.peakCap!.capAmps! < without.peakCap!.capAmps!);
-  assert.ok(withTesla.peakCap!.capKw! < without.peakCap!.capKw!);
-  // not plugged in: same as no Tesla
-  assert.equal(JSON.stringify(run(teslaPlannedKw(teslaPlanRun({ rows: trows, vehicle: {}, state: { ...st, isPluggedIn: false }, packKwh: 75, nowMs: NOW }), { ...st, isPluggedIn: false }))), JSON.stringify(without));
 });
