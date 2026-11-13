@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot update for the ev-dashboard container on Unraid.
+# One-shot update for the home-dashboards (ev-dashboard) container on Unraid.
 #
 # Usage:  ./update.sh
 #         ./update.sh --no-cache    # rebuild from scratch (slower; use when

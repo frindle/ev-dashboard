@@ -26,7 +26,7 @@ services:
     env_file:
       - .env
     labels:
-      net.unraid.docker.icon: "https://raw.githubusercontent.com/frindle/ev-dashboard/main/icon.png"
+      net.unraid.docker.icon: "https://raw.githubusercontent.com/frindle/home-dashboards/main/icon.png"
     restart: unless-stopped
 
 networks:
