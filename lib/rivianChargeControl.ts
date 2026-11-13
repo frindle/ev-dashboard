@@ -15,24 +15,26 @@
 // Driven by the /api/dashboard poll (every 30s from instrumentation.ts),
 // throttled to RUN_INTERVAL_MS; override changes force a run. Never throws.
 import { readConfig } from '@/lib/config';
-import { localDayNumber, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
+import { arrivalFloorOf, localDayNumber, type NeedEstimate, type TonightPlan } from '@/lib/chargePlan';
 import type { LiveNeed } from '@/lib/needModels';
 import { recordPlan, recordShiftDays } from '@/lib/planInflux';
 import { overridePlan, type OverridePlan } from '@/lib/chargeOverride';
 import { readOverride, writeOverride, type StoredOverride } from '@/lib/rivianOverrideStore';
 import {
-  decideAmps, EV_WINDOW, lateStartStep, listInShape, managedIndex, scheduleWithAmps, writeSlot,
+  decideAmps, EV_WINDOW, HOLD_DURATION_MIN, lateStartStep, listInShape, managedIndex, noNeedFits, NO_NEED_ROOM_QUANTILE_INDEX, scheduleWithAmps, writeSlot,
   type AmpsDecision, type Slot,
 } from '@/lib/rivianSchedule';
 import { fetchRivianChargingSchedules, setRivianChargingSchedules } from '@/lib/rivian';
+import { runScorer } from '@/lib/planScoreRun';
 import { sendPush } from '@/lib/pushover';
 import { writeFailureReason } from '@/lib/rivianWriteError';
 import { arrivalPlugAlert, planAlerts, plugDecision, pruneSent } from '@/lib/planAlerts';
 import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertStore';
-import { dailyNeedKwhOf, fetchForecast, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
+import { dailyNeedKwhOf, fetchForecast, rivianNightPlan, serveNightForecast, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import type { NightPlan } from '@/lib/chargePlan';
 import { planNights } from '@/lib/peakPlan';
 import { packKwhFor, RIVIAN_PACK_KWH_DEFAULT } from '@/lib/packKwh';
+import type { ForecastTemp } from '@/lib/rivianPlan';
 import { runTripLayer } from '@/lib/tripRun';
 import type { Alert } from '@/lib/planAlerts';
 
@@ -53,6 +55,8 @@ export interface RivianChargeStatus {
   car: { amperage: number; startTime: number; duration: number; enabled: boolean } | null;
   decision: AmpsDecision | null;
   wrote: number | null;   // amps written this run
+  hold: boolean;          // the car is (or this run wrote it) on the one-minute hold
+  noNeed: { roomKw: number | null; hold: boolean } | null;   // no-need night: p30 room and the choice
   pluggedIn: boolean | null;
   kwhPerPct: number | null;
   error: string | null;
@@ -90,11 +94,24 @@ function atHomeOf(run: RivianPlanRun): boolean | null {
   return metersBetween(lat, lon, home.lat, home.lon) <= home.radiusMeters;
 }
 
+const ROOM_RETRY_MS = 2 * 3_600_000;
+
+// The serve night's room under the forecast peak, fetched once per serve day (an unknown room is
+// retried after 2 h) and kept in the plan store so Influx is not read every 15 minutes.
+async function serveRoomFor(
+  store: PlanStore, run: RivianPlanRun, serveDay: number, now: number, temps: ForecastTemp[],
+): Promise<NonNullable<PlanStore['serveRoom']>> {
+  const c = store.serveRoom;
+  if (c && c.day === serveDay && (c.headroomKw.length > 0 || now - c.atMs < ROOM_RETRY_MS)) return c;
+  const n = await serveNightForecast(now, serveDay, run.workDays, run.forecastHighF, temps, run.houseSince);
+  return (store.serveRoom = { day: serveDay, atMs: now, aimKw: n.aimKw, houseKw: n.houseKw, headroomKw: n.headroomKw });
+}
+
 async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus> {
   const status: RivianChargeStatus = {
     atMs: now, dailyNeedKwh: null, need: null, need7: null, daily: null, night: null, conflict: false, slot: null,
     override: null, overridePlan: null, controlEnabled: process.env.RIVIAN_SCHEDULE_CONTROL === '1',
-    car: null, decision: null, wrote: null, pluggedIn: null, kwhPerPct: null, error: null,
+    car: null, decision: null, wrote: null, hold: false, noNeed: null, pluggedIn: null, kwhPerPct: null, error: null,
   };
   try {
     const today = localDayNumber(now);
@@ -131,6 +148,18 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
       };
     }
     if (slot !== null && plan?.targetPct != null && built) store.target = { day: built.serveDay, pct: plan.targetPct };
+
+    // What the plan expects for the serve day, for scoring it tomorrow (lib/planScoreRun.ts).
+    if (slot !== null && built) {
+      const kwh = dailyNeedKwhOf(run);
+      if (kwh !== null && run.kwhPerPct > 0) {
+        const room = await serveRoomFor(store, run, built.serveDay, now, forecastTemps);
+        store.planned[built.serveDay] = {
+          pct: kwh / run.kwhPerPct, kwh, aimKw: room.aimKw, houseKw: room.houseKw, roomKw: room.headroomKw[2] ?? null,
+        };
+        for (const k of Object.keys(store.planned)) if (Number(k) < built.serveDay - 60) delete store.planned[k];
+      }
+    }
 
     status.override = await readOverride(now);
     // Personal-calendar trips (#8): inert unless PERSONAL_CAL_URL is set. Its
@@ -182,6 +211,19 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
       override: ov,
       peakCharge: peakNow ? peakNow.amps[0] !== null : null,
     });
+    // Plug-in rule: on a no-need night the car charges (8A) only if 8A fits under the forecast
+    // daily peak; otherwise the schedule is held. Needs writing on, and the room is read once a day.
+    let holdNight = false;
+    let noNeedFits_ = false;
+    if (status.controlEnabled && plug.needed === false && built) {
+      const room = await serveRoomFor(store, run, built.serveDay, now, forecastTemps);
+      const rejected = store.holdRejectedServe === built.serveDay;
+      noNeedFits_ = rejected || noNeedFits(room.headroomKw, RIVIAN_MIN_AMPS);
+      holdNight = !noNeedFits_;
+      status.noNeed = { roomKw: room.headroomKw[NO_NEED_ROOM_QUANTILE_INDEX] ?? null, hold: holdNight };
+    }
+    // A hold night is not charging on purpose.
+    if (holdNight) notChargingPush = false;
     const alerts = planAlerts({
       nowMs: now, today,
       done: status.controlEnabled ? store.done : { forecast: today, update: today },
@@ -201,11 +243,19 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
       nowMs: now, today, sent: new Set(Object.keys(store.sent)), shiftEndsMs: run.shifts.map((s) => s.endMs),
       socPct: run.state?.chargePercent ?? null, decision: plug, override: ov,
       amps: plan?.amps ?? null, raiseLimitTo: plan?.raiseLimitTo ?? null,
+      noNeed: status.noNeed ? (status.noNeed.hold ? 'hold' : 'charge') : null,
     }) : null;
     for (const a of [...alerts, ...(arrival ? [arrival] : []), ...(trips?.alerts ?? [])] as Alert[]) {
       if (await sendPush(a.title, a.message, a.priority, a.link)) store.sent[a.key] = now;
     }
     store.conflictOpenDay = status.conflict && built ? built.serveDay : null;
+
+    // Once a day after 08:00: score the last served day against the plan (never throws).
+    const cfg = readConfig();
+    await runScorer(now, store, {
+      workDays: run.workDays, floorPct: arrivalFloorOf(cfg.vehicles.rivian).arrivalFloorPct,
+      lat: cfg.weather.lat ?? cfg.home.lat, lon: cfg.weather.lon ?? cfg.home.lon,
+    });
 
     if (!status.controlEnabled) { await writePlanStore(store); return status; }
 
@@ -225,26 +275,44 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
     }
     const i = managedIndex(list);
     const cur = i >= 0 ? list[i] : null;
-    if (cur) status.car = { amperage: cur.amperage, startTime: cur.startTime, duration: cur.duration, enabled: cur.enabled };
+    if (cur) {
+      status.car = { amperage: cur.amperage, startTime: cur.startTime, duration: cur.duration, enabled: cur.enabled };
+      status.hold = cur.duration === HOLD_DURATION_MIN;
+    }
     const op = status.overridePlan;
     status.decision = decideAmps({
       nowMs: now, current: cur, slot,
       dailyAmps: plan?.amps ?? null,
       overrideAmps: op && op.windows > 0 ? op.amps : null,
       replanAmps, fixRaiseAmps, inShape: listInShape(list),
+      noNeed: status.noNeed ? { fits: noNeedFits_, minAmps: RIVIAN_MIN_AMPS } : undefined,
     });
     const amps = status.decision.amps;
-    const next = amps === null ? null : scheduleWithAmps(list, amps);
+    const holdIt = !!status.decision.hold;
+    const next = amps === null ? null : scheduleWithAmps(list, amps, holdIt);
     let slotSettled = false;
     if (amps !== null && next) {
-      const res = await setRivianChargingSchedules(next);
+      let res = await setRivianChargingSchedules(next);
+      let held = holdIt;
+      if (!res.ok && holdIt) {
+        // Rivian refused the one-minute hold: record why, then charge 8A tonight instead.
+        await writeFailed(res.error);
+        if (built) store.holdRejectedServe = built.serveDay;
+        const fallback = scheduleWithAmps(list, amps, false);
+        console.log(`[rivian-charge] hold rejected, falling back to the ${amps}A charge window`);
+        held = false;
+        if (fallback) res = await setRivianChargingSchedules(fallback);
+      }
       if (!res.ok) await writeFailed(res.error);
       else {
         status.wrote = amps;
-        status.car = { amperage: amps, startTime: EV_WINDOW.startMin, duration: EV_WINDOW.durationMin, enabled: true };
+        status.hold = held;
+        status.car = { amperage: amps, startTime: EV_WINDOW.startMin, duration: held ? HOLD_DURATION_MIN : EV_WINDOW.durationMin, enabled: true };
         slotSettled = true;
         if (status.decision.reason === 'late-start replan' && built) store.replanned = built.serveDay;
-        console.log(`[rivian-charge] schedule set to ${amps}A 00:00-08:00 every day (${status.decision.reason})`);
+        console.log(held
+          ? `[rivian-charge] schedule held: ${amps}A for 1 minute at 00:00 every day, no charge tonight (${status.decision.reason})`
+          : `[rivian-charge] schedule set to ${amps}A 00:00-08:00 every day (${status.decision.reason})`);
       }
     } else if (slot !== null && cur) {
       // up to date, or nothing to write for this window (0 usable hours)
@@ -270,7 +338,7 @@ function planFields(s: RivianChargeStatus) {
     kwh_per_pct: s.kwhPerPct ?? undefined, plugged_in: s.pluggedIn ?? undefined,
     slot: s.slot === 'forecast' ? 1 : s.slot === 'update' ? 2 : undefined,
     override_target_pct: s.override?.targetPct, override_amps: s.overridePlan?.amps,
-    decided_amps: s.decision?.amps, control_error: s.error ?? undefined, car_amps: s.car?.amperage, wrote_amps: s.wrote, control_enabled: s.controlEnabled,
+    decided_amps: s.decision?.amps, hold: s.noNeed || s.hold ? s.hold : undefined, no_need: s.noNeed ? true : undefined, no_need_room_kw: s.noNeed?.roomKw ?? undefined, control_error: s.error ?? undefined, car_amps: s.car?.amperage, wrote_amps: s.wrote, control_enabled: s.controlEnabled,
     peak_charge: n?.peak?.charge, peak_aim_kw: n?.peak?.aimKw ?? undefined, peak_house_kw: n?.peak?.houseKw ?? undefined,
     peak_headroom_kw: n?.peak?.headroomKw ?? undefined, peak_over_kw: n?.peak?.overKw, peak_cost_usd: n?.peak?.costUsd,
     peak_horizon_usd: n?.peak?.horizonUsd,

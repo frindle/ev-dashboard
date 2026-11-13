@@ -125,6 +125,7 @@ export interface RivianPlanRun {
   need7: LiveNeed | null;   // the daily-use need (EV plan #7); null = charge history planned it
   peakNights: PeakNightIn[] | null;   // Rev 18: room under the day peak, serve day + 2; null = off
   typedUse: Record<number, number>;   // typed needs as expected use in % (no margin), by day
+  houseSince: string | null;          // first day of the charge log (for the night forecast)
 }
 
 // Rev 18: room under the day peak for the serve day and the two after it, from the NV usage in
@@ -146,6 +147,18 @@ async function peakNightsNow(
   const nights = peakNightsFor(days, serveDay, workDays, highs, houseSince);
   // No forecast for any night (no NV usage yet, Influx down): the plain plan, unchanged.
   return nights.some((n) => n.headroomKw.length) ? nights : null;
+}
+
+// The serve night's room under the forecast day peak, with no env gate (the no-need-night rule
+// and the forecast scorer use it while RIVIAN_PEAK_PLAN is off). headroomKw [] = unknown.
+export async function serveNightForecast(
+  nowMs: number, serveDay: number, workDays: Set<number> | null, forecastHighF: number | null, temps: ForecastTemp[],
+  houseSince: string | null,
+): Promise<PeakNightIn> {
+  const cfg = readConfig();
+  const days = await loadPeakDays({ workDays, lat: cfg.weather.lat ?? cfg.home.lat, lon: cfg.weather.lon ?? cfg.home.lon, now: nowMs });
+  const high = forecastHighF !== null ? forecastHighF : highOnDay(temps, serveDay);
+  return peakNightsFor(days, serveDay, workDays, [high], houseSince)[0];
 }
 
 // The serve day's expected use in kWh (no margin, like plannedKwh): from the
@@ -190,5 +203,5 @@ export async function rivianNightPlan(
     useOverride: need7 ? { work: need7.work, off: need7.off } : null,
     peakNights, typedUse,
   });
-  return { built, est, state, shifts, workDays, timeOffDays: cal?.timeOffDays ?? new Set(), calendar: cal ? { workDays: cal.workDays, shifts: cal.shifts } : null, kwhPerPct, forecastHighF, need7, peakNights, typedUse };
+  return { built, est, state, shifts, workDays, timeOffDays: cal?.timeOffDays ?? new Set(), calendar: cal ? { workDays: cal.workDays, shifts: cal.shifts } : null, kwhPerPct, forecastHighF, need7, peakNights, typedUse, houseSince };
 }

@@ -134,6 +134,9 @@ export interface ArrivalCtx {
   override: { targetPct: number; byMs: number } | null;
   amps: number | null;           // tonight's planned amps
   raiseLimitTo: number | null;
+  // No-need night with schedule control on: what plugging in does tonight. hold = it won't charge
+  // (8A would go over the forecast daily peak), charge = a top-up at 8A under it. null = not applicable.
+  noNeed?: 'hold' | 'charge' | null;
 }
 
 const ARRIVE_EARLY_MS = 60 * 60_000;      // left work up to an hour early
@@ -161,6 +164,14 @@ export function arrivalPlugAlert(c: ArrivalCtx): Alert | null {
     const amps = c.amps !== null ? ` Plan: ${c.amps}A from midnight.` : '';
     const limit = c.raiseLimitTo !== null ? ` Raise the charge limit to ${c.raiseLimitTo}%.` : '';
     return { key, title: 'Plug in the Rivian', priority: 0, message: `At ${soc}%. ${why}${amps}${limit}` };
+  }
+  if (c.noNeed === 'hold') {
+    return { key, title: 'No need to plug in', priority: 0,
+      message: `Home at ${soc}%. ${req !== null ? 'Tomorrow is covered' : 'The target is covered'}; plugging in won't charge tonight (it would raise the daily demand peak).` };
+  }
+  if (c.noNeed === 'charge') {
+    return { key, title: 'No need to plug in', priority: 0,
+      message: `Home at ${soc}%. ${req !== null ? 'Tomorrow is covered' : 'The target is covered'}; plugging in tops up at 8A under the forecast peak.` };
   }
   const covers = req !== null ? `tomorrow needs ${req}%` : `the ${c.override?.targetPct}% target is covered`;
   return { key, title: 'No need to plug in', priority: 0,

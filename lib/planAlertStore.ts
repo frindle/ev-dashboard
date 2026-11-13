@@ -14,10 +14,19 @@ export interface PlanStore {
   replanned: number | null;                           // serve day the late-start replan ran
   forecast: { day: number; highF: number | null; temps?: Array<{ ms: number; tempF: number }> } | null;
   conflictOpenDay: number | null;
+  // The serve night's room under the forecast peak, fetched once per serve day (atMs: an unknown
+  // room is retried after 2 h).
+  serveRoom: { day: number; atMs: number; aimKw: number | null; houseKw: number | null; headroomKw: number[] } | null;
+  holdRejectedServe: number | null;                   // serve day Rivian rejected the 1-minute hold for
+  // What the plan expected for a serve day (use in % and kWh, forecast peak), kept for scoring it.
+  planned: Record<string, { pct: number; kwh: number; aimKw: number | null; houseKw: number | null; roomKw: number | null }>;
+  scoreDay: number | null;                            // local day the forecast-vs-actual scorer last ran
+  driftWeek: string | null;                           // ISO week the drift push last went out
 }
 
 export const emptyStore = (): PlanStore => ({
   sent: {}, done: {}, target: null, lateSeen: null, replanned: null, forecast: null, conflictOpenDay: null,
+  serveRoom: null, holdRejectedServe: null, planned: {}, scoreDay: null, driftWeek: null,
 });
 
 function storePath(): string {

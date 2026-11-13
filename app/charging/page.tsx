@@ -5,12 +5,16 @@
 // Same access model as /trips: no login, LAN only. Typed needs go to /api/trips/choice.
 import Link from 'next/link';
 import { chargeCalendarView, viewDays, type CalDay, type ChargeCalendarView } from '@/lib/chargeCalendarRun';
+import { localDayNumber } from '@/lib/chargePlan';
+import { summarize } from '@/lib/planScore';
+import { readScores } from '@/lib/planScoreStore';
 import { SocChart } from './SocChart';
 
 export const dynamic = 'force-dynamic';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const pct = (n: number | null) => (n === null ? '?' : `${Math.round(n)}%`);
+const signed = (n: number | null) => (n === null ? 'n/a' : `${n > 0 ? '+' : ''}${Math.round(n)}%`);
 const clock = (ms: number) => new Date(ms).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 
 function Header({ v }: { v: ChargeCalendarView }) {
@@ -104,6 +108,24 @@ function Cell({ d, v }: { d: CalDay; v: ChargeCalendarView }) {
   );
 }
 
+// Last 14 days of the plan against what happened (lib/planScoreRun.ts): numbers only.
+async function Accuracy() {
+  const sum = summarize(await readScores().catch(() => []), localDayNumber(Date.now()) - 14, localDayNumber(Date.now()) - 1);
+  return (
+    <section className="cc-card" aria-label="Forecast vs actual">
+      <h2>Forecast vs actual, last 14 days</h2>
+      {sum.days === 0 && sum.peakDays === 0 ? <p className="cc-note">No scored days yet. Each morning scores the day before.</p> : (
+        <p className="mono">
+          Use error {signed(sum.medianUseErrPct)} median ({sum.days} days)
+          {' · '}{sum.shortDays} short {sum.shortDays === 1 ? 'day' : 'days'}
+          {' · '}Peak error {signed(sum.medianPeakErrPct)}{sum.peakDays ? ` (${sum.peakDays} days)` : ''}
+        </p>
+      )}
+      <p className="cc-note">Use error: real use vs the plan's expected use (plus means the plan ran low). Short: ended under the arrival floor. Peak error: real day peak vs the forecast; needs the NV usage upload.</p>
+    </section>
+  );
+}
+
 export default async function ChargingPage() {
   const v = await chargeCalendarView(Date.now()).catch(() => null);
   const days = v ? viewDays(v) : [];
@@ -123,6 +145,7 @@ export default async function ChargingPage() {
             <div className="cc-dow" aria-hidden="true">{WEEKDAYS.map((w) => <span key={w}>{w}</span>)}</div>
             {v.weeks.map((w) => <div className="cc-week" key={w[0].day}>{w.map((d) => <Cell key={d.day} d={d} v={v} />)}</div>)}
           </div>
+          <Accuracy />
           <section className="cc-card">
             <h2>Battery</h2>
             <SocChart days={days} floorPct={v.floorPct} limitPct={v.limitPct} />

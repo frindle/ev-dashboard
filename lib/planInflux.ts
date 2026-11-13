@@ -79,13 +79,18 @@ export function quoteFieldString(v: string): string {
 }
 
 export function planLine(vehicle: string, fields: PlanFields, ms: number): string | null {
+  return fieldLine(PLAN_MEASUREMENT, vehicle, fields, ms);
+}
+
+// One line for `measurement,vehicle=<id>` from the known fields; null when none are usable.
+export function fieldLine(measurement: string, vehicle: string, fields: PlanFields, ms: number): string | null {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(fields)) {
     if (typeof v === 'boolean') parts.push(`${k}=${v ? 1 : 0}`);
     else if (typeof v === 'number' && Number.isFinite(v)) parts.push(`${k}=${Math.round(v * 1000) / 1000}`);
     else if (typeof v === 'string' && v.length) parts.push(`${k}=${quoteFieldString(v)}`);
   }
-  return parts.length ? `${PLAN_MEASUREMENT},vehicle=${vehicle} ${parts.join(',')} ${Math.round(ms)}` : null;
+  return parts.length ? `${measurement},vehicle=${vehicle} ${parts.join(',')} ${Math.round(ms)}` : null;
 }
 
 // Never throws. Writes the shift days once per calendar refresh (the source

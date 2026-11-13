@@ -17,8 +17,22 @@
 import type { RivianChargingSchedule } from './rivian.ts';
 import type { ChargeWindow } from './chargeOverride.ts';
 import { ampsForNeed, localDayNumber } from './chargePlan.ts';
+import { KW_PER_AMP } from './peakPlan.ts';
 
 export const EV_WINDOW: ChargeWindow = { startMin: 0, durationMin: 8 * 60 };
+
+// A "hold" night (plug-in rule, Penn 2026-11-13): the same single enabled entry, one minute long,
+// so the car has nothing to charge in. A disabled schedule would make it charge at once at 48A.
+export const HOLD_DURATION_MIN = 1;
+
+// The room quantile a no-need night must fit 8A under: ROOM_QUANTILES[1] = p30.
+export const NO_NEED_ROOM_QUANTILE_INDEX = 1;
+
+// 8A fits when the p30 room under the forecast day peak covers it. Unknown room ([]) = no.
+export function noNeedFits(headroomKw: number[], minAmps: number): boolean {
+  const room = headroomKw[NO_NEED_ROOM_QUANTILE_INDEX];
+  return typeof room === 'number' && Number.isFinite(room) && minAmps * KW_PER_AMP <= room;
+}
 
 export const ALL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -29,14 +43,24 @@ export function managedIndex(list: RivianChargingSchedule[]): number {
   list.forEach((s, i) => {
     if (best === -1) { best = i; return; }
     const b = list[best];
-    if ((s.enabled && !b.enabled) || (s.enabled === b.enabled && s.weekDays.length > b.weekDays.length)) best = i;
+    const better = (s.enabled && !b.enabled) || (s.enabled === b.enabled && s.weekDays.length > b.weekDays.length)
+      || (s.enabled === b.enabled && s.weekDays.length === b.weekDays.length && shapeOf(s) !== null && shapeOf(b) === null);
+    if (better) best = i;
   });
   return best;
 }
 
+export type Shape = 'charge' | 'hold';
+
+// The two shapes the dashboard writes: the 00:00-08:00 charge window, or the one-minute hold.
+export function shapeOf(s: RivianChargingSchedule): Shape | null {
+  if (!s.enabled || s.startTime !== EV_WINDOW.startMin || !ALL_DAYS.every((d) => s.weekDays.includes(d))) return null;
+  if (s.duration === EV_WINDOW.durationMin) return 'charge';
+  return s.duration === HOLD_DURATION_MIN ? 'hold' : null;
+}
+
 export function inWindowShape(s: RivianChargingSchedule): boolean {
-  return s.enabled && s.startTime === EV_WINDOW.startMin && s.duration === EV_WINDOW.durationMin
-    && ALL_DAYS.every((d) => s.weekDays.includes(d));
+  return shapeOf(s) !== null;
 }
 
 // The car is fully under dashboard control: the managed schedule is the
@@ -46,16 +70,16 @@ export function listInShape(list: RivianChargingSchedule[]): boolean {
   return i >= 0 && inWindowShape(list[i]) && list.every((s, j) => j === i || !s.enabled);
 }
 
-// The one-entry list to write so the car runs EV_WINDOW at `amps` every day.
-// null when it already does, or there is no schedule to take the home
-// location from.
-export function scheduleWithAmps(list: RivianChargingSchedule[], amps: number): RivianChargingSchedule[] | null {
+// The one-entry list to write so the car runs EV_WINDOW at `amps` every day (or, with `hold`,
+// the one-minute hold at `amps`). null when it already does, or there is no schedule to take the
+// home location from.
+export function scheduleWithAmps(list: RivianChargingSchedule[], amps: number, hold = false): RivianChargingSchedule[] | null {
   const i = managedIndex(list);
   if (i < 0) return null;
   const cur = list[i];
-  if (listInShape(list) && cur.amperage === amps) return null;
+  if (listInShape(list) && cur.amperage === amps && shapeOf(cur) === (hold ? 'hold' : 'charge')) return null;
   return [{
-    weekDays: [...ALL_DAYS], startTime: EV_WINDOW.startMin, duration: EV_WINDOW.durationMin,
+    weekDays: [...ALL_DAYS], startTime: EV_WINDOW.startMin, duration: hold ? HOLD_DURATION_MIN : EV_WINDOW.durationMin,
     location: cur.location, amperage: amps, enabled: true,
   }];
 }
@@ -63,6 +87,7 @@ export function scheduleWithAmps(list: RivianChargingSchedule[], amps: number): 
 export interface AmpsDecision {
   amps: number | null;   // null: leave the car's schedule alone
   reason: string;
+  hold?: true;           // write the one-minute hold at `amps` instead of the charge window
 }
 
 export function inEvWindow(nowMs: number): boolean {
@@ -141,23 +166,42 @@ export function decideAmps(p: {
   replanAmps?: number | null;      // late-start replan: may raise inside the window
   fixRaiseAmps?: number | null;    // a shift conflict fixed after 23:00: raise, never lower
   inShape?: boolean;               // the whole list is in shape (listInShape); default: current alone
+  // No-need night (plugDecision.needed === false, no override): the write slots put the night
+  // at minAmps, as the 8A charge when it fits under the forecast peak, else as the hold.
+  noNeed?: { fits: boolean; minAmps: number };
 }): AmpsDecision {
   const { current, dailyAmps, overrideAmps } = p;
   if (!current) return { amps: null, reason: 'no charging schedule on the car' };
-  const shaped = p.inShape ?? inWindowShape(current);
+  const kind = shapeOf(current);
+  const isHold = kind === 'hold';
+  // A hold counts as out of shape for the charge write: any raise rewrites it as the window.
+  const shaped = (p.inShape ?? inWindowShape(current)) && !isHold;
   const raises: Array<[number | null | undefined, string]> = [
     [overrideAmps, 'override, raised mid-window'],
     [p.replanAmps, 'late-start replan'],
     [p.fixRaiseAmps, 'shift conflict fixed, raised'],
   ];
   if (inEvWindow(p.nowMs)) {
-    let best: AmpsDecision = { amps: null, reason: 'charge window running' };
-    if (shaped) {
+    // Inside the window charge -> hold is never written; hold -> charge only as a raise.
+    let best: AmpsDecision = { amps: null, reason: isHold ? 'hold night, window running' : 'charge window running' };
+    if (isHold && (p.inShape ?? true)) {
+      for (const [a, reason] of raises) {
+        if (typeof a === 'number' && a > 0 && a > (best.amps ?? 0)) best = { amps: a, reason: `${reason} (from hold)` };
+      }
+    } else if (shaped) {
       for (const [a, reason] of raises) {
         if (typeof a === 'number' && a > current.amperage && a > (best.amps ?? 0)) best = { amps: a, reason };
       }
     }
     return best;
+  }
+  if (p.slot !== null && p.noNeed && !(typeof overrideAmps === 'number' && overrideAmps > 0)) {
+    const hold = !p.noNeed.fits;
+    const want = p.noNeed.minAmps;
+    const same = (p.inShape ?? inWindowShape(current)) && kind === (hold ? 'hold' : 'charge') && current.amperage === want;
+    if (same) return { amps: null, reason: 'up to date' };
+    return hold ? { amps: want, hold: true, reason: `${p.slot} slot, no-need night, hold` }
+      : { amps: want, reason: `${p.slot} slot, no-need night, ${want}A fits under the forecast peak` };
   }
   if (p.slot !== null) {
     const desired = Math.max(dailyAmps ?? 0, overrideAmps ?? 0);
