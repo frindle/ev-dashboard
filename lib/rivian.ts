@@ -1,3 +1,4 @@
+import { writeFailureReason, type WriteResult } from './rivianWriteError';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import {
@@ -1564,16 +1565,21 @@ export async function fetchRivianChargingSchedules(): Promise<RivianChargingSche
   return data.getVehicle?.chargingSchedules ?? [];
 }
 
-export async function setRivianChargingSchedules(schedules: RivianChargingSchedule[]): Promise<boolean> {
+// ok:false carries the (coordinate-scrubbed, 200-char) reason, for status, logs and Influx.
+export async function setRivianChargingSchedules(schedules: RivianChargingSchedule[]): Promise<WriteResult> {
   const tokens = readRivianTokens();
-  if (!tokens?.vehicleId || inBackoffWindow()) return false;
+  if (!tokens?.vehicleId || inBackoffWindow()) return { ok: false, error: 'Rivian not connected or backing off' };
   const chargingSchedules = schedules.map((s) => ({
     weekDays: s.weekDays, startTime: s.startTime, duration: s.duration,
     location: { latitude: s.location.latitude, longitude: s.location.longitude },
     amperage: s.amperage, enabled: s.enabled,
   }));
-  const data = await gql<{ setChargingSchedules?: { success?: boolean } | null }>(
-    SET_CHARGING_SCHEDULES, { vehicleId: tokens.vehicleId, chargingSchedules }, authHeaders(tokens),
-  );
-  return data.setChargingSchedules?.success === true;
+  try {
+    const data = await gql<{ setChargingSchedules?: { success?: boolean } | null }>(
+      SET_CHARGING_SCHEDULES, { vehicleId: tokens.vehicleId, chargingSchedules }, authHeaders(tokens),
+    );
+    return data.setChargingSchedules?.success === true ? { ok: true } : { ok: false, error: 'setChargingSchedules did not report success' };
+  } catch (e) {
+    return { ok: false, error: writeFailureReason(e) };
+  }
 }

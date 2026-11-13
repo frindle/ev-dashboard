@@ -10,11 +10,13 @@
 //     place, so edits to future shifts land. Keeps the history after the
 //     calendar moves to Nextcloud.
 //   ev_charge_plan,vehicle=rivian ewma_kwh=..,planned_kwh=..,... <ms>
-//     The Rivian plan on every charge-control run (15 min). Every field is a
-//     float (booleans 0/1); fields that are unknown are left out. Includes
+//     The Rivian plan on every charge-control run (15 min). Every field but
+//     control_error is a float (booleans 0/1); fields that are unknown are left out. Includes
 //     window_hours, next_window_hours, buffer_pct, kwh_per_pct, plugged_in and
 //     slot (1 = the 08:15 forecast run, 2 = the 23:00 update run, absent
-//     otherwise).
+//     otherwise). control_error is the one string field (the scrubbed reason a
+//     run failed, only when it did); hold, no_need and no_need_room_kw record
+//     the plug-in rule for no-need nights.
 import { influxTarget, writeLines } from './chargeSessionInflux.ts';
 import { DEPART_BUFFER_MIN, HOME_BUFFER_MIN, type Shift } from './chargePlan.ts';
 
@@ -68,13 +70,20 @@ export function shiftDayLines(workDays: Set<number>, today: number, extra: Shift
   return out;
 }
 
-export type PlanFields = Record<string, number | boolean | null | undefined>;
+export type PlanFields = Record<string, number | boolean | string | null | undefined>;
+
+// Line-protocol string field value: double-quoted, with backslash and quote escaped; newlines
+// become spaces (a raw newline would end the line).
+export function quoteFieldString(v: string): string {
+  return '"' + v.replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
 
 export function planLine(vehicle: string, fields: PlanFields, ms: number): string | null {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(fields)) {
     if (typeof v === 'boolean') parts.push(`${k}=${v ? 1 : 0}`);
     else if (typeof v === 'number' && Number.isFinite(v)) parts.push(`${k}=${Math.round(v * 1000) / 1000}`);
+    else if (typeof v === 'string' && v.length) parts.push(`${k}=${quoteFieldString(v)}`);
   }
   return parts.length ? `${PLAN_MEASUREMENT},vehicle=${vehicle} ${parts.join(',')} ${Math.round(ms)}` : null;
 }

@@ -1,7 +1,7 @@
 // Run: TZ=America/Los_Angeles node --experimental-strip-types --test lib/planInflux.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createShiftDayRecorder, localMidnightMs, planLine, recordPlan, shiftDayLines, SHIFT_DAYS_AHEAD, SHIFT_DAYS_BACK } from './planInflux.ts';
+import { createShiftDayRecorder, localMidnightMs, planLine, quoteFieldString, recordPlan, shiftDayLines, SHIFT_DAYS_AHEAD, SHIFT_DAYS_BACK } from './planInflux.ts';
 
 const day = (iso: string) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86_400_000);
 const ENV = { INFLUX_URL: 'http://influx.invalid:8086/', INFLUX_TOKEN: 'tok', INFLUX_ORG: 'home', INFLUX_BUCKET: 'metrics' };
@@ -35,6 +35,13 @@ test('planLine: floats and 0/1, unknowns left out', () => {
   assert.equal(planLine('rivian', { planned_kwh: 20.61234, next_day_work: true, gap_kwh: null, floor_kwh: undefined, wrote_amps: NaN, car_amps: 14 }, 5),
     'ev_charge_plan,vehicle=rivian planned_kwh=20.612,next_day_work=1,car_amps=14 5');
   assert.equal(planLine('rivian', { gap_kwh: null }, 5), null);
+});
+
+test('planLine: a string field is quoted, quotes and backslashes escaped, newlines flattened', () => {
+  assert.equal(quoteFieldString('a "b" \\c\nd'), '"a \\"b\\" \\\\c d"');
+  assert.equal(planLine('rivian', { car_amps: 8, control_error: 'BAD: say "no", x\\y' }, 7),
+    'ev_charge_plan,vehicle=rivian car_amps=8,control_error="BAD: say \\"no\\", x\\\\y" 7');
+  assert.equal(planLine('rivian', { control_error: '' }, 7), null);
 });
 
 test('recorders: write once per calendar refresh, retry after a failure, never throw', async () => {

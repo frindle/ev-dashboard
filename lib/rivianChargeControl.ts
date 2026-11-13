@@ -26,6 +26,7 @@ import {
 } from '@/lib/rivianSchedule';
 import { fetchRivianChargingSchedules, setRivianChargingSchedules } from '@/lib/rivian';
 import { sendPush } from '@/lib/pushover';
+import { writeFailureReason } from '@/lib/rivianWriteError';
 import { arrivalPlugAlert, planAlerts, plugDecision, pruneSent } from '@/lib/planAlerts';
 import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertStore';
 import { dailyNeedKwhOf, fetchForecast, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
@@ -208,6 +209,14 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
 
     if (!status.controlEnabled) { await writePlanStore(store); return status; }
 
+    // A failed write: the reason (already scrubbed of coordinates) goes to status, the log and
+    // Influx; one push a day.
+    const writeFailed = async (error: string) => {
+      status.error = error;
+      console.error(`[rivian-charge] write failed: ${error}`);
+      const key = `write-failed:${today}`;
+      if (!store.sent[key] && await sendPush('Rivian schedule write failed', error, 0)) store.sent[key] = now;
+    };
     const list = await fetchRivianChargingSchedules();
     if (!list) {
       status.error = 'Rivian not connected or backing off';
@@ -228,14 +237,14 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
     const next = amps === null ? null : scheduleWithAmps(list, amps);
     let slotSettled = false;
     if (amps !== null && next) {
-      if (await setRivianChargingSchedules(next)) {
+      const res = await setRivianChargingSchedules(next);
+      if (!res.ok) await writeFailed(res.error);
+      else {
         status.wrote = amps;
         status.car = { amperage: amps, startTime: EV_WINDOW.startMin, duration: EV_WINDOW.durationMin, enabled: true };
         slotSettled = true;
         if (status.decision.reason === 'late-start replan' && built) store.replanned = built.serveDay;
         console.log(`[rivian-charge] schedule set to ${amps}A 00:00-08:00 every day (${status.decision.reason})`);
-      } else {
-        status.error = 'setChargingSchedules did not report success';
       }
     } else if (slot !== null && cur) {
       // up to date, or nothing to write for this window (0 usable hours)
@@ -244,7 +253,7 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
     if (slot !== null && slotSettled) store.done = { ...store.done, [slot]: today };
     await writePlanStore(store);
   } catch (e) {
-    status.error = String(e instanceof Error ? e.message : e).slice(0, 200);
+    status.error = writeFailureReason(e);
     console.error('[rivian-charge]', status.error);
   }
   return status;
@@ -261,7 +270,7 @@ function planFields(s: RivianChargeStatus) {
     kwh_per_pct: s.kwhPerPct ?? undefined, plugged_in: s.pluggedIn ?? undefined,
     slot: s.slot === 'forecast' ? 1 : s.slot === 'update' ? 2 : undefined,
     override_target_pct: s.override?.targetPct, override_amps: s.overridePlan?.amps,
-    decided_amps: s.decision?.amps, car_amps: s.car?.amperage, wrote_amps: s.wrote, control_enabled: s.controlEnabled,
+    decided_amps: s.decision?.amps, control_error: s.error ?? undefined, car_amps: s.car?.amperage, wrote_amps: s.wrote, control_enabled: s.controlEnabled,
     peak_charge: n?.peak?.charge, peak_aim_kw: n?.peak?.aimKw ?? undefined, peak_house_kw: n?.peak?.houseKw ?? undefined,
     peak_headroom_kw: n?.peak?.headroomKw ?? undefined, peak_over_kw: n?.peak?.overKw, peak_cost_usd: n?.peak?.costUsd,
     peak_horizon_usd: n?.peak?.horizonUsd,
