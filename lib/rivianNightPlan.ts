@@ -18,7 +18,7 @@ import { applyIgnored } from '@/lib/shiftChoices';
 import { readIgnored } from '@/lib/shiftChoicesStore';
 import { buildRivianPlan, driveTimeTemps, forecastHighFor, forecastTempsFrom, type BuiltPlan, type ForecastTemp, type PlanState } from '@/lib/rivianPlan';
 
-export const RIVIAN_MIN_AMPS = 6;
+export const RIVIAN_MIN_AMPS = 8;   // Rivian app floor (Penn 11-12: lowest it allows is 8A)
 export const RIVIAN_MAX_AMPS = 48;
 
 export interface RivianCachedState extends PlanState {

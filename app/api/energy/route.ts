@@ -56,7 +56,7 @@ export interface EnergyVehicleSummary {
   // null if the vehicle has no floor or SoC/limit is unknown.
   floorKwh: number | null;
   // Tonight's 8h plan: planned need plus half of any gap beyond it, at least
-  // floorKwh, in 2A steps (min 6A Rivian / 5A Tesla, max 48A). null when
+  // floorKwh, in 2A steps (min 8A Rivian / 5A Tesla, max 48A). null when
   // dailyNeedKwh is.
   tonightKwh: number | null;
   tonightAmps: number | null;
@@ -72,8 +72,8 @@ export interface EnergyVehicleSummary {
 }
 
 // Charger-current bounds for tonightAmps. 5A is the Tesla's lowest setting;
-// 6A is the lowest J1772 current. 48A is the Wall Connector's maximum.
-const MIN_AMPS: Record<VehicleId, number> = { rivian: 6, tesla: 5 };
+// 8A is the lowest the Rivian app allows (Penn 11-12). 48A is the Wall Connector's maximum.
+const MIN_AMPS: Record<VehicleId, number> = { rivian: 8, tesla: 5 };
 const MAX_AMPS = 48;
 
 export interface EnergySessionSummary {

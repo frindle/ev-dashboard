@@ -28,7 +28,7 @@ import { KWH_PER_PCT_SEED } from './kwhPerPct.ts';
 import { localDate } from './rivianDailyUse.ts';
 
 export const WORK_MARGIN = 1.1;   // the Rivian's arrivalDriveMargin (lib/config.ts)
-export const LIVE_MIN_AMPS = 6;   // RIVIAN_MIN_AMPS / RIVIAN_MAX_AMPS (rivianNightPlan.ts imports server-only modules)
+export const LIVE_MIN_AMPS = 8;   // RIVIAN_MIN_AMPS / RIVIAN_MAX_AMPS (rivianNightPlan.ts imports server-only modules)
 export const LIVE_MAX_AMPS = 48;
 export const SPARSE_BAND_MIN_DRIVES = 10;
 export const SPARSE_MI_PER_PCT = 1.95;

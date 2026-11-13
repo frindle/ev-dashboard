@@ -195,7 +195,7 @@ test('simulate live mode follows nightPlan (reach target; the car runs the windo
   const live = simulate(data, modelA(data), { limit: 70, floor: 25, mode: 'live' });
   assert.equal(live.length, 3);
   // day 14: from 25%, need 20 -> reach 25 + 22 = 47 -> 18A; 8h at 18A puts in 24%, so the morning is 49
-  const plan = (soc: number, use: number) => nightPlan({ isWork: true, socPct: soc, limitPct: 70, usePct: use, margin: 1.1, floorPct: 25, windowHours: 8, kwhPerPct: 1.44, minAmps: 6, maxAmps: 48 });
+  const plan = (soc: number, use: number) => nightPlan({ isWork: true, socPct: soc, limitPct: 70, usePct: use, margin: 1.1, floorPct: 25, windowHours: 8, kwhPerPct: 1.44, minAmps: 8, maxAmps: 48 });
   const p0 = plan(25, live[0].need);
   assert.ok(Math.abs(live[0].morning - p0.endPct!) < 1e-9);
   assert.equal(live[0].amps, p0.amps);
@@ -206,8 +206,8 @@ test('simulate live mode follows nightPlan (reach target; the car runs the windo
   assert.ok(Math.abs(s2[0].morning - 70) < 1e-9);
   assert.ok(Math.abs(s2[1].morning - 70) < 1e-9);
   const s3 = simulate(data, () => ({ pct: 5 }), { limit: 70, floor: 25, mode: 'live' });
-  // pct 5: reach 30.5; from 25 the need is 5.5% -> 6A minimum, 8h puts in 8% -> 33
-  assert.ok(Math.abs(s3[0].morning - 33) < 1e-9);
+  // pct 5: reach 30.5; from 25 the need is 5.5% -> 8A minimum (Rivian's floor), 8h at 1.92 kW puts in 10.67% -> 35.67
+  assert.ok(Math.abs(s3[0].morning - (25 + (8 * 240 * 8) / 1000 / 1.44)) < 1e-9);
   assert.ok(s3.every((d) => d.short));   // actual 20 > the planned 5.5 each day
 });
 
