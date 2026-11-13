@@ -5,6 +5,7 @@ import {
   localDayNumber, nextUseDay, planTonight, plannedFor, topUpLimitFor,
   type NeedEstimate, type Shift, type TonightResult,
 } from './chargePlan.ts';
+import type { PeakNightIn } from './peakPlan.ts';
 
 export interface PlanState {
   chargePercent?: number | null;
@@ -27,6 +28,8 @@ export interface BuildInput {
   // EV plan #7: expected use in % from the daily-use log (lib/needModels.ts
   // liveNeed). A null kind falls back to the charge-history estimate.
   useOverride?: { work: number | null; off: number | null } | null;
+  // Rev 18: room under the day peak for the serve day and the two after it (lib/peakForecast.ts).
+  peakNights?: PeakNightIn[] | null;
 }
 
 export interface BuiltPlan {
@@ -75,6 +78,7 @@ export function buildRivianPlan(p: BuildInput): BuiltPlan | null {
     day: serveDay, shifts: p.shifts, workDays: p.workDays, usePctWork, usePctOff,
     socPct: socUsed, limitPct: p.state?.chargeLimit, margin: p.margin, floorPct: p.floorPct,
     topUpLimitPct: topUpLimitFor(p.forecastHighF), kwhPerPct: p.kwhPerPct, minAmps: p.minAmps, maxAmps: p.maxAmps,
+    peak: p.peakNights ?? null,
   });
   return { serveDay, socUsed, usePctWork, usePctOff, needSource, result };
 }
@@ -109,6 +113,17 @@ export function driveTimeTemps(temps: ForecastTemp[], shifts: Shift[], day: numb
     }
   }
   return out;
+}
+
+// Highest 3-hourly forecast temperature on local day `day`; null when none fall on it.
+export function highOnDay(temps: ForecastTemp[], day: number): number | null {
+  let hi: number | null = null;
+  for (const t of temps) {
+    const d = new Date(t.ms);
+    if (Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000) !== day) continue;
+    if (hi === null || t.tempF > hi) hi = t.tempF;
+  }
+  return hi;
 }
 
 // Highest forecast temperature (F) among OpenWeatherMap 5-day/3-hour entries

@@ -30,6 +30,7 @@ import { arrivalPlugAlert, planAlerts, plugDecision, pruneSent } from '@/lib/pla
 import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertStore';
 import { dailyNeedKwhOf, fetchForecast, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import type { NightPlan } from '@/lib/chargePlan';
+import { planNights } from '@/lib/peakPlan';
 import { packKwhFor, RIVIAN_PACK_KWH_DEFAULT } from '@/lib/packKwh';
 import { runTripLayer } from '@/lib/tripRun';
 import type { Alert } from '@/lib/planAlerts';
@@ -168,8 +169,17 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
     // Pushes (the missed-write ones only mean something with writing on).
     const lastEnd = run.shifts.filter((s) => s.day === today).reduce<number | null>((m, s) => (m === null || s.endMs > m ? s.endMs : m), null);
     const ov = activeOverride ? { targetPct: activeOverride.targetPct, byMs: activeOverride.byMs } : null;
+    // Rev 18: the plug-in call reruns the demand planner from the car's real SoC (the plan itself
+    // started from an estimate before 23:00); its required morning replaces reach + buffer.
+    const realSoc = run.state?.chargePercent;
+    const peakNow = built?.result.peakInput && typeof realSoc === 'number' && realSoc > 0
+      ? planNights({ ...built.result.peakInput, socPct: realSoc }) : null;
     const plug = plugDecision({
-      socPct: run.state?.chargePercent ?? null, reachPct: plan?.reachPct ?? null, bufferPct: plan?.bufferPct ?? 0, override: ov,
+      socPct: realSoc ?? null,
+      reachPct: peakNow ? peakNow.requiredPct[0] : plan?.reachPct ?? null,
+      bufferPct: peakNow ? 0 : plan?.bufferPct ?? 0,
+      override: ov,
+      peakCharge: peakNow ? peakNow.amps[0] !== null : null,
     });
     const alerts = planAlerts({
       nowMs: now, today,
@@ -180,7 +190,7 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
       shortfall: plan?.shortfall ?? false,
       atHome: atHomeOf(run), plugged: run.state?.isPluggedIn ?? null,
       lastShiftEndMs: lastEnd, isOffDay: !!run.workDays && !run.workDays.has(today),
-      needsCharge: !!plan && plan.amps !== null && plan.totalPct > 0,
+      needsCharge: !!plan && plan.amps !== null && (plan.peak ? plan.peak.charge : plan.totalPct > 0),
       plugNeeded: plug.needed,
       limitPct: run.state?.chargeLimit ?? null, notChargingPush,
       serveDay: built?.serveDay ?? today, dashboardUrl: process.env.DASHBOARD_URL ?? null,
@@ -252,6 +262,9 @@ function planFields(s: RivianChargeStatus) {
     slot: s.slot === 'forecast' ? 1 : s.slot === 'update' ? 2 : undefined,
     override_target_pct: s.override?.targetPct, override_amps: s.overridePlan?.amps,
     decided_amps: s.decision?.amps, car_amps: s.car?.amperage, wrote_amps: s.wrote, control_enabled: s.controlEnabled,
+    peak_charge: n?.peak?.charge, peak_aim_kw: n?.peak?.aimKw ?? undefined, peak_house_kw: n?.peak?.houseKw ?? undefined,
+    peak_headroom_kw: n?.peak?.headroomKw ?? undefined, peak_over_kw: n?.peak?.overKw, peak_cost_usd: n?.peak?.costUsd,
+    peak_horizon_usd: n?.peak?.horizonUsd,
   };
 }
 

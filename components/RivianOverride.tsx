@@ -6,6 +6,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 interface Status {
   daily: { tonightAmps: number } | null;
+  // Rev 18: what the demand planner did with tonight (lib/chargePlan.ts PeakView).
+  night: { peak?: { charge: boolean; plannedAmps: Array<number | null>; aimKw: number | null; houseKw: number | null; evKw: number; overKw: number; costUsd: number } | null } | null;
   override: { targetPct: number; byMs: number } | null;
   overridePlan: { amps: number; windows: number; feasible: boolean; reachablePct: number; raiseLimitTo: number | null } | null;
   controlEnabled: boolean;
@@ -89,6 +91,18 @@ export function RivianOverride() {
           {s && !s.controlEnabled ? ' · not applied (control off)' : ''}
         </span>
       </span>
+      {s?.night?.peak && (() => {
+        const k = s.night.peak;
+        const kw = (x: number | null) => (x === null ? '?' : x.toFixed(1));
+        const nights = k.plannedAmps.map((a) => (a === null ? '–' : `${a}A`)).join(' / ');
+        return (
+          <span style={{ fontFamily: MONO, fontSize: 12, color: k.overKw > 0.05 ? WARN : MUTED }}>
+            peak line {kw(k.aimKw)} kW · house {kw(k.houseKw)} · EV {k.charge ? k.evKw.toFixed(1) : '0'} kW
+            {k.overKw > 0.05 ? ` · ${k.overKw.toFixed(1)} kW over (~$${k.costUsd.toFixed(2)})` : ' · under'}
+            {` · nights ${nights}`}
+          </span>
+        );
+      })()}
       {p?.raiseLimitTo != null && <span style={{ fontFamily: MONO, fontSize: 12, color: WARN }}>raise limit to {p.raiseLimitTo}% in the Rivian app</span>}
       {p && !p.feasible && (
         <span style={{ fontFamily: MONO, fontSize: 12, color: WARN }}>

@@ -29,7 +29,11 @@
 //    charge limit. It only binds from a low SoC or a low limit; a day much
 //    bigger than that needs an override (chargeOverride.ts).
 //
-// Pure functions, no imports, so node:test can load this file directly.
+// Pure functions (relative .ts imports only), so node:test can load this file directly.
+import {
+  KW_PER_AMP, nightCostUsd, overKwOf, planNights,
+  type PeakChoice, type PeakHorizonNight, type PeakNightIn, type PeakPlanInput,
+} from './peakPlan.ts';
 
 export const CHARGE_VOLTS = 240;
 export const CHARGE_WINDOW_HOURS = 8;
@@ -367,6 +371,21 @@ export interface NightPlan {
   raiseLimitTo: number | null;
   shortfallPct: number;       // what can't be put in at maxAmps (tonight + the short night)
   shortfall: boolean;
+  peak?: PeakView | null;     // Rev 18: set when the demand-aware planner chose tonight's amps
+}
+
+// What the demand-aware planner (lib/peakPlan.ts) did with tonight.
+export interface PeakView {
+  charge: boolean;                 // tonight should charge (false: no need to plug in; the schedule still holds minAmps)
+  plannedAmps: Array<number | null>;   // tonight and the next nights, null = no charge
+  morningPct: number[];
+  aimKw: number | null;            // forecast day peak outside 00:00-08:00 x margin: the line tonight aims to stay under
+  houseKw: number | null;          // the house's own night load
+  headroomKw: number | null;       // room under the line (middle of the spread)
+  evKw: number;                    // tonight's charger draw
+  overKw: number;                  // how far tonight goes over the line, 0 = under it
+  costUsd: number;                 // tonight's expected demand charge
+  horizonUsd: number;              // the planned nights plus the charge still owed after them
 }
 
 const known = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
@@ -476,6 +495,9 @@ export interface TonightInputs {
   kwhPerPct: number;
   minAmps: number;
   maxAmps: number;
+  // Rev 18: room under the day peak for tonight and the next nights (lib/peakForecast.ts). Absent or
+  // null: the plain lowest-amps plan.
+  peak?: PeakNightIn[] | null;
 }
 
 export interface TonightResult {
@@ -486,6 +508,9 @@ export interface TonightResult {
   conflict: boolean;
   plan: NightPlan;        // tonight's: the reading that needs the most amps
   readings: NightPlan[];  // one per reading of the calendar
+  // The demand planner's inputs without the SoC, so the plug-in decision can rerun it from the
+  // car's real SoC. null when it didn't run (off, no limit or no floor).
+  peakInput: Omit<PeakPlanInput, 'socPct'> | null;
 }
 
 // nightPlan for tonight, run once per reading of a conflicting calendar
@@ -507,8 +532,63 @@ export function planTonight(p: TonightInputs): TonightResult {
     }
   }
   const rank = (x: NightPlan) => (x.amps === null ? -1 : x.amps);
-  const plan = readings.reduce((best, r) => (rank(r) > rank(best) || (rank(r) === rank(best) && r.totalPct > best.totalPct) ? r : best), readings[0]);
-  return { day: p.day, isWork, window, nextWindow, conflict: window.conflict || nextWindow.conflict, plan, readings };
+  let plan = readings.reduce((best, r) => (rank(r) > rank(best) || (rank(r) === rank(best) && r.totalPct > best.totalPct) ? r : best), readings[0]);
+
+  // Rev 18: the demand-aware amps over tonight and the next two nights (safe windows).
+  const limit = known(p.limitPct) ? p.limitPct : null;
+  const floor = typeof p.floorPct === 'number' && p.floorPct > 0 ? p.floorPct : null;
+  let peakInput: Omit<PeakPlanInput, 'socPct'> | null = null;
+  if (p.peak && limit !== null && floor !== null) {
+    const hours = [window.hours, nextWindow.hours, nightWindow(p.day + 2, p.shifts).hours];
+    const nights: PeakHorizonNight[] = hours.map((h, k) => ({
+      ...(p.peak![k] ?? { aimKw: null, houseKw: null, headroomKw: [] }),
+      hours: h,
+      usePct: p.workDays?.has(p.day + k) ? p.usePctWork : p.usePctOff,
+    }));
+    const margin = typeof p.margin === 'number' && p.margin >= 1 ? p.margin : 1;
+    peakInput = { limitPct: limit, floorPct: floor, margin, kwhPerPct: p.kwhPerPct, nights, minAmps: p.minAmps, maxAmps: p.maxAmps };
+    if (known(p.socPct)) plan = withPeak(plan, planNights({ ...peakInput, socPct: p.socPct }), nights[0], p.socPct, limit, p.kwhPerPct, p.minAmps, p.maxAmps);
+  }
+  return { day: p.day, isWork, window, nextWindow, conflict: window.conflict || nextWindow.conflict, plan, readings, peakInput };
+}
+
+// Tonight's plan with the demand planner's amps. It never goes below what tonight's own need
+// takes; a night that needs no charge still holds the minimum on the schedule (a disabled
+// schedule would charge at once) and says no need to plug in. The target becomes the lowest
+// morning that keeps the next nights reachable (it replaces the short-night buffer).
+export function withPeak(
+  plan: NightPlan, c: PeakChoice, night: PeakHorizonNight, soc: number, limit: number,
+  kwhPerPct: number, minAmps: number, maxAmps: number,
+): NightPlan {
+  const hours = plan.windowHours;
+  if (!(hours > 0)) return plan;
+  const ownAmps = plan.needPct > 1e-9 ? ampsForNeed(plan.needPct * kwhPerPct, hours, minAmps, maxAmps) : null;
+  const pick = c.amps[0];
+  const charge = pick !== null || ownAmps !== null;
+  const amps = Math.max(pick ?? 0, ownAmps ?? 0, minAmps);
+  const totalPct = Math.max(plan.needPct, c.requiredPct[0] - soc, 0);
+  const room = night.headroomKw.length ? [...night.headroomKw].sort((a, b) => a - b)[Math.floor(night.headroomKw.length / 2)] : null;
+  return {
+    ...plan,
+    bufferPct: Math.max(0, totalPct - plan.needPct),
+    totalPct,
+    targetPct: soc + totalPct,
+    kwh: totalPct * kwhPerPct,
+    amps,
+    endPct: charge ? Math.max(soc, Math.min(limit, soc + (amps * (CHARGE_VOLTS / 1000) * hours) / kwhPerPct)) : soc,
+    peak: {
+      charge,
+      plannedAmps: c.amps,
+      morningPct: c.morningPct,
+      aimKw: night.aimKw,
+      houseKw: night.houseKw,
+      headroomKw: room,
+      evKw: charge ? amps * KW_PER_AMP : 0,
+      overKw: charge ? overKwOf(amps, night.headroomKw) : 0,
+      costUsd: charge ? nightCostUsd(amps, night.headroomKw) : 0,
+      horizonUsd: c.totalUsd,
+    },
+  };
 }
 
 // #6b: Midknight-only history. Rows from before `since` (YYYY-MM-DD, local

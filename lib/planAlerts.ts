@@ -104,11 +104,14 @@ export interface PlugInput {
   reachPct: number | null;       // NightPlan.reachPct
   bufferPct: number;             // NightPlan.bufferPct
   override: { targetPct: number; byMs: number } | null;  // manual or trip target still ahead
+  // Rev 18: the demand planner, rerun from the real SoC, charges tonight even though tomorrow is
+  // covered (cheap room under tonight's peak saves a costlier night later). null/absent = off.
+  peakCharge?: boolean | null;
 }
 export interface PlugDecision {
   needed: boolean | null;        // null = no SoC or no plan
   requiredPct: number | null;
-  reason: 'tomorrow' | 'override' | null;
+  reason: 'tomorrow' | 'override' | 'peak' | null;
 }
 
 export function plugDecision(p: PlugInput): PlugDecision {
@@ -117,6 +120,7 @@ export function plugDecision(p: PlugInput): PlugDecision {
   if (soc === null) return { needed: null, requiredPct: req, reason: null };
   if (req !== null && soc < req - 0.5) return { needed: true, requiredPct: req, reason: 'tomorrow' };
   if (p.override && p.override.targetPct > soc + 0.5) return { needed: true, requiredPct: req, reason: 'override' };
+  if (p.peakCharge) return { needed: true, requiredPct: req, reason: 'peak' };
   return { needed: req === null && !p.override ? null : false, requiredPct: req, reason: null };
 }
 
@@ -151,7 +155,9 @@ export function arrivalPlugAlert(c: ArrivalCtx): Alert | null {
   if (c.decision.needed) {
     const why = c.decision.reason === 'override' && c.override
       ? `The ${c.override.targetPct}% target by ${when(c.override.byMs)} needs a charge.`
-      : `Tomorrow needs ${req}% (home with 25% after tomorrow's driving +10%).`;
+      : c.decision.reason === 'peak'
+        ? `Tomorrow is covered${req !== null ? ` (needs ${req}%)` : ''}, but charging tonight keeps the next nights under the demand peak.`
+        : `Tomorrow needs ${req}% (home with 25% after tomorrow's driving +10%).`;
     const amps = c.amps !== null ? ` Plan: ${c.amps}A from midnight.` : '';
     const limit = c.raiseLimitTo !== null ? ` Raise the charge limit to ${c.raiseLimitTo}%.` : '';
     return { key, title: 'Plug in the Rivian', priority: 0, message: `At ${soc}%. ${why}${amps}${limit}` };

@@ -16,7 +16,10 @@ import { KWH_PER_PCT_SEED, measuredKwhPerPct } from '@/lib/kwhPerPct';
 import { getShiftCalendar } from '@/lib/shiftCalendar';
 import { applyIgnored } from '@/lib/shiftChoices';
 import { readIgnored } from '@/lib/shiftChoicesStore';
-import { buildRivianPlan, driveTimeTemps, forecastHighFor, forecastTempsFrom, type BuiltPlan, type ForecastTemp, type PlanState } from '@/lib/rivianPlan';
+import { buildRivianPlan, driveTimeTemps, forecastHighFor, forecastTempsFrom, highOnDay, type BuiltPlan, type ForecastTemp, type PlanState } from '@/lib/rivianPlan';
+import { loadPeakDays, peakNightsFor } from '@/lib/peakData';
+import { pacificFields } from '@/lib/pacificTime';
+import type { PeakNightIn } from '@/lib/peakPlan';
 
 export const RIVIAN_MIN_AMPS = 8;   // Rivian app floor (Penn 11-12: lowest it allows is 8A)
 export const RIVIAN_MAX_AMPS = 48;
@@ -91,6 +94,28 @@ export interface RivianPlanRun {
   kwhPerPct: number;
   forecastHighF: number | null;
   need7: LiveNeed | null;   // the daily-use need (EV plan #7); null = charge history planned it
+  peakNights: PeakNightIn[] | null;   // Rev 18: room under the day peak, serve day + 2; null = off
+}
+
+// Rev 18: room under the day peak for the serve day and the two after it, from the NV usage in
+// Influx. Off unless RIVIAN_PEAK_PLAN=1: on Penn's NV usage (Feb-Oct 2026) it did not beat the
+// plain lowest-amp plan, because past days like the coming one don't say which nights will have
+// room. houseSince: the first day of the charge log (nights before it still have the cars in the
+// meter's night load).
+async function peakNightsNow(
+  nowMs: number, workDays: Set<number> | null, forecastHighF: number | null, temps: ForecastTemp[],
+  houseSince: string | null,
+): Promise<PeakNightIn[] | null> {
+  if (process.env.RIVIAN_PEAK_PLAN !== '1') return null;
+  const cfg = readConfig();
+  const lat = cfg.weather.lat ?? cfg.home.lat;
+  const lon = cfg.weather.lon ?? cfg.home.lon;
+  const days = await loadPeakDays({ workDays, lat, lon, now: nowMs });
+  const serveDay = nextUseDay(nowMs);
+  const highs = [0, 1, 2].map((k) => (k === 0 && forecastHighF !== null ? forecastHighF : highOnDay(temps, serveDay + k)));
+  const nights = peakNightsFor(days, serveDay, workDays, highs, houseSince);
+  // No forecast for any night (no NV usage yet, Influx down): the plain plan, unchanged.
+  return nights.some((n) => n.headroomKw.length) ? nights : null;
 }
 
 // The serve day's expected use in kWh (no margin, like plannedKwh): from the
@@ -112,7 +137,10 @@ export async function rivianNightPlan(
   const idFor = vehicleIdResolver(cfg);
   const cal = await getShiftCalendar(nowMs, process.env, undefined, { refresh: !!opts.refreshCalendar });
   const { shifts, workDays } = applyIgnored(cal?.shifts ?? [], cal?.workDays ?? null, await readIgnored());
-  const rows = sinceHistoryStart((await readChargeHistory()).filter((r) => idFor(r) === 'rivian'), v.historySince);
+  const allRows = await readChargeHistory();
+  const rows = sinceHistoryStart(allRows.filter((r) => idFor(r) === 'rivian'), v.historySince);
+  const firstMs = allRows.reduce((m, r) => { const t = Date.parse(r.startedAt); return Number.isFinite(t) && t < m ? t : m; }, Infinity);
+  const houseSince = Number.isFinite(firstMs) ? pacificFields(firstMs).date : null;
   // Measured from the Rivian's own sessions (median of the last 20 that gained
   // >= 10%), seeded with the configured value until there are enough.
   const seed = typeof v.kwhPerPct === 'number' && v.kwhPerPct > 0 ? v.kwhPerPct : KWH_PER_PCT_SEED;
@@ -122,10 +150,12 @@ export async function rivianNightPlan(
   const floor = arrivalFloorOf(v);
   const forecastHighF = opts.forecastHighF ?? null;
   const need7 = await needFromDailyUse(nowMs, shifts, workDays, opts.forecastTemps ?? []);
+  const peakNights = await peakNightsNow(nowMs, workDays, forecastHighF, opts.forecastTemps ?? [], houseSince);
   const built = buildRivianPlan({
     nowMs, est, shifts, workDays, state, kwhPerPct, floorPct: floor.arrivalFloorPct, margin: floor.arrivalDriveMargin,
     forecastHighF, minAmps: RIVIAN_MIN_AMPS, maxAmps: RIVIAN_MAX_AMPS,
     useOverride: need7 ? { work: need7.work, off: need7.off } : null,
+    peakNights,
   });
-  return { built, est, state, shifts, workDays, timeOffDays: cal?.timeOffDays ?? new Set(), calendar: cal ? { workDays: cal.workDays, shifts: cal.shifts } : null, kwhPerPct, forecastHighF, need7 };
+  return { built, est, state, shifts, workDays, timeOffDays: cal?.timeOffDays ?? new Set(), calendar: cal ? { workDays: cal.workDays, shifts: cal.shifts } : null, kwhPerPct, forecastHighF, need7, peakNights };
 }

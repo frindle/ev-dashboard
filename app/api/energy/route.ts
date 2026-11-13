@@ -68,6 +68,8 @@ export interface EnergyVehicleSummary {
   bufferPct: number | null;
   conflict: boolean | null;
   shortfall: boolean | null;
+  // Rev 18: the demand planner's view of tonight (lib/chargePlan.ts PeakView), Rivian only.
+  peak: { charge: boolean; plannedAmps: Array<number | null>; aimKw: number | null; houseKw: number | null; headroomKw: number | null; evKw: number; overKw: number; costUsd: number } | null;
   trip: null;
 }
 
@@ -266,6 +268,11 @@ export async function GET() {
       bufferPct: id === 'rivian' ? round2(rv?.plan.bufferPct ?? null) : null,
       conflict: id === 'rivian' ? rv?.conflict ?? null : null,
       shortfall: id === 'rivian' ? rv?.plan.shortfall ?? null : null,
+      peak: id === 'rivian' && rv?.plan.peak ? {
+        charge: rv.plan.peak.charge, plannedAmps: rv.plan.peak.plannedAmps,
+        aimKw: round2(rv.plan.peak.aimKw), houseKw: round2(rv.plan.peak.houseKw), headroomKw: round2(rv.plan.peak.headroomKw),
+        evKw: rv.plan.peak.evKw, overKw: round2(rv.plan.peak.overKw) ?? 0, costUsd: round2(rv.plan.peak.costUsd) ?? 0,
+      } : null,
       trip: null,   // the drive-log trip hook (#8) is not built yet
     };
   });
