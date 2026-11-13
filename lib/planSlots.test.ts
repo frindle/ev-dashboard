@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decideAmps, lateStartStep, writeSlot } from './rivianSchedule.ts';
-import { planAlerts, pruneSent, type AlertCtx } from './planAlerts.ts';
+import { arrivalPlugAlert, planAlerts, plugDecision, pruneSent, type AlertCtx, type ArrivalCtx } from './planAlerts.ts';
 import { applyIgnored, validChoice } from './shiftChoices.ts';
 import { buildRivianPlan, driveTimeTemps, forecastHighFor, forecastTempsFrom, socForPlan } from './rivianPlan.ts';
 import { dayTimeMs, localDayNumber, type Shift } from './chargePlan.ts';
@@ -61,7 +61,7 @@ test('lateStartStep: replans once for the hours left; pushes at start + 30', () 
 const ctx = (over: Partial<AlertCtx> = {}): AlertCtx => ({
   nowMs: at('2026-11-12T12:00:00-08:00'), today: localDayNumber(at('2026-11-12T12:00:00-08:00')),
   done: {}, sent: new Set(), conflictDay: null, conflictWasOpenDay: null, shortfall: false, atHome: null, plugged: null,
-  lastShiftEndMs: null, isOffDay: false, needsCharge: false, limitPct: null, notChargingPush: false, serveDay: 0,
+  lastShiftEndMs: null, isOffDay: false, needsCharge: false, plugNeeded: null, limitPct: null, notChargingPush: false, serveDay: 0,
   dashboardUrl: 'https://ev.example.invalid/', ...over,
 });
 const keys = (c: AlertCtx) => planAlerts(c).map((a) => a.key.split(':')[0]);
@@ -196,4 +196,46 @@ test('forecastHighFor: highest reading on the local day', () => {
   ];
   assert.equal(forecastHighFor(list, d), 91);
   assert.equal(forecastHighFor([], d), null);
+});
+
+test('plugDecision: real SoC against tomorrow (floor + use x margin + buffer); a target ahead counts', () => {
+  // tomorrow reach 25 + 20 x 1.1 = 47
+  assert.deepEqual(plugDecision({ socPct: 40, reachPct: 47, bufferPct: 0, override: null }), { needed: true, requiredPct: 47, reason: 'tomorrow' });
+  assert.equal(plugDecision({ socPct: 52, reachPct: 47, bufferPct: 0, override: null }).needed, false);
+  // a short next night adds its buffer
+  assert.equal(plugDecision({ socPct: 50, reachPct: 47, bufferPct: 6, override: null }).needed, true);
+  assert.equal(plugDecision({ socPct: 52, reachPct: 47, bufferPct: 0, override: { targetPct: 65, byMs: 0 } }).reason, 'override');
+  assert.equal(plugDecision({ socPct: null, reachPct: 47, bufferPct: 0, override: null }).needed, null);
+  assert.equal(plugDecision({ socPct: 50, reachPct: null, bufferPct: 0, override: null }).needed, null);
+});
+
+test('arrivalPlugAlert: once after a shift, plug in or not; not on an arrival outside the shift window', () => {
+  const end = at('2026-11-12T17:00:00-08:00');
+  const base: ArrivalCtx = {
+    nowMs: end + 25 * 60_000, today, sent: new Set(), shiftEndsMs: [end], socPct: 40,
+    decision: plugDecision({ socPct: 40, reachPct: 47, bufferPct: 0, override: null }), override: null, amps: 8, raiseLimitTo: null,
+  };
+  const a = arrivalPlugAlert(base)!;
+  assert.equal(a.title, 'Plug in the Rivian');
+  assert.match(a.message, /At 40%\. Tomorrow needs 47%/);
+  assert.match(a.message, /8A from midnight/);
+  const no = arrivalPlugAlert({ ...base, socPct: 55, decision: plugDecision({ socPct: 55, reachPct: 47, bufferPct: 0, override: null }) })!;
+  assert.equal(no.title, 'No need to plug in');
+  assert.match(no.message, /At 55%, and tomorrow needs 47%/);
+  // errands after work still count; the next morning does not
+  assert.ok(arrivalPlugAlert({ ...base, nowMs: end + 7 * 3_600_000 }));
+  assert.equal(arrivalPlugAlert({ ...base, nowMs: end + 9 * 3_600_000 }), null);
+  assert.equal(arrivalPlugAlert({ ...base, shiftEndsMs: [] }), null);
+  // once a day
+  assert.equal(arrivalPlugAlert({ ...base, sent: new Set([a.key]) }), null);
+  // unknown SoC: plug in to be safe
+  assert.equal(arrivalPlugAlert({ ...base, socPct: null, decision: plugDecision({ socPct: null, reachPct: 47, bufferPct: 0, override: null }) })!.title, 'Plug in the Rivian');
+});
+
+test('unplugged-after-shift reminder only when the car needs the charge', () => {
+  const done = { forecast: today, update: today };
+  const end = at('2026-11-12T17:00:00-08:00');
+  const c = { done, atHome: true, plugged: false, lastShiftEndMs: end, nowMs: end + 31 * 60_000 };
+  assert.ok(keys(ctx({ ...c, plugNeeded: true })).includes('unplugged-after-shift'));
+  assert.ok(!keys(ctx({ ...c, plugNeeded: false })).includes('unplugged-after-shift'));
 });

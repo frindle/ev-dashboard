@@ -26,7 +26,7 @@ import {
 } from '@/lib/rivianSchedule';
 import { fetchRivianChargingSchedules, setRivianChargingSchedules } from '@/lib/rivian';
 import { sendPush } from '@/lib/pushover';
-import { planAlerts, pruneSent } from '@/lib/planAlerts';
+import { arrivalPlugAlert, planAlerts, plugDecision, pruneSent } from '@/lib/planAlerts';
 import { readPlanStore, writePlanStore, type PlanStore } from '@/lib/planAlertStore';
 import { dailyNeedKwhOf, fetchForecast, rivianNightPlan, RIVIAN_MAX_AMPS, RIVIAN_MIN_AMPS, type RivianPlanRun } from '@/lib/rivianNightPlan';
 import type { NightPlan } from '@/lib/chargePlan';
@@ -88,7 +88,7 @@ function atHomeOf(run: RivianPlanRun): boolean | null {
   return metersBetween(lat, lon, home.lat, home.lon) <= home.radiusMeters;
 }
 
-async function runOnce(now: number): Promise<RivianChargeStatus> {
+async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus> {
   const status: RivianChargeStatus = {
     atMs: now, dailyNeedKwh: null, need: null, need7: null, daily: null, night: null, conflict: false, slot: null,
     override: null, overridePlan: null, controlEnabled: process.env.RIVIAN_SCHEDULE_CONTROL === '1',
@@ -167,6 +167,10 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
 
     // Pushes (the missed-write ones only mean something with writing on).
     const lastEnd = run.shifts.filter((s) => s.day === today).reduce<number | null>((m, s) => (m === null || s.endMs > m ? s.endMs : m), null);
+    const ov = activeOverride ? { targetPct: activeOverride.targetPct, byMs: activeOverride.byMs } : null;
+    const plug = plugDecision({
+      socPct: run.state?.chargePercent ?? null, reachPct: plan?.reachPct ?? null, bufferPct: plan?.bufferPct ?? 0, override: ov,
+    });
     const alerts = planAlerts({
       nowMs: now, today,
       done: status.controlEnabled ? store.done : { forecast: today, update: today },
@@ -177,10 +181,17 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
       atHome: atHomeOf(run), plugged: run.state?.isPluggedIn ?? null,
       lastShiftEndMs: lastEnd, isOffDay: !!run.workDays && !run.workDays.has(today),
       needsCharge: !!plan && plan.amps !== null && plan.totalPct > 0,
+      plugNeeded: plug.needed,
       limitPct: run.state?.chargeLimit ?? null, notChargingPush,
       serveDay: built?.serveDay ?? today, dashboardUrl: process.env.DASHBOARD_URL ?? null,
     });
-    for (const a of [...alerts, ...(trips?.alerts ?? [])] as Alert[]) {
+    // Arrival home (the dashboard poll sees the car approach): plug in or not, once after a shift.
+    const arrival = arrived ? arrivalPlugAlert({
+      nowMs: now, today, sent: new Set(Object.keys(store.sent)), shiftEndsMs: run.shifts.map((s) => s.endMs),
+      socPct: run.state?.chargePercent ?? null, decision: plug, override: ov,
+      amps: plan?.amps ?? null, raiseLimitTo: plan?.raiseLimitTo ?? null,
+    }) : null;
+    for (const a of [...alerts, ...(arrival ? [arrival] : []), ...(trips?.alerts ?? [])] as Alert[]) {
       if (await sendPush(a.title, a.message, a.priority, a.link)) store.sent[a.key] = now;
     }
     store.conflictOpenDay = status.conflict && built ? built.serveDay : null;
@@ -249,7 +260,7 @@ let lastRunMs = 0;
 let inFlight: Promise<RivianChargeStatus> | null = null;
 
 // Resolves to the latest status (a fresh run when due or forced).
-export async function runRivianChargeControl(opts: { force?: boolean } = {}): Promise<RivianChargeStatus | null> {
+export async function runRivianChargeControl(opts: { force?: boolean; arrived?: boolean } = {}): Promise<RivianChargeStatus | null> {
   if (inFlight) {
     if (!opts.force) return inFlight;
     await inFlight.catch(() => {});
@@ -258,6 +269,6 @@ export async function runRivianChargeControl(opts: { force?: boolean } = {}): Pr
   const now = Date.now();
   if (!opts.force && last && now - lastRunMs < RUN_INTERVAL_MS) return last;
   lastRunMs = now;
-  inFlight = runOnce(now).then((s) => { last = s; void recordPlan('rivian', planFields(s), s.atMs); return s; }).finally(() => { inFlight = null; });
+  inFlight = runOnce(now, !!opts.arrived).then((s) => { last = s; void recordPlan('rivian', planFields(s), s.atMs); return s; }).finally(() => { inFlight = null; });
   return inFlight;
 }

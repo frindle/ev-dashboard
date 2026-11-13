@@ -359,6 +359,7 @@ export interface NightPlan {
   bufferPct: number;          // short-night buffer added
   totalPct: number;
   targetPct: number | null;   // SoC the morning should reach (soc + totalPct)
+  reachPct: number | null;    // arrival floor + the day's use x margin (what the morning needs); null without a floor
   endPct: number | null;      // SoC the car really ends at: the whole window at `amps`, stopped by the limit
   gapPct: number | null;      // limit - soc
   kwh: number;                // totalPct x kwhPerPct, wall kWh
@@ -439,6 +440,7 @@ export function nightPlan(p: NightPlanInput): NightPlan {
     bufferPct,
     totalPct,
     targetPct: soc === null ? null : soc + totalPct,
+    reachPct: own.reachTargetPct,
     endPct: soc === null || amps === null ? null
       : Math.max(soc, Math.min(limit ?? 100, soc + (amps * (CHARGE_VOLTS / 1000) * hours) / p.kwhPerPct)),
     gapPct: own.gapPct,

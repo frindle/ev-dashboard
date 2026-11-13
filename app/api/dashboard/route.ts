@@ -67,6 +67,8 @@ export interface VehicleData {
 // resets once the vehicle leaves (atHome false) so the next arrival fires again.
 const RIVIAN_ARRIVAL_FLAG_FILE = 'rivian-arrival-notified.json';
 const TESLA_ARRIVAL_FLAG_FILE = 'tesla-arrival-notified.json';
+// Plug-in-or-not push on the Rivian's arrival (any time of day, no webhook needed).
+const RIVIAN_ARRIVAL_PUSH_FLAG_FILE = 'rivian-arrival-push.json';
 
 // ponytail: module-level in-memory lock, not cross-process — fine here since
 // this route always runs in a single Next.js server process. Guards against
@@ -101,8 +103,11 @@ function isDarkEnoughForLights(w: WeatherData | null): boolean {
   return now >= (w.sunsetMs - SUNSET_BUFFER_MS) || now <= w.sunriseMs;
 }
 
-async function checkVehicleArrival(webhookUrl: string, flagFile: string, isDriving: boolean, atHome: boolean | null, label: string): Promise<void> {
-  if (!webhookUrl) return;
+// `fire` marks the flag (writes `path`) when it succeeds; null = nothing to fire.
+type ArrivalFire = ((path: string) => Promise<void>) | null;
+
+async function checkVehicleArrival(fire: ArrivalFire, flagFile: string, isDriving: boolean, atHome: boolean | null): Promise<void> {
+  if (!fire) return;
   if (arrivalCheckInFlight.has(flagFile)) return; // a concurrent request is already handling this vehicle
   arrivalCheckInFlight.add(flagFile);
 
@@ -117,10 +122,19 @@ async function checkVehicleArrival(webhookUrl: string, flagFile: string, isDrivi
     }
     if (!isDriving || wasNotified) return;
 
-    await fireArrivalWebhook(webhookUrl, path, label);
+    await fire(path);
   } finally {
     arrivalCheckInFlight.delete(flagFile);
   }
+}
+
+const webhookFire = (url: string, label: string): ArrivalFire => (url ? (path) => fireArrivalWebhook(url, path, label) : null);
+
+// Marks the flag first (one push per arrival), then runs the charge plan with
+// the car home; it pushes plug in or not when the arrival follows a shift.
+async function fireArrivalPush(path: string): Promise<void> {
+  await writeFile(path, String(Date.now())).catch(() => null);
+  void runRivianChargeControl({ force: true, arrived: true });
 }
 
 async function fireArrivalWebhook(webhookUrl: string, path: string, label: string): Promise<void> {
@@ -1001,7 +1015,8 @@ async function handleGet(req: Request) {
   // sitting at home, which the flag file already suppresses.
   const rivianApproaching = computeApproaching(rivianState?.lat, rivianState?.lon);
   const darkEnough = isDarkEnoughForLights(weather);
-  if (rivianState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive' && darkEnough, rivianHome.fresh ? rivianApproaching : null, 'rivian');
+  if (rivianState) await checkVehicleArrival(webhookFire(cfg.home.arrivalWebhookUrl, 'rivian'), RIVIAN_ARRIVAL_FLAG_FILE, rivianState.gearStatus === 'drive' && darkEnough, rivianHome.fresh ? rivianApproaching : null);
+  if (rivianState) await checkVehicleArrival(fireArrivalPush, RIVIAN_ARRIVAL_PUSH_FLAG_FILE, rivianState.gearStatus === 'drive', rivianHome.fresh ? rivianApproaching : null);
 
   // Drive + daily-use log (#6). Location only decides at_home and a salted
   // cell hash inside the logger; nothing here is stored or returned.
@@ -1014,7 +1029,7 @@ async function handleGet(req: Request) {
   // hardcoded behavior) when gearStatus is unknown/empty rather than false --
   // an unset signal shouldn't ever suppress a real arrival.
   const teslaIsDriving = teslaState?.gearStatus ? teslaState.gearStatus === 'drive' : true;
-  if (teslaState) await checkVehicleArrival(cfg.home.arrivalWebhookUrl, TESLA_ARRIVAL_FLAG_FILE, teslaIsDriving && darkEnough, teslaHome.fresh ? teslaHome.atHome : null, 'tesla');
+  if (teslaState) await checkVehicleArrival(webhookFire(cfg.home.arrivalWebhookUrl, 'tesla'), TESLA_ARRIVAL_FLAG_FILE, teslaIsDriving && darkEnough, teslaHome.fresh ? teslaHome.atHome : null);
 
   // Usage estimate for the live-map tile (VehicleCard.tsx renders one
   // whenever a vehicle is away with known coordinates -- mirror that exact
