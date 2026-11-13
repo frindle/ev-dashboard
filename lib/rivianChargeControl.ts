@@ -253,7 +253,7 @@ async function runOnce(now: number, arrived = false): Promise<RivianChargeStatus
     // Once a day after 08:00: score the last served day against the plan (never throws).
     const cfg = readConfig();
     await runScorer(now, store, {
-      workDays: run.workDays, floorPct: arrivalFloorOf(cfg.vehicles.rivian).arrivalFloorPct,
+      workDays: run.workDays, floorPct: arrivalFloorOf(cfg.vehicles.rivian).arrivalFloorPct ?? 25,
       lat: cfg.weather.lat ?? cfg.home.lat, lon: cfg.weather.lon ?? cfg.home.lon,
     });
 
