@@ -18,6 +18,7 @@ test('parseTitle: numbers, units, auto, and 0 / junk unreadable', () => {
   assert.deepEqual(parseTitle('70'), { kind: 'need', need: { value: 70, unit: 'mi' } });
   assert.deepEqual(parseTitle('EV auto'), { kind: 'auto' });
   assert.deepEqual(parseTitle('Forecast'), { kind: 'auto' });
+  assert.deepEqual(parseTitle('EV 50 mi (set 20, below forecast)'), { kind: 'need', need: { value: 50, unit: 'mi' } });
   assert.deepEqual(parseTitle('EV 0'), { kind: 'unreadable' });
   assert.deepEqual(parseTitle('EV 0%'), { kind: 'unreadable' });
   assert.deepEqual(parseTitle('EV lots'), { kind: 'unreadable' });

@@ -64,7 +64,10 @@ export async function discoverCollection(cfg: CalConfig, fetchImpl: FetchLike): 
     const href = tag(r, 'href');
     const shown = tag(r, 'displayname');
     const isCal = /<(?:\w+:)?calendar(?:\s[^>]*)?\/?>/.test(tag(r, 'resourcetype') ?? '');
-    if (href && shown !== undefined && isCal && unxml(shown).trim().toLowerCase() === want) {
+    // Nextcloud shows a calendar shared to this user as "<name> (<owner's display name>)".
+    const name = shown === undefined ? null : unxml(shown).trim().toLowerCase();
+    const match = name !== null && (name === want || (name.startsWith(`${want} (`) && name.endsWith(')')));
+    if (href && isCal && match) {
       const c = new URL(unxml(href), cfg.origin);
       if (!c.pathname.endsWith('/')) c.pathname += '/';
       return c.toString();

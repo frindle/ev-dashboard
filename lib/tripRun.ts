@@ -49,7 +49,7 @@ export interface DayView {
   adj: Adjusted | null;
   baseNeedPct: number;
   highF: number | null;
-  manual: ManualNeed | null;              // the day's need typed on /trips: replaces the trip estimate
+  manual: ManualNeed | null;              // the day's need typed on /trips: replaces the trip estimate when higher
   byMs: number | null;                    // when the car must be ready (the plan's departure, else a default for a typed need)
 }
 
@@ -146,7 +146,9 @@ export async function computeTrips(run: RivianPlanRun, nowMs: number, opts: { re
     const manual = needs[String(day)] ?? null;
     if (manual) {
       highF = highF ?? await highFor(day, nowMs);
-      adj = manualAdjust({ baseNeedPct, pct: manual.unit === 'mi' ? pctForMiles(manual.value, highF) : manual.value });
+      // It only raises: a typed need under the trip estimate leaves the trip estimate in place.
+      const typed = manualAdjust({ baseNeedPct, pct: manual.unit === 'mi' ? pctForMiles(manual.value, highF) : manual.value });
+      if (!adj || typed.needPct >= adj.needPct) adj = typed;
     }
     const timed = dayEvents.filter((e) => !e.allDay).map((e) => e.startMs);
     const byMs = plan?.departMs ?? (manual

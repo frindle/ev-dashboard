@@ -51,9 +51,9 @@ export type TitleEdit =
 // % or "pct"/"percent" after it = percent, anything else (mi, miles, nothing) = miles.
 export function parseTitle(summary: string): TitleEdit {
   const t = summary.trim().toLowerCase();
-  if (/\b(auto|forecast)\b/.test(t)) return { kind: 'auto' };
   const m = /(\d+(?:\.\d+)?)\s*(%|pct\b|percent\b)?/.exec(t);
-  if (!m) return { kind: 'unreadable' };
+  // 'auto' only when no number: "EV 50 mi (set 20, below forecast)" is 50 mi, not auto.
+  if (!m) return /\b(auto|forecast)\b/.test(t) ? { kind: 'auto' } : { kind: 'unreadable' };
   const unit: ManualNeed['unit'] = m[2] ? 'pct' : 'mi';
   const value = Math.round(Number(m[1]));
   if (!Number.isFinite(value) || value <= 0 || value > MANUAL_MAX[unit]) return { kind: 'unreadable' };
