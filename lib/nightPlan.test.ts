@@ -22,12 +22,23 @@ test('ampsFor: hours argument, zero hours -> max', () => {
   assert.equal(ampsFor(10, 6, 48, 0), 48);
 });
 
-test('example: work night at 50% -> 14A, target 67%', () => {
-  const p = nightPlan({ ...base, isWork: true, socPct: 50, usePct: USE });
-  assert.ok(Math.abs(p.needPct - 17.05) < 1e-9);
-  assert.equal(p.amps, 14);
-  assert.ok(Math.abs(p.targetPct! - 67.05) < 1e-9);
+test('example: work night at 30% -> reach 42% -> 10A, the car ends near 43%', () => {
+  const p = nightPlan({ ...base, isWork: true, socPct: 30, usePct: USE });
+  assert.ok(Math.abs(p.needPct - 12.05) < 1e-9);
+  assert.equal(p.amps, 10);
+  assert.ok(Math.abs(p.targetPct! - 42.05) < 1e-9);
+  assert.ok(Math.abs(p.endPct! - (30 + (10 * 0.24 * 8) / 1.44)) < 1e-9);
   assert.equal(p.shortfall, false);
+});
+
+test('example: work night at 50% is past the reach -> 6A minimum, the car stops at its limit', () => {
+  const p = nightPlan({ ...base, isWork: true, socPct: 50, usePct: USE });
+  assert.equal(p.needPct, 0);
+  assert.equal(p.amps, 6);
+  assert.equal(p.targetPct, 50);
+  assert.ok(Math.abs(p.endPct! - 58) < 1e-9);
+  const high = nightPlan({ ...base, isWork: true, socPct: 65, usePct: USE });
+  assert.equal(high.endPct, 70);
 });
 
 test('example: work night at 20% must reach 42% -> 18A', () => {
@@ -37,9 +48,9 @@ test('example: work night at 20% must reach 42% -> 18A', () => {
   assert.equal(p.amps, 18);
 });
 
-test('example: off night at 40%, day 10% -> 16A', () => {
-  const p = nightPlan({ ...base, isWork: false, socPct: 40, usePct: 10 });
-  assert.ok(Math.abs(p.needPct - 20) < 1e-9);
+test('example: off night at 15%, day 10% -> reach 36% -> 16A', () => {
+  const p = nightPlan({ ...base, isWork: false, socPct: 15, usePct: 10 });
+  assert.ok(Math.abs(p.needPct - 21) < 1e-9);
   assert.equal(p.amps, 16);
 });
 
@@ -55,8 +66,8 @@ test('example: the night before that late shift adds about 3 kWh (+2A)', () => {
   const shifts = [shift(D, 17, 0, 0, 30)];
   const next = nightWindow(D + 1, [{ ...shifts[0], day: D }]);
   assert.ok(next.hours < 8 && next.hours > 7);
-  const own = nightPlan({ ...base, isWork: true, socPct: 50, usePct: USE });
-  const withNext = nightPlan({ ...base, isWork: true, socPct: 50, usePct: USE, next: { hours: next.hours, usePct: USE, isWork: true } });
+  const own = nightPlan({ ...base, isWork: true, socPct: 30, usePct: USE });
+  const withNext = nightPlan({ ...base, isWork: true, socPct: 30, usePct: USE, next: { hours: next.hours, usePct: USE, isWork: true } });
   assert.ok(withNext.bufferPct > 1.5 && withNext.bufferPct < 2.5);
   assert.ok(Math.abs((withNext.kwh - own.kwh) - 3) < 0.6);
   assert.equal(withNext.amps! - own.amps!, 2);
@@ -79,16 +90,19 @@ test('limit cap: reach above the limit raises raiseLimitTo, target stays at the 
   assert.ok(p.targetPct! <= 70 + 1e-9);
 });
 
-test('heat cap: top-up stops at 60% on work nights, the reach still applies', () => {
+test('heat cap: only plans without a floor top up to 60%; with the floor the car limit is the stop', () => {
   assert.equal(topUpLimitFor(95), 60);
   assert.equal(topUpLimitFor(85), null);
   assert.equal(topUpLimitFor(null), null);
-  const hot = nightPlan({ ...base, isWork: true, socPct: 55, usePct: USE, topUpLimitPct: 60 });
-  assert.ok(Math.abs(hot.targetPct! - 60) < 1e-9);
-  const reach = nightPlan({ ...base, isWork: true, socPct: 20, usePct: USE, topUpLimitPct: 60 });
-  assert.ok(Math.abs(reach.targetPct! - 42.05) < 1e-9);
-  const off = nightPlan({ ...base, isWork: false, socPct: 55, usePct: 10, topUpLimitPct: 60 });
-  assert.ok(off.targetPct! > 60);
+  const noFloor = nightPlan({ ...base, floorPct: 0, isWork: true, socPct: 55, usePct: USE, topUpLimitPct: 60 });
+  assert.ok(Math.abs(noFloor.targetPct! - 60) < 1e-9);
+  const offNoFloor = nightPlan({ ...base, floorPct: 0, isWork: false, socPct: 55, usePct: 10, topUpLimitPct: 60 });
+  assert.ok(offNoFloor.targetPct! > 60);
+  const hot = nightPlan({ ...base, isWork: true, socPct: 20, usePct: USE, topUpLimitPct: 60 });
+  const mild = nightPlan({ ...base, isWork: true, socPct: 20, usePct: USE });
+  assert.ok(Math.abs(hot.targetPct! - 42.05) < 1e-9);
+  assert.equal(hot.amps, mild.amps);
+  assert.equal(hot.endPct, mild.endPct);
 });
 
 test('nightWindow: conflict flag, fewest hours is the safe reading', () => {

@@ -136,17 +136,17 @@ test('buildRivianPlan: no history -> null; with history, tomorrow work day plans
   const tomorrow = localDayNumber(now) + 1;
   const est = { ewmaKwh: 22, plannedKwh: 22, rates: { workKwh: 22.3, offKwh: 14 }, nextDayWork: true } as any;
   const common = {
-    nowMs: now, shifts: [], workDays: new Set([tomorrow]), state: { chargePercent: 50, chargeLimit: 70, isPluggedIn: true },
+    nowMs: now, shifts: [], workDays: new Set([tomorrow]), state: { chargePercent: 30, chargeLimit: 70, isPluggedIn: true },
     kwhPerPct: 1.44, floorPct: 25, margin: 1.1, forecastHighF: null, minAmps: 6, maxAmps: 48,
   };
   assert.equal(buildRivianPlan({ ...common, est: null }), null);
   const b = buildRivianPlan({ ...common, est })!;
   assert.equal(b.serveDay, tomorrow);
   assert.equal(b.result.isWork, true);
-  assert.equal(b.socUsed, 50);
-  assert.equal(b.result.plan.amps, 14);
-  const hot = buildRivianPlan({ ...common, est, state: { chargePercent: 50, chargeLimit: 70, isPluggedIn: true }, forecastHighF: 95 })!;
-  assert.ok(hot.result.plan.targetPct! <= 60 + 1e-9);
+  assert.equal(b.socUsed, 30);
+  assert.equal(b.result.plan.amps, 10);
+  const hot = buildRivianPlan({ ...common, est, forecastHighF: 95 })!;   // a hot day plans the same: the car's limit is the stop
+  assert.equal(hot.result.plan.amps, b.result.plan.amps);
 });
 
 test('buildRivianPlan: daily-use override plans without history; a null side falls back to history', () => {
