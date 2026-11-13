@@ -51,6 +51,23 @@ test('storage: percent used, parity left out of the total, spinning count, array
   assert.ok(!('t' in s.d.find((d: any) => d.n === 'cache'))); // missing numbers are left out
 });
 
+test('storage: a two-SSD cache pool is one "cache" row with the pool use, hottest temp, spinning if either is', () => {
+  const rows = [
+    ...DISK_ROWS.filter((r) => r[4] !== 'cache'),
+    [iso(30), 'unraid_disk', 'fs_size_kb', '2000000000', 'cache', 'cache'],
+    [iso(30), 'unraid_disk', 'fs_used_kb', '1420000000', 'cache', 'cache'],
+    [iso(30), 'unraid_disk', 'temp_c', '33', 'cache', 'cache'],
+    [iso(30), 'unraid_disk', 'spinning', '0', 'cache', 'cache'],
+    [iso(30), 'unraid_disk', 'temp_c', '36', 'cache2', 'cache'],
+    [iso(30), 'unraid_disk', 'spinning', '1', 'cache2', 'cache'],
+  ] as typeof DISK_ROWS;
+  const s = parseStorage(parseFluxCsv(csv(rows)), Math.floor(NOW / 1000)) as Record<string, any>;
+  const caches = s.d.filter((d: any) => d.r === 'c');
+  assert.deepEqual(caches, [{ n: 'cache', r: 'c', u: 71, sp: 1, t: 36 }]);
+  assert.equal(s.nd, 3);
+  assert.deepEqual(s.tot, { s: 10000, u: 7420 }); // pool size counted once
+});
+
 test('storage: old Influx points mark the section stale; no rows means ok=0', () => {
   const old = DISK_ROWS.map((r) => [iso(3600), ...r.slice(1)] as typeof r);
   assert.equal(parseStorage(parseFluxCsv(csv(old)), Math.floor(NOW / 1000)).st, 1);
@@ -147,7 +164,7 @@ test('aggregator: a failing source shows its last good copy as stale for a while
 test('alert level: red for a silent Mac, a stopped array, parity errors or an unread Unraid alert; amber for the rest', () => {
   const g = { bl: ok({ m: [], al: 0 }), nw: ok({ src: 'wan', l: [{ d: 5, u: 1 }] }), sd: ok({ arr: 'STARTED', d: [] }), ev: ok() };
   assert.equal(alertLevel(g).lvl, 'g');
-  assert.deepEqual(alertLevel({ ...g, bl: ok({ m: [{ n: 'm4', sl: 1 }], al: 1 }) }), { lvl: 'r', why: ['silent:m4'] });
+  assert.deepEqual(alertLevel({ ...g, bl: ok({ m: [{ n: 'm4', sl: 1 }], al: 1 }) }), { lvl: 'r', why: ['silent:m4'], go: 'bl' });
   assert.equal(alertLevel({ ...g, sd: ok({ arr: 'STOPPED' }) }).lvl, 'r');
   assert.equal(alertLevel({ ...g, sd: ok({ arr: 'STARTED', pe: 2 }) }).lvl, 'r');
   assert.equal(alertLevel({ ...g, sd: ok({ arr: 'STARTED', na: 1 }) }).lvl, 'r');
@@ -156,6 +173,14 @@ test('alert level: red for a silent Mac, a stopped array, parity errors or an un
   assert.equal(alertLevel({ ...g, bl: ok({ m: [], al: 1 }) }).lvl, 'a'); // ring snapshot stale
   assert.equal(alertLevel({ ...g, nw: ok({ src: 'wan', l: [{ d: 0, u: 0 }] }) }).lvl, 'a');
   assert.equal(alertLevel({ ...g, ev: ok({ sf: 1 }) }).lvl, 'a');
+  // cache pool: amber from 80%, red (and jump to storage) from 90%; data disks at 95%+ stay amber
+  assert.deepEqual(alertLevel({ ...g, sd: ok({ arr: 'STARTED', d: [{ n: 'cache', r: 'c', u: 85 }] }) }), { lvl: 'a', why: ['cache:85%'] });
+  assert.deepEqual(alertLevel({ ...g, sd: ok({ arr: 'STARTED', d: [{ n: 'cache', r: 'c', u: 92 }] }) }), { lvl: 'r', why: ['cache:92%'], go: 'sd' });
+  assert.deepEqual(alertLevel({ ...g, sd: ok({ arr: 'STARTED', d: [{ n: 'cache', r: 'c', u: 71 }, { n: 'disk1', r: 'd', u: 96 }] }) }), { lvl: 'a', why: ['full:disk1'] });
+  // go points at the first red reason's section; amber never sets it
+  assert.equal(alertLevel({ ...g, bl: ok({ m: [{ n: 'm4', sl: 1 }], al: 1 }), sd: ok({ arr: 'STOPPED' }) }).go, 'bl');
+  assert.equal(alertLevel({ ...g, sd: ok({ arr: 'STARTED', pe: 1 }) }).go, 'sd');
+  assert.ok(!('go' in alertLevel({ ...g, ev: ok({ sf: 1 }) })));
   assert.ok(alertLevel({ ...g, bl: ok({ m: [{ n: 'a', sl: 1 }, { n: 'b', sl: 1 }], al: 2 }), sd: ok({ arr: 'STOPPED' }), ev: down() }).why.length <= 3);
 });
 

@@ -9,11 +9,13 @@
 //   v   format version (1)                       t   server time, epoch seconds
 //   lvl overall alert level: "g" green, "a" amber, "r" red
 //   why up to 3 short reasons for amber/red, e.g. "silent:m4max", "array:STOPPED", "wan:down", "src:nw"
+//   go  only on red: the section the panel jumps to, "bl" (a silent Mac) or "sd" (array, parity, cache >= 90%)
 //   bl  Darkbloom per Mac:  m: [{ n name, on 1 serving, s state text, w watts, jobs sandbox jobs,
 //                                 td earned today (cents), tm earned this month (cents), age seconds since last
 //                                 power minute, sl 1 silent (alert) }],   al: open bloom-ledger alert count
 //   nw  network:            src "wan" | "unraid",  l: [{ n name, d down Mbps, u up Mbps }]
 //   sd  storage:            tot: { s size GB, u used GB },  d: [{ n name, r role d|c|p, u used %, sp 1 spinning,
+//                                 (a multi-SSD cache pool is one "cache" row)
 //                                 t temp C }],  spin spinning disk count, nd disk count,  arr array state,
 //                                 par 1 parity check running, pp parity progress %, pe parity errors,
 //                                 na unread Unraid alert notifications, nwn unread warnings
@@ -117,6 +119,7 @@ export function parseStorage(rows: FluxRow[], nowS: number): Section {
       _sz: size, _us: used,
     });
   }).sort((a, b) => a.n.localeCompare(b.n, undefined, { numeric: true }));
+  mergeCachePool(list);
   // Parity holds no files: leave it out of the capacity total.
   let s = 0, u = 0;
   for (const d of list) {
@@ -140,6 +143,28 @@ export function parseStorage(rows: FluxRow[], nowS: number): Section {
       nwn: rnd(arr.notif_unread_warning),
     }),
   };
+}
+
+// Unraid reports each SSD of a pool as its own disk, but only the first carries the pool's size and use. Show the
+// pool as one "cache" row: use % from the members that report size, hottest member's temp, spinning if any is.
+type DiskRow = { n: string; r: string; u?: number; sp?: number; t?: number; _sz?: unknown; _us?: unknown };
+function mergeCachePool(list: DiskRow[]): void {
+  const members = list.filter((d) => d.r === 'c');
+  if (members.length < 2) return;
+  let sz = 0, us = 0;
+  for (const m of members) if (typeof m._sz === 'number' && typeof m._us === 'number') { sz += m._sz; us += m._us; }
+  const temps = members.map((m) => m.t).filter((t): t is number => t !== undefined);
+  const spin = members.map((m) => m.sp).filter((x): x is number => x !== undefined);
+  const pool = compact({
+    n: 'cache', r: 'c',
+    u: sz ? Math.round((us / sz) * 100) : undefined,
+    sp: spin.length ? (spin.some((x) => x === 1) ? 1 : 0) : undefined,
+    t: temps.length ? Math.max(...temps) : undefined,
+    _sz: sz || undefined, _us: sz ? us : undefined,
+  }) as DiskRow;
+  const at = list.indexOf(members[0]);
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].r === 'c') list.splice(i, 1);
+  list.splice(at, 0, pool);
 }
 
 // ---------- network ----------
@@ -236,19 +261,29 @@ export function parseEv(i: EvInput | null): Section {
 
 // ---------- alert level ----------
 
-export function alertLevel(sec: { bl: Section; nw: Section; sd: Section; ev: Section }): { lvl: Level; why: string[] } {
+export const CACHE_AMBER_PCT = 80;
+export const CACHE_RED_PCT = 90;
+
+// go: the section the panel jumps to on red ("bl" Darkbloom, "sd" storage), from the first red reason.
+export function alertLevel(sec: { bl: Section; nw: Section; sd: Section; ev: Section }): { lvl: Level; why: string[]; go?: string } {
   const red: string[] = [], amber: string[] = [];
+  let go: string | undefined;
   const bl = sec.bl as Section & { m?: { n: string; sl?: number }[]; al?: number };
-  for (const m of bl.m ?? []) if (m.sl) red.push(`silent:${m.n}`);
+  for (const m of bl.m ?? []) if (m.sl) { red.push(`silent:${m.n}`); go ??= 'bl'; }
   if (bl.ok && (bl.al ?? 0) > 0 && !red.length) amber.push(`bloom:${bl.al}`);
-  const sd = sec.sd as Section & { arr?: string; pe?: number; na?: number; nwn?: number; d?: { n: string; u?: number }[] };
+  const sd = sec.sd as Section & { arr?: string; pe?: number; na?: number; nwn?: number; d?: { n: string; r?: string; u?: number }[] };
   if (sd.ok) {
+    const n = red.length;
     if (sd.arr && sd.arr.toUpperCase() !== 'STARTED') red.push(`array:${sd.arr}`);
     if ((sd.pe ?? 0) > 0) red.push('parity:err');
+    const cache = (sd.d ?? []).find((d) => d.r === 'c' && d.u !== undefined);
+    if (cache && (cache.u ?? 0) >= CACHE_RED_PCT) red.push(`cache:${cache.u}%`);
     if ((sd.na ?? 0) > 0) red.push(`unraid:${sd.na}!`);
     else if ((sd.nwn ?? 0) > 0) amber.push(`unraid:${sd.nwn}w`);
-    const full = (sd.d ?? []).find((d) => (d.u ?? 0) >= 95);
+    if (cache && (cache.u ?? 0) >= CACHE_AMBER_PCT && (cache.u ?? 0) < CACHE_RED_PCT) amber.push(`cache:${cache.u}%`);
+    const full = (sd.d ?? []).find((d) => d.r !== 'c' && (d.u ?? 0) >= 95);
     if (full) amber.push(`full:${full.n}`);
+    if (red.length > n) go ??= 'sd';
   }
   const nw = sec.nw as Section & { l?: { d?: number; u?: number }[] };
   if (nw.ok && nw.src === 'wan' && (nw.l ?? []).length && (nw.l ?? []).every((x) => (x.d ?? 0) < 0.01 && (x.u ?? 0) < 0.01)) amber.push('wan:idle');
@@ -257,7 +292,7 @@ export function alertLevel(sec: { bl: Section; nw: Section; sd: Section; ev: Sec
     if (!sec[k].ok) amber.push(`src:${k}`);
     else if (sec[k].st) amber.push(`old:${k}`);
   }
-  if (red.length) return { lvl: 'r', why: [...red, ...amber].slice(0, 3) };
+  if (red.length) return { lvl: 'r', why: [...red, ...amber].slice(0, 3), ...(go ? { go } : {}) };
   if (amber.length) return { lvl: 'a', why: amber.slice(0, 3) };
   return { lvl: 'g', why: [] };
 }
@@ -268,7 +303,7 @@ export type SourceFn = () => Promise<Section>;
 export interface Sources { bl: SourceFn; nw: SourceFn; sd: SourceFn; ev: SourceFn }
 
 export interface PanelBody {
-  v: 1; t: number; lvl: Level; why: string[];
+  v: 1; t: number; lvl: Level; why: string[]; go?: string;
   bl: Section; nw: Section; sd: Section; ev: Section;
 }
 
@@ -301,8 +336,8 @@ export async function buildPanel(src: Sources, opts: AggOpts = {}): Promise<Pane
     return { ok: 0, st: 0 };
   }));
   const [bl, nw, sd, ev] = out;
-  const { lvl, why } = alertLevel({ bl, nw, sd, ev });
-  return { v: 1, t: Math.floor(nowMs / 1000), lvl, why, bl, nw, sd, ev };
+  const { lvl, why, go } = alertLevel({ bl, nw, sd, ev });
+  return { v: 1, t: Math.floor(nowMs / 1000), lvl, why, ...(go ? { go } : {}), bl, nw, sd, ev };
 }
 
 // A 15 s cache around buildPanel; concurrent requests share one in-flight build.
