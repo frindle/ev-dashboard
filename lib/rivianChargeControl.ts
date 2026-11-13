@@ -157,7 +157,9 @@ async function runOnce(now: number): Promise<RivianChargeStatus> {
       });
       if (step.lateSeen) store.lateSeen = built.serveDay;
       replanAmps = step.replanAmps;
-      notChargingPush = step.notChargingPush;
+      // The planned start only exists in the car when writing is on; with it off
+      // the car keeps its own schedule, so "not charging yet" is no problem.
+      notChargingPush = status.controlEnabled && step.notChargingPush;
     }
     // A conflict that was open and is now fixed may raise tonight's amps (never lower them).
     const fixed = store.conflictOpenDay !== null && !status.conflict;

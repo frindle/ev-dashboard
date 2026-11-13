@@ -1,5 +1,6 @@
-// GET ?q=<text>: places from the local geocoder (Nominatim on the LAN) for the
-// /trips search box. LAN-only like the rest of the app (no auth).
+// GET ?q=<text>: places for the /trips search box, from the LAN Nominatim and,
+// when that has no match (or NOMINATIM_URL is unset), the public one unless
+// GEO_ONLINE=0 (lib/geocode.ts searchPlaces). The app itself is LAN-only (no auth).
 import { NextRequest } from 'next/server';
 import { searchPlaces } from '@/lib/geocode';
 

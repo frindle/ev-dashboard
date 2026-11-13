@@ -2,7 +2,7 @@
 // (KEYS_DIR/plan-alerts.json): alerts already sent, the slots done, the target
 // the late-start replan aims at, and the cached forecast high.
 import { existsSync } from 'fs';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, rename, writeFile } from 'fs/promises';
 import { join } from 'path';
 import type { SlotsDone } from '@/lib/rivianSchedule';
 
@@ -34,6 +34,10 @@ export async function readPlanStore(): Promise<PlanStore> {
   }
 }
 
+// Written to a temp file and renamed, so a crash mid-write never leaves a torn
+// file (a torn file reads as empty and would re-send the day's alerts).
 export async function writePlanStore(s: PlanStore): Promise<void> {
-  await writeFile(storePath(), JSON.stringify(s));
+  const tmp = storePath() + '.tmp';
+  await writeFile(tmp, JSON.stringify(s));
+  await rename(tmp, storePath());
 }
