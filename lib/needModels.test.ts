@@ -187,28 +187,28 @@ test('simulate reach mode applies the margin to the minimum', () => {
   assert.ok(days.every((d) => !d.short));
 });
 
-test('simulate live mode follows nightPlan (put-back, catch-up, heat top-up cap)', () => {
-  // 14 history days + 3 scored work days of 20%; scored day 15 is 95F (heat cap 60%)
+test('simulate live mode follows nightPlan (reach target; the car runs the window to its limit)', () => {
+  // 14 history days + 3 scored work days of 20%; scored day 15 is 95F (no heat cap with the floor)
   const rows: DailyUse[] = [], work: string[] = [], drives: DriveIn[] = [];
   for (let i = 0; i < 17; i++) { rows.push(row(i, 20)); work.push(date(i)); drives.push(drive(i, 40, 15, i === 15 ? 95 : 70)); }
   const data = buildNeedData(rows, drives, work);
   const live = simulate(data, modelA(data), { limit: 70, floor: 25, mode: 'live' });
   assert.equal(live.length, 3);
-  // day 14: from 25%, need 20 -> reach 25 + 22 = 47 and put-back 25 + 22 = 47
-  const p0 = nightPlan({ isWork: true, socPct: 25, limitPct: 70, usePct: 20, margin: 1.1, floorPct: 25, windowHours: 8, kwhPerPct: 1.44, minAmps: 6, maxAmps: 48 });
-  assert.ok(Math.abs(live[0].morning - (25 + p0.totalPct)) < 1e-9);
+  // day 14: from 25%, need 20 -> reach 25 + 22 = 47 -> 18A; 8h at 18A puts in 24%, so the morning is 49
+  const plan = (soc: number, use: number) => nightPlan({ isWork: true, socPct: soc, limitPct: 70, usePct: use, margin: 1.1, floorPct: 25, windowHours: 8, kwhPerPct: 1.44, minAmps: 6, maxAmps: 48 });
+  const p0 = plan(25, live[0].need);
+  assert.ok(Math.abs(live[0].morning - p0.endPct!) < 1e-9);
   assert.equal(live[0].amps, p0.amps);
-  // day 15 starts at 27%; put-back 27 + 22 = 49 < 60 cap, so the cap doesn't bind yet
-  assert.ok(Math.abs(live[1].morning - 49) < 1e-9);
-  // a run that starts high on a hot day stops at 60, not 70
+  // day 15 starts where day 14 got home
+  assert.ok(Math.abs(live[1].morning - plan(live[0].arrival, live[1].need).endPct!) < 1e-9);
+  // a big need fills to the car's 70% limit, hot day or not
   const s2 = simulate(data, () => ({ pct: 40 }), { limit: 70, floor: 25, mode: 'live' });
-  // day 14: reach 25 + 44 = 69; day 15 (95F): from 49, put-back min(49 + 44, 60) = 60, reach 69 -> 69 (reach wins over the cap)
-  assert.ok(Math.abs(s2[0].morning - 69) < 1e-9);
-  assert.ok(Math.abs(s2[1].morning - 69) < 1e-9);
+  assert.ok(Math.abs(s2[0].morning - 70) < 1e-9);
+  assert.ok(Math.abs(s2[1].morning - 70) < 1e-9);
   const s3 = simulate(data, () => ({ pct: 5 }), { limit: 70, floor: 25, mode: 'live' });
-  // pct 5: reach 30.5; day 14 from 25 -> put-back 30.5; arrival 10.5; day 15 from 10.5 -> reach 30.5
-  assert.ok(Math.abs(s3[0].morning - 30.5) < 1e-9);
-  assert.ok(s3.every((d) => d.short));   // actual 20 > 5.5 each day
+  // pct 5: reach 30.5; from 25 the need is 5.5% -> 6A minimum, 8h puts in 8% -> 33
+  assert.ok(Math.abs(s3[0].morning - 33) < 1e-9);
+  assert.ok(s3.every((d) => d.short));   // actual 20 > the planned 5.5 each day
 });
 
 test('liveNeed: null under 5-of-7 coverage; worst drive-time temperature wins; off day from (a)', () => {

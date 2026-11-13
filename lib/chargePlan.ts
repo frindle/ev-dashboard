@@ -232,10 +232,18 @@ export function tonightPlan(p: TonightInput): TonightPlan {
 // kWh with kwhPerPct (measured at the charger, so it already holds pack size
 // and charging losses; the Tesla keeps tonightPlan above).
 //
-//  - Work night: put back the day x margin and be at floor + day x margin by
-//    morning, whichever is more (floor = the arrival floor, 25%).
-//  - Off night: the day plus half of the rest of the gap to the limit, and at
-//    least the floor (today's tonightPlan logic, in %).
+//  - With an arrival floor (the Rivian, 25%), the target is what tomorrow's
+//    forecast driving needs: floor + day x margin, so the car gets home at
+//    the floor (Penn 2026-11-13: "it should look at what tomorrow's forecast
+//    driving is and plan to get us to that, using minimum amps it can").
+//    The amps are the lowest that reach it. The car runs its schedule for the
+//    whole window at those amps and stops at its own limit (70%), which is
+//    the upper buffer ("use the car as the limiter"); so a night already past
+//    the target still gets the minimum amps, and endPct is where the morning
+//    really lands. The heat top-up cap doesn't apply here. This replaced the
+//    put-back on work nights and the catch-up on off nights (2026-11-07).
+//  - Without a floor: work nights put back the day x margin (capped by the
+//    heat top-up), off nights the day plus half of the rest of the gap.
 //  - Never above the limit; a reach target above it sets raiseLimitTo.
 //  - Short-night buffer: when the next night has < 8 planned hours, tonight
 //    adds next need x hours lost / 8, if the limit has room.
@@ -331,7 +339,7 @@ export interface NightPlanInput {
   usePct: number;                        // the day's expected use in %, no margin
   margin?: number;                       // x use for put-back and reach (default 1)
   floorPct?: number | null;              // arrival floor; null/absent = none
-  topUpLimitPct?: number | null;         // work nights stop topping up here (heat cap); the reach still applies
+  topUpLimitPct?: number | null;         // work nights stop topping up here (heat cap); plans without a floor only
   windowHours: number;
   next?: NightNext | null;
   kwhPerPct: number;
@@ -347,6 +355,7 @@ export interface NightPlan {
   bufferPct: number;          // short-night buffer added
   totalPct: number;
   targetPct: number | null;   // SoC the morning should reach (soc + totalPct)
+  endPct: number | null;      // SoC the car really ends at: the whole window at `amps`, stopped by the limit
   gapPct: number | null;      // limit - soc
   kwh: number;                // totalPct x kwhPerPct, wall kWh
   amps: number | null;        // null when the window has no hours
@@ -368,14 +377,15 @@ function needFor(p: {
   }
   const gap = Math.max(0, p.limit - p.soc);
   let target: number;
-  if (p.isWork) {
+  if (reach !== null) {
+    target = Math.min(reach, p.limit);   // reach only; a reach above the limit sets raiseLimitTo
+  } else if (p.isWork) {
     const cap = p.topUp === null ? p.limit : Math.min(p.limit, p.topUp);
     const putBack = Math.min(p.soc + day * p.margin, cap);
-    target = Math.max(putBack, reach === null ? 0 : Math.min(reach, p.limit));
+    target = putBack;
   } else {
     const catchUp = day + Math.max(0, gap - day) / CATCH_UP_NIGHTS;
-    target = Math.max(p.soc + catchUp, reach === null ? 0 : Math.min(reach, p.limit));
-    target = Math.min(target, Math.max(p.limit, p.soc));
+    target = Math.min(p.soc + catchUp, Math.max(p.limit, p.soc));
   }
   return { needPct: Math.max(0, target - p.soc), reachTargetPct: reach, gapPct: gap };
 }
@@ -415,6 +425,7 @@ export function nightPlan(p: NightPlanInput): NightPlan {
 
   const totalPct = own.needPct + bufferPct;
   const kwh = totalPct * p.kwhPerPct;
+  const amps = hours > 0 ? ampsForNeed(kwh, hours, p.minAmps, p.maxAmps) : null;
   const shortfallPct = Math.max(0, own.needPct - tonightMaxPct) + nextShort;
   return {
     isWork: p.isWork,
@@ -424,9 +435,11 @@ export function nightPlan(p: NightPlanInput): NightPlan {
     bufferPct,
     totalPct,
     targetPct: soc === null ? null : soc + totalPct,
+    endPct: soc === null || amps === null ? null
+      : Math.max(soc, Math.min(limit ?? 100, soc + (amps * (CHARGE_VOLTS / 1000) * hours) / p.kwhPerPct)),
     gapPct: own.gapPct,
     kwh,
-    amps: hours > 0 ? ampsForNeed(kwh, hours, p.minAmps, p.maxAmps) : null,
+    amps,
     raiseLimitTo,
     shortfallPct,
     shortfall: shortfallPct > 1e-9,

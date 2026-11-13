@@ -464,7 +464,7 @@ export function simulate(data: NeedData, needFn: NeedFn, opts: WalkOptions = {})
         topUpLimitPct: isWork ? topUpLimitFor(data.dayTempMax.get(date)) : null, windowHours: hours, kwhPerPct,
         minAmps: LIVE_MIN_AMPS, maxAmps: LIVE_MAX_AMPS,
       });
-      morning = Math.max(0.01, prevArrival) + p.totalPct;
+      morning = p.endPct ?? Math.max(0.01, prevArrival) + p.totalPct;   // the car runs the window to its limit
       amps = p.amps ?? 0;
       nudge = p.raiseLimitTo !== null;
     } else {
